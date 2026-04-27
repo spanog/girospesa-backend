@@ -1,0 +1,1 @@
+/Users/giacomo/progetti/lista-spesa-furba/lista-spesa-furba-webapp/supabase/migrations/005_create_favorites_and_profiles.sql

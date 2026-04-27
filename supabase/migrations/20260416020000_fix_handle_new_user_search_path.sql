@@ -1,0 +1,1 @@
+/Users/giacomo/progetti/lista-spesa-furba/lista-spesa-furba-webapp/supabase/migrations/20260416020000_fix_handle_new_user_search_path.sql

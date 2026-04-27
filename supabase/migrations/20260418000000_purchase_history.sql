@@ -1,0 +1,1 @@
+/Users/giacomo/progetti/lista-spesa-furba/lista-spesa-furba-webapp/supabase/migrations/20260418000000_purchase_history.sql

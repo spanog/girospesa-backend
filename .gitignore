@@ -1,0 +1,38 @@
+# Environment
+.env
+.env.local
+.env.test
+
+# Docker volumes (generated at runtime)
+docker-compose.override.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.coverage
+.hypothesis/
+.mypy_cache/
+.nox/
+.pyre/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.tox/
+*.egg-info/
+dist/
+build/
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Supabase local state
+supabase/.branches/
+supabase/.temp/

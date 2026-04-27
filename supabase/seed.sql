@@ -1,0 +1,3 @@
+-- Admin bootstrap no longer lives in SQL seed.
+-- Use environment-driven script:
+--   .venv/bin/python -m scripts.seed_admin

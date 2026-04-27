@@ -1,0 +1,424 @@
+from __future__ import annotations
+
+import uuid
+import hashlib
+from typing import Annotated
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
+
+from core.auth import assert_flyer_access, get_current_user_id, get_optional_user_id, require_admin_or_manager
+from core.config import settings
+from core.database import get_supabase
+from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
+
+router = APIRouter()
+
+ALLOWED_CONTENT_TYPES = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+
+_OFFER_PRODUCT_SELECT = (
+    "*, products(id, name, brand, category, format, image_url)"
+)
+
+
+class DraftOfferUpdate(BaseModel):
+    name: str | None = None
+    brand: str | None = None
+    category: str | None = None
+    format: str | None = None
+    price_offer: float | None = Field(None, gt=0)
+    price_original: float | None = Field(None, gt=0)
+    unit_price_value: float | None = Field(None, gt=0)
+    unit_price_unit: str | None = None
+    offer_notes: str | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
+
+
+def _flatten_draft_offer(offer: dict) -> dict:
+    offer = dict(offer)
+    product = offer.pop("products") or {}
+    return {
+        **offer,
+        "name": product.get("name", ""),
+        "brand": product.get("brand"),
+        "category": product.get("category"),
+        "format": product.get("format"),
+        "image_url": product.get("image_url"),
+        "unit_price_label": offer.get("unit_price") or format_unit_price_label(
+            offer.get("unit_price_value"),
+            offer.get("unit_price_unit"),
+        ),
+    }
+
+
+@router.get("")
+async def list_flyers(
+    admin: bool = Query(False),
+    profile: dict = Depends(require_admin_or_manager),
+) -> list[dict]:
+    """Return flyers for admin/manager. Managers see only their supermarket's flyers."""
+    sb = get_supabase()
+    query = sb.table("flyers").select("*").order("created_at", desc=True)
+
+    if profile.get("role") == "supermarket_manager":
+        managed_id = profile.get("managed_supermarket_id")
+        query = query.eq("supermarket_id", managed_id)
+
+    response = query.execute()
+    return response.data
+
+
+@router.get("/public")
+async def list_public_flyers() -> list[dict]:
+    """Return all active (done) public flyers — accessible to everyone."""
+    sb = get_supabase()
+    response = (
+        sb.table("flyers")
+        .select("*")
+        .eq("status", "done")
+        .eq("is_public", True)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return response.data
+
+
+_SIGNED_URL_TTL = 60  # seconds
+
+
+@router.get("/{flyer_id}/download")
+async def download_flyer(
+    flyer_id: str,
+    user_id: str | None = Depends(get_optional_user_id),
+) -> RedirectResponse:
+    """Generate a short-lived signed download URL for a flyer file.
+
+    Public+done flyers: accessible to anyone (guests included).
+    All other flyers: require a valid JWT with admin or supermarket_manager role.
+    """
+    sb = get_supabase()
+    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+    flyer = result.data
+
+    is_public_done = flyer.get("is_public") and flyer.get("status") == "done"
+
+    if not is_public_done:
+        if user_id is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+        profile_result = (
+            sb.table("user_profiles")
+            .select("id, role, managed_supermarket_id")
+            .eq("id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        if not profile_result or not profile_result.data:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        profile = profile_result.data
+        if profile.get("role") not in {"admin", "supermarket_manager"}:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        assert_flyer_access(profile, flyer)
+
+    prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/flyers/"
+    file_url = flyer.get("file_url", "")
+    storage_path = file_url.removeprefix(prefix)
+    if not storage_path or storage_path == file_url:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Cannot resolve flyer storage path")
+
+    signed = sb.storage.from_("flyers").create_signed_url(
+        storage_path,
+        expires_in=_SIGNED_URL_TTL,
+        options={"download": flyer.get("file_name") or True},
+    )
+    return RedirectResponse(url=signed["signedURL"], status_code=302)
+
+
+@router.post("/upload", status_code=status.HTTP_201_CREATED)
+async def upload_flyer(
+    file: Annotated[UploadFile, File()],
+    supermarket_name: str | None = Form(None),
+    supermarket_id: str | None = Form(None),
+    valid_from: str | None = Form(None),
+    valid_to: str | None = Form(None),
+    is_public: bool = Form(False),
+    user_id: str = Depends(get_current_user_id),
+    profile: dict = Depends(require_admin_or_manager),
+) -> dict:
+    """Upload a flyer PDF or image. Requires admin or manager role.
+
+    Managers:
+    - Auto-fill supermarket_id from managed_supermarket_id if not provided.
+    - Cannot set is_public=True.
+    - Cannot upload for a different supermarket.
+    """
+    role = profile.get("role")
+    managed_id = profile.get("managed_supermarket_id")
+
+    if role == "supermarket_manager":
+        if is_public:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managers cannot upload public flyers",
+            )
+        if supermarket_id is None:
+            supermarket_id = managed_id
+        elif supermarket_id != managed_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managers can only upload flyers for their own supermarket",
+            )
+
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported file type: {file.content_type}",
+        )
+
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File exceeds 50 MB limit",
+        )
+
+    file_hash = hashlib.sha256(content).hexdigest()
+
+    if supermarket_name:
+        sb = get_supabase()
+        existing = (
+            sb.table("flyers")
+            .select("id")
+            .eq("file_hash", file_hash)
+            .eq("supermarket_name", supermarket_name)
+            .maybe_single()
+            .execute()
+        )
+        if existing:
+            existing_id = existing.data.get("id") if existing.data else None
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Flyer with hash {file_hash} and supermarket '{supermarket_name}' already exists (id={existing_id})",
+            )
+
+    sb = get_supabase()
+    ext = "pdf" if file.content_type == "application/pdf" else "jpg"
+    storage_path = f"{user_id}/{uuid.uuid4()}.{ext}"
+    sb.storage.from_("flyers").upload(
+        path=storage_path,
+        file=content,
+        file_options={"content-type": file.content_type},
+    )
+
+    file_type = "pdf" if file.content_type == "application/pdf" else "image"
+    file_url = sb.storage.from_("flyers").get_public_url(storage_path)
+
+    row = (
+        sb.table("flyers")
+        .insert(
+            {
+                "user_id": user_id,
+                "supermarket_name": supermarket_name,
+                "supermarket_id": supermarket_id,
+                "file_url": file_url,
+                "file_type": file_type,
+                "file_name": file.filename,
+                "valid_from": valid_from,
+                "valid_to": valid_to,
+                "status": "pending",
+                "is_public": is_public,
+                "file_hash": file_hash,
+            }
+        )
+        .execute()
+    )
+
+    return row.data[0]
+
+
+@router.get("/{flyer_id}")
+async def get_flyer(
+    flyer_id: str,
+    profile: dict = Depends(require_admin_or_manager),
+) -> dict:
+    """Fetch a single flyer by ID. Managers can only access their supermarket's flyers."""
+    sb = get_supabase()
+    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+    flyer = result.data
+    assert_flyer_access(profile, flyer)
+    return flyer
+
+
+@router.post("/{flyer_id}/extract", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_extraction(
+    flyer_id: str,
+    background_tasks: BackgroundTasks,
+    profile: dict = Depends(require_admin_or_manager),
+) -> dict:
+    """Trigger AI extraction for a pending or errored flyer."""
+    sb = get_supabase()
+    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    flyer = result.data
+    assert_flyer_access(profile, flyer)
+
+    allowed_statuses = {"pending", "error"}
+    if flyer.get("status") not in allowed_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot trigger extraction: flyer status is '{flyer.get('status')}'",
+        )
+
+    sb.table("flyers").update({"status": "processing"}).eq("id", flyer_id).execute()
+
+    from services.extraction.service import ExtractionService
+    background_tasks.add_task(ExtractionService().run, flyer_id)
+
+    return {"status": "processing", "flyer_id": flyer_id}
+
+
+@router.get("/{flyer_id}/draft-offers")
+async def list_draft_offers(
+    flyer_id: str,
+    profile: dict = Depends(require_admin_or_manager),
+) -> list[dict]:
+    """Return all unconfirmed offers for a flyer."""
+    sb = get_supabase()
+    result = sb.table("flyers").select("id, supermarket_id").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    assert_flyer_access(profile, result.data)
+
+    offers_resp = (
+        sb.table("offers")
+        .select(_OFFER_PRODUCT_SELECT)
+        .eq("flyer_id", flyer_id)
+        .eq("is_confirmed", False)
+        .execute()
+    )
+    return [_flatten_draft_offer(o) for o in (offers_resp.data or [])]
+
+
+@router.patch("/{flyer_id}/draft-offers/{offer_id}")
+async def update_draft_offer(
+    flyer_id: str,
+    offer_id: str,
+    payload: DraftOfferUpdate,
+    profile: dict = Depends(require_admin_or_manager),
+) -> dict:
+    """Inline-edit a single draft offer (and its canonical product if needed)."""
+    sb = get_supabase()
+    flyer_result = sb.table("flyers").select("id, supermarket_id").eq("id", flyer_id).maybe_single().execute()
+    if not flyer_result or not flyer_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    assert_flyer_access(profile, flyer_result.data)
+
+    offer_result = (
+        sb.table("offers")
+        .select("id, product_id, flyer_id, is_confirmed")
+        .eq("id", offer_id)
+        .eq("flyer_id", flyer_id)
+        .maybe_single()
+        .execute()
+    )
+    if not offer_result or not offer_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offer not found")
+
+    offer = offer_result.data
+    if offer.get("is_confirmed"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot edit an already-confirmed offer",
+        )
+
+    offer_fields = {
+        k: v for k, v in {
+            "price_offer": payload.price_offer,
+            "price_original": payload.price_original,
+            "unit_price_value": payload.unit_price_value,
+            "unit_price_unit": normalize_unit_price_measure(payload.unit_price_unit),
+            "offer_notes": payload.offer_notes,
+            "valid_from": payload.valid_from,
+            "valid_to": payload.valid_to,
+        }.items() if v is not None
+    }
+    if "unit_price_value" in offer_fields and "unit_price_unit" in offer_fields:
+        offer_fields["unit_price"] = format_unit_price_label(
+            offer_fields["unit_price_value"],
+            offer_fields["unit_price_unit"],
+        )
+    if offer_fields:
+        sb.table("offers").update(offer_fields).eq("id", offer_id).execute()
+
+    product_fields = {
+        k: v for k, v in {
+            "name": payload.name,
+            "brand": payload.brand,
+            "category": payload.category,
+            "format": payload.format,
+        }.items() if v is not None
+    }
+    if product_fields:
+        sb.table("products").update(product_fields).eq("id", offer["product_id"]).execute()
+
+    updated = (
+        sb.table("offers")
+        .select(_OFFER_PRODUCT_SELECT)
+        .eq("id", offer_id)
+        .single()
+        .execute()
+    )
+    return _flatten_draft_offer(updated.data)
+
+
+@router.post("/{flyer_id}/offers/confirm")
+async def confirm_offers(
+    flyer_id: str,
+    profile: dict = Depends(require_admin_or_manager),
+) -> dict:
+    """Confirm all draft offers for a flyer (sets is_confirmed=True)."""
+    sb = get_supabase()
+    flyer_result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    if not flyer_result or not flyer_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    flyer = flyer_result.data
+    assert_flyer_access(profile, flyer)
+
+    if flyer.get("status") != "done":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot confirm offers: flyer status is '{flyer.get('status')}' (must be 'done')",
+        )
+
+    updated = (
+        sb.table("offers")
+        .update({"is_confirmed": True}, returning="representation")
+        .eq("flyer_id", flyer_id)
+        .eq("is_confirmed", False)
+        .execute()
+    )
+    confirmed_count = len(updated.data) if updated.data else 0
+    return {"confirmed": confirmed_count, "flyer_id": flyer_id}
+
+
+@router.post("/admin/cleanup", status_code=200)
+async def trigger_flyer_cleanup(
+    profile: dict = Depends(require_admin_or_manager),
+) -> dict:
+    """Manually trigger expired-flyer cleanup. Admin only. For ops and testing."""
+    if profile.get("role") != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    from services.flyer_cleanup import FlyerCleanupService
+    deleted = FlyerCleanupService().run()
+    return {"deleted": deleted}

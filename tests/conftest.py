@@ -1,0 +1,164 @@
+"""Fixtures condivise per i test di integrazione.
+
+I test unitari (tests/test_*.py) NON usano queste fixture — continuano ad usare
+mock/stub come prima. Le fixture qui si attivano solo quando il test usa
+esplicitamente `supabase_client` o `async_client`.
+"""
+
+import os
+import sys
+import inspect
+import subprocess
+from pathlib import Path
+
+import pytest
+import httpx
+from dotenv import load_dotenv
+
+from tests.env import resolve_test_env_file
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
+
+load_dotenv(resolve_test_env_file(BACKEND_ROOT), override=False)
+
+
+_LOCAL_ENV_CACHE: dict[str, str] | None = None
+
+
+def _resolve_local_supabase_env(name: str) -> str:
+    value = os.environ.get(name, "")
+    if value and not value.startswith("<local-"):
+        return value
+    global _LOCAL_ENV_CACHE
+    if _LOCAL_ENV_CACHE is None:
+        output = subprocess.check_output(
+            ["supabase", "status", "-o", "env"],
+            text=True,
+        )
+        _LOCAL_ENV_CACHE = {}
+        for line in output.splitlines():
+            if "=" not in line:
+                continue
+            key, raw_value = line.split("=", 1)
+            _LOCAL_ENV_CACHE[key] = raw_value.strip().strip('"')
+    aliases = {
+        "SUPABASE_URL": "API_URL",
+        "SUPABASE_ANON_KEY": "ANON_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY": "SERVICE_ROLE_KEY",
+        "SUPABASE_JWT_SECRET": "JWT_SECRET",
+    }
+    resolved = _LOCAL_ENV_CACHE.get(aliases[name], "")
+    if not resolved:
+        raise RuntimeError(f"Missing local Supabase value for {name}.")
+    os.environ[name] = resolved
+    return resolved
+
+
+if "app" not in inspect.signature(httpx.AsyncClient.__init__).parameters:
+    _HttpxAsyncClient = httpx.AsyncClient
+
+    class CompatAsyncClient(_HttpxAsyncClient):
+        def __init__(self, *args, app=None, transport=None, **kwargs):
+            if app is not None and transport is None:
+                transport = httpx.ASGITransport(app=app)
+            super().__init__(*args, transport=transport, **kwargs)
+
+    httpx.AsyncClient = CompatAsyncClient
+
+# ---------------------------------------------------------------------------
+# Guard: verifica Supabase locale prima di qualsiasi test di integrazione
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session", autouse=False)
+def ensure_supabase_local():
+    """Verifica che lo stack Supabase locale (`supabase start`) sia raggiungibile.
+
+    Non è autouse=True per non bloccare i test unitari che non ne hanno bisogno.
+    I test di integrazione devono richiedere questa fixture esplicitamente o
+    includerla via conftest di sotto-directory.
+    """
+    url = _resolve_local_supabase_env("SUPABASE_URL") + "/rest/v1/"
+    anon_key = _resolve_local_supabase_env("SUPABASE_ANON_KEY")
+    try:
+        r = httpx.get(url, headers={"apikey": anon_key}, timeout=3)
+        r.raise_for_status()
+    except Exception as exc:
+        pytest.exit(
+            f"Supabase locale non raggiungibile: {exc}\n"
+            "→ Esegui: cd lista-spesa-furba-backend && supabase start",
+            returncode=1,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Supabase client con service role (bypass RLS) — per setup/teardown dati
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def supabase_client(ensure_supabase_local):
+    """Client Supabase con SERVICE_ROLE_KEY — bypassa RLS per seed e cleanup."""
+    maybe_mocked = sys.modules.get("supabase")
+    if maybe_mocked is not None and getattr(maybe_mocked, "__file__", None) is None:
+        sys.modules.pop("supabase", None)
+
+    from supabase import create_client
+
+    url = _resolve_local_supabase_env("SUPABASE_URL")
+    key = _resolve_local_supabase_env("SUPABASE_SERVICE_ROLE_KEY")
+    return create_client(url, key)
+
+
+# ---------------------------------------------------------------------------
+# AsyncClient per chiamate HTTP a FastAPI in-process
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+async def async_client(ensure_supabase_local):
+    """AsyncClient HTTPX che punta a FastAPI in-process (no rete esterna)."""
+    from main import app  # importa l'app FastAPI del backend
+
+    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        yield client
+
+
+# ---------------------------------------------------------------------------
+# Teardown: truncate tabelle di test dopo ogni test di integrazione
+# ---------------------------------------------------------------------------
+
+TRUNCATE_TABLES = [
+    "list_members",
+    "list_invites",
+    "shopping_lists",
+    "favorites",
+    "offers",
+    "products",
+    "flyers",
+    "supermarkets",
+    "extraction_log",
+]
+
+
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+def _delete_all_tables(supabase_client) -> None:
+    """Elimina tutte le righe dalle tabelle di test, rispettando l'ordine FK."""
+    for table in TRUNCATE_TABLES:
+        try:
+            supabase_client.table(table).delete().neq("id", _NIL_UUID).execute()
+        except Exception:
+            pass
+
+
+@pytest.fixture()
+def clean_db(supabase_client):
+    """Garantisce un DB pulito prima e dopo ogni test.
+
+    Pulisce anche prima del test per resistere a dati lasciati da sessioni
+    precedenti (es. dopo crash o cleanup mancato).
+    """
+    _delete_all_tables(supabase_client)
+    yield
+    _delete_all_tables(supabase_client)

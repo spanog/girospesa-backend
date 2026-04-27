@@ -1,0 +1,244 @@
+"""Unit tests for services/extraction/normalizer.py"""
+
+import sys
+import os
+import types
+from unittest.mock import MagicMock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# Stub infrastructure modules
+for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders"):
+    if _mod not in sys.modules:
+        sys.modules[_mod] = MagicMock()
+
+_config_mod = types.ModuleType("core.config")
+_config_mod.settings = MagicMock()  # type: ignore[attr-defined]
+sys.modules["core.config"] = _config_mod
+sys.modules["core.database"] = MagicMock()
+
+import pytest
+from services.extraction.normalizer import (
+    normalize_category,
+    normalize_brand,
+    normalize_price,
+    calculate_discount_pct,
+    normalize_unit_price_measure,
+    deduplicate_products,
+    normalize_product,
+)
+
+
+# ---------------------------------------------------------------------------
+# normalize_category
+# ---------------------------------------------------------------------------
+
+class TestNormalizeCategory:
+    def test_valid_enum_value_passthrough(self):
+        assert normalize_category("frutta-verdura") == "frutta-verdura"
+
+    def test_alias_mapping(self):
+        assert normalize_category("frutta") == "frutta-verdura"
+        assert normalize_category("carne") == "carne-pesce"
+        assert normalize_category("latticini") == "latticini-uova"
+        assert normalize_category("pane") == "pane-pasticceria"
+        assert normalize_category("surgelato") == "surgelati"
+        assert normalize_category("bibite") == "bevande"
+        assert normalize_category("pasta") == "dispensa"
+        assert normalize_category("igiene") == "igiene-bellezza"
+        assert normalize_category("pulizia") == "casa-pulizia"
+        assert normalize_category("pet") == "animali"
+
+    def test_none_returns_altro(self):
+        assert normalize_category(None) == "altro"
+
+    def test_unknown_returns_altro(self):
+        assert normalize_category("xyz-random-category") == "altro"
+
+    def test_case_insensitive_enum(self):
+        assert normalize_category("FRUTTA-VERDURA") == "frutta-verdura"
+
+    def test_empty_string_returns_altro(self):
+        assert normalize_category("") == "altro"
+
+
+# ---------------------------------------------------------------------------
+# normalize_brand
+# ---------------------------------------------------------------------------
+
+class TestNormalizeBrand:
+    def test_none_returns_none(self):
+        assert normalize_brand(None) is None
+
+    def test_known_brand_normalized(self):
+        assert normalize_brand("barilla") == "Barilla"
+        assert normalize_brand("nestle") == "Nestlé"
+        assert normalize_brand("coca cola") == "Coca-Cola"
+
+    def test_unknown_brand_title_cased(self):
+        assert normalize_brand("marca sconosciuta") == "Marca Sconosciuta"
+
+    def test_strips_whitespace(self):
+        assert normalize_brand("  barilla  ") == "Barilla"
+
+
+# ---------------------------------------------------------------------------
+# normalize_price
+# ---------------------------------------------------------------------------
+
+class TestNormalizePrice:
+    def test_float_passthrough(self):
+        assert normalize_price(4.99) == pytest.approx(4.99)
+
+    def test_integer_input(self):
+        assert normalize_price(5) == pytest.approx(5.0)
+
+    def test_string_with_comma(self):
+        assert normalize_price("1,99") == pytest.approx(1.99)
+
+    def test_string_with_euro_symbol(self):
+        assert normalize_price("€ 2.49") == pytest.approx(2.49)
+
+    def test_string_with_euro_and_comma(self):
+        assert normalize_price("€1,49") == pytest.approx(1.49)
+
+    def test_none_returns_none(self):
+        assert normalize_price(None) is None
+
+    def test_zero_returns_none(self):
+        assert normalize_price(0) is None
+
+    def test_negative_returns_none(self):
+        assert normalize_price(-1.0) is None
+
+
+# ---------------------------------------------------------------------------
+# normalize_unit_price_measure
+# ---------------------------------------------------------------------------
+
+class TestNormalizeUnitPriceMeasure:
+    def test_normalizes_kg(self):
+        assert normalize_unit_price_measure("Kg") == "kg"
+
+    def test_normalizes_liters(self):
+        assert normalize_unit_price_measure("L") == "l"
+
+    def test_normalizes_drained_weight(self):
+        assert normalize_unit_price_measure("kg sgocc.") == "kg sgocc"
+
+    def test_unknown_measure_returns_none(self):
+        assert normalize_unit_price_measure("pezzo") is None
+
+
+# ---------------------------------------------------------------------------
+# calculate_discount_pct
+# ---------------------------------------------------------------------------
+
+class TestCalculateDiscountPct:
+    def test_simple_discount(self):
+        assert calculate_discount_pct(10.0, 7.0) == 30
+
+    def test_no_original_returns_none(self):
+        assert calculate_discount_pct(None, 7.0) is None
+
+    def test_offer_equals_original(self):
+        assert calculate_discount_pct(5.0, 5.0) is None
+
+    def test_offer_greater_than_original(self):
+        assert calculate_discount_pct(3.0, 5.0) is None
+
+    def test_zero_original_returns_none(self):
+        assert calculate_discount_pct(0, 2.0) is None
+
+
+# ---------------------------------------------------------------------------
+# deduplicate_products
+# ---------------------------------------------------------------------------
+
+class TestDeduplicateProducts:
+    def _p(self, name: str, brand: str = "", fmt: str = "") -> dict:
+        return {"name": name, "brand": brand, "format": fmt, "price_offer": 1.0}
+
+    def test_no_duplicates(self):
+        products = [self._p("Mela"), self._p("Pera")]
+        assert len(deduplicate_products(products)) == 2
+
+    def test_exact_duplicates_removed(self):
+        products = [self._p("Mela"), self._p("Mela")]
+        assert len(deduplicate_products(products)) == 1
+
+    def test_keeps_first_occurrence(self):
+        p1 = {"name": "Latte", "brand": "Parmalat", "format": "1L", "price_offer": 1.0}
+        p2 = {"name": "Latte", "brand": "Parmalat", "format": "1L", "price_offer": 1.5}
+        result = deduplicate_products([p1, p2])
+        assert len(result) == 1
+        assert result[0]["price_offer"] == 1.0
+
+    def test_case_insensitive_dedup(self):
+        products = [self._p("MELA"), self._p("mela")]
+        assert len(deduplicate_products(products)) == 1
+
+    def test_different_format_not_deduped(self):
+        p1 = {"name": "Latte", "brand": "Granarolo", "format": "1L", "price_offer": 1.0}
+        p2 = {"name": "Latte", "brand": "Granarolo", "format": "500ml", "price_offer": 0.6}
+        assert len(deduplicate_products([p1, p2])) == 2
+
+
+# ---------------------------------------------------------------------------
+# normalize_product
+# ---------------------------------------------------------------------------
+
+class TestNormalizeProduct:
+    def test_full_pipeline(self):
+        raw = {
+            "name": "Petto di pollo  ",
+            "brand": "barilla",
+            "category": "carne",
+            "format": "500g",
+            "price_offer": "3,99",
+            "price_original": "5,49",
+            "offer_notes": None,
+            "valid_from": "2026-04-07",
+            "valid_to": "2026-04-13",
+        }
+        result = normalize_product(raw)
+        assert result["name"] == "Petto di pollo"
+        assert result["brand"] == "Barilla"
+        assert result["category"] == "carne-pesce"
+        assert result["price_offer"] == pytest.approx(3.99)
+        assert result["price_original"] == pytest.approx(5.49)
+        assert result["discount_pct"] == 27  # (5.49 - 3.99) / 5.49 ≈ 27%
+
+    def test_missing_optional_fields_become_none(self):
+        raw = {"name": "Pane", "price_offer": 1.5}
+        result = normalize_product(raw)
+        assert result["brand"] is None
+        assert result["format"] is None
+
+    def test_prompt_v2_fields_are_accepted_and_mapped(self):
+        raw = {
+            "name": "Filetti di tonno",
+            "brand": "rio mare",
+            "category_main": "Dispensa",
+            "category_sub": "Conserve Ittiche e di Carne",
+            "format": "2x80g",
+            "price_current": "4,99",
+            "price_original": "6,79",
+            "discount_percentage": 26,
+            "price_per_unit": "31,19",
+            "price_per_unit_measure": "Kg",
+            "offer_notes": "Solo carta",
+            "valid_from": "2026-04-07",
+            "valid_to": "2026-04-13",
+        }
+
+        result = normalize_product(raw)
+
+        assert result["brand"] == "Rio Mare"
+        assert result["category"] == "dispensa"
+        assert result["subcategory"] == "Conserve Ittiche e di Carne"
+        assert result["price_offer"] == pytest.approx(4.99)
+        assert result["price_original"] == pytest.approx(6.79)
+        assert result["discount_pct"] == 26
+        assert result["unit_price_value"] == pytest.approx(31.19)
+        assert result["unit_price_unit"] == "kg"

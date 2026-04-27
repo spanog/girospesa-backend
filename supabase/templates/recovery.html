@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <title>Reimposta la tua password</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <!--[if mso]>
+  <noscript>
+    <xml>
+      <o:OfficeDocumentSettings>
+        <o:PixelsPerInch>96</o:PixelsPerInch>
+      </o:OfficeDocumentSettings>
+    </xml>
+  </noscript>
+  <![endif]-->
+</head>
+<body style="margin:0;padding:0;background-color:#f4f6f4;font-family:'Plus Jakarta Sans',Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f6f4;min-height:100vh;">
+    <tr>
+      <td align="center" style="padding:48px 16px;">
+
+        <!-- Card -->
+        <table role="presentation" width="100%" style="max-width:520px;background-color:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,0.08);">
+
+          <!-- Header bar -->
+          <tr>
+            <td style="background-color:#1e7a45;padding:32px 40px;text-align:center;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center">
+                    <!-- Leaf icon SVG -->
+                    <div style="display:inline-block;background-color:rgba(255,255,255,0.15);border-radius:12px;padding:10px 12px;margin-bottom:12px;">
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2C7.5 2 3 6 3 11c0 3.5 2 6.5 5 8l1-3c-1.5-1-2.5-2.8-2.5-5C6.5 7.5 9 5 12 5c4 0 7 3.5 7 7.5 0 2.5-1.2 4.7-3 6l1 3c3-1.8 5-5 5-9C22 6.5 17.5 2 12 2z" fill="white"/>
+                        <path d="M12 8c-2 0-4 1.5-4 4 0 1.5.8 2.8 2 3.5L11 13c-.6-.4-1-1.1-1-1.8 0-1.2 1-2 2-2s2 .8 2 2c0 .8-.4 1.5-1 1.9l1 2.5c1.2-.8 2-2.3 2-3.8 0-2.5-2-4.8-4-4.8z" fill="rgba(255,255,255,0.7)"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <span style="color:#ffffff;font-size:22px;font-weight:700;letter-spacing:-0.3px;">Lista Spesa Furba</span>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:40px 40px 32px;">
+
+              <!-- Lock icon -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+                <tr>
+                  <td align="center">
+                    <div style="display:inline-block;background-color:#f0faf4;border-radius:50%;padding:16px;">
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="5" y="11" width="14" height="10" rx="2" stroke="#1e7a45" stroke-width="2"/>
+                        <path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="#1e7a45" stroke-width="2" stroke-linecap="round"/>
+                        <circle cx="12" cy="16" r="1.5" fill="#1e7a45"/>
+                      </svg>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <h1 style="margin:0 0 12px;font-size:24px;font-weight:700;color:#111827;text-align:center;letter-spacing:-0.4px;">
+                Reimposta la tua password
+              </h1>
+
+              <p style="margin:0 0 28px;font-size:15px;line-height:1.6;color:#4b5563;text-align:center;">
+                Abbiamo ricevuto una richiesta di reimpostazione della password per il tuo account. Clicca sul pulsante qui sotto per sceglierne una nuova.
+              </p>
+
+              <!-- CTA Button -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
+                <tr>
+                  <td align="center">
+                    <a href="{{ .ConfirmationURL }}"
+                       target="_blank"
+                       style="display:inline-block;background-color:#1e7a45;color:#ffffff;font-family:'Plus Jakarta Sans',Arial,sans-serif;font-size:16px;font-weight:600;text-decoration:none;padding:14px 36px;border-radius:10px;letter-spacing:0.1px;">
+                      Reimposta password
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Divider -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+                <tr>
+                  <td style="border-top:1px solid #e5e7eb;"></td>
+                </tr>
+              </table>
+
+              <!-- Security note -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background-color:#fafafa;border-radius:8px;padding:16px 20px;">
+                    <p style="margin:0;font-size:13px;line-height:1.6;color:#6b7280;">
+                      <strong style="color:#374151;">Non hai richiesto questa email?</strong><br/>
+                      Puoi ignorarla in tutta sicurezza — nessuna modifica verrà apportata al tuo account.<br/>
+                      Il link di reimpostazione scade tra <strong style="color:#374151;">1 ora</strong>.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color:#f9fafb;border-top:1px solid #f3f4f6;padding:24px 40px;text-align:center;">
+              <p style="margin:0 0 4px;font-size:13px;color:#9ca3af;">
+                © 2026 Lista Spesa Furba
+              </p>
+              <p style="margin:0;font-size:12px;color:#d1d5db;">
+                Questa è un'email automatica — non rispondere a questo messaggio.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+        <!-- /Card -->
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
