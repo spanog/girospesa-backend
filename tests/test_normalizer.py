@@ -35,19 +35,21 @@ from services.extraction.normalizer import (
 
 class TestNormalizeCategory:
     def test_valid_enum_value_passthrough(self):
-        assert normalize_category("frutta-verdura") == "frutta-verdura"
+        assert normalize_category("alimentari-freschi") == "alimentari-freschi"
+        assert normalize_category("dispensa") == "dispensa"
+        assert normalize_category("surgelati") == "surgelati"
 
     def test_alias_mapping(self):
-        assert normalize_category("frutta") == "frutta-verdura"
-        assert normalize_category("carne") == "carne-pesce"
-        assert normalize_category("latticini") == "latticini-uova"
-        assert normalize_category("pane") == "pane-pasticceria"
+        assert normalize_category("frutta") == "alimentari-freschi"
+        assert normalize_category("carne") == "alimentari-freschi"
+        assert normalize_category("latticini") == "alimentari-freschi"
+        assert normalize_category("pane") == "alimentari-freschi"
         assert normalize_category("surgelato") == "surgelati"
         assert normalize_category("bibite") == "bevande"
         assert normalize_category("pasta") == "dispensa"
-        assert normalize_category("igiene") == "igiene-bellezza"
-        assert normalize_category("pulizia") == "casa-pulizia"
-        assert normalize_category("pet") == "animali"
+        assert normalize_category("igiene") == "cura-persona-salute"
+        assert normalize_category("pulizia") == "cura-casa"
+        assert normalize_category("pet") == "prodotti-animali"
 
     def test_none_returns_altro(self):
         assert normalize_category(None) == "altro"
@@ -56,7 +58,7 @@ class TestNormalizeCategory:
         assert normalize_category("xyz-random-category") == "altro"
 
     def test_case_insensitive_enum(self):
-        assert normalize_category("FRUTTA-VERDURA") == "frutta-verdura"
+        assert normalize_category("ALIMENTARI-FRESCHI") == "alimentari-freschi"
 
     def test_empty_string_returns_altro(self):
         assert normalize_category("") == "altro"
@@ -70,13 +72,13 @@ class TestNormalizeBrand:
     def test_none_returns_none(self):
         assert normalize_brand(None) is None
 
-    def test_known_brand_normalized(self):
-        assert normalize_brand("barilla") == "Barilla"
-        assert normalize_brand("nestle") == "Nestlé"
-        assert normalize_brand("coca cola") == "Coca-Cola"
+    def test_empty_returns_none(self):
+        assert normalize_brand("") is None
 
-    def test_unknown_brand_title_cased(self):
+    def test_title_cased(self):
+        assert normalize_brand("barilla") == "Barilla"
         assert normalize_brand("marca sconosciuta") == "Marca Sconosciuta"
+        assert normalize_brand("rio mare") == "Rio Mare"
 
     def test_strips_whitespace(self):
         assert normalize_brand("  barilla  ") == "Barilla"
@@ -204,7 +206,7 @@ class TestNormalizeProduct:
         result = normalize_product(raw)
         assert result["name"] == "Petto di pollo"
         assert result["brand"] == "Barilla"
-        assert result["category"] == "carne-pesce"
+        assert result["category"] == "alimentari-freschi"
         assert result["price_offer"] == pytest.approx(3.99)
         assert result["price_original"] == pytest.approx(5.49)
         assert result["discount_pct"] == 27  # (5.49 - 3.99) / 5.49 ≈ 27%

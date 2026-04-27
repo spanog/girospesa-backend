@@ -218,36 +218,11 @@ def normalize_category(raw: str | None) -> str:
 # Brand normalization
 # ---------------------------------------------------------------------------
 
-_BRAND_NORMALIZATIONS: dict[str, str] = {
-    "esselunga": "Esselunga",
-    "conad": "Conad",
-    "coop": "Coop",
-    "lidl": "Lidl",
-    "eurospin": "Eurospin",
-    "carrefour": "Carrefour",
-    "barilla": "Barilla",
-    "mulino bianco": "Mulino Bianco",
-    "ferrero": "Ferrero",
-    "nestlé": "Nestlé",
-    "nestle": "Nestlé",
-    "galbani": "Galbani",
-    "parmalat": "Parmalat",
-    "granarolo": "Granarolo",
-    "san benedetto": "San Benedetto",
-    "san pellegrino": "San Pellegrino",
-    "coca cola": "Coca-Cola",
-    "coca-cola": "Coca-Cola",
-    "pepsi": "Pepsi",
-}
-
-
 def normalize_brand(raw: str | None) -> str | None:
-    """Standardize brand name casing and spelling."""
+    """Standardize brand name casing. DB uses citext for case-insensitive deduplication."""
     if not raw:
         return None
-    cleaned = raw.strip()
-    lower = cleaned.lower()
-    return _BRAND_NORMALIZATIONS.get(lower, cleaned.title())
+    return raw.strip().title()
 
 
 # ---------------------------------------------------------------------------
