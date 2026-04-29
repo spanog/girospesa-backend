@@ -19,7 +19,7 @@ ALLOWED_CONTENT_TYPES = {"application/pdf"}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 _OFFER_PRODUCT_SELECT = (
-    "*, products(id, name, brand, category, format, image_url)"
+    "*, products(id, name, brand, category, subcategory, format, image_url)"
 )
 
 
@@ -27,6 +27,7 @@ class DraftOfferUpdate(BaseModel):
     name: str | None = None
     brand: str | None = None
     category: str | None = None
+    subcategory: str | None = None
     format: str | None = None
     price_offer: float | None = Field(None, gt=0)
     price_original: float | None = Field(None, gt=0)
@@ -41,6 +42,7 @@ class DraftOfferCreate(BaseModel):
     name: str = Field(..., min_length=1)
     brand: str | None = None
     category: str | None = None
+    subcategory: str | None = None
     format: str | None = None
     price_offer: float = Field(..., gt=0)
     price_original: float | None = Field(None, gt=0)
@@ -59,6 +61,7 @@ def _flatten_draft_offer(offer: dict) -> dict:
         "name": product.get("name", ""),
         "brand": product.get("brand"),
         "category": product.get("category"),
+        "subcategory": product.get("subcategory"),
         "format": product.get("format"),
         "image_url": product.get("image_url"),
         "unit_price_label": offer.get("unit_price") or format_unit_price_label(
@@ -409,6 +412,7 @@ async def create_draft_offer(
         "name": payload.name,
         "brand": payload.brand,
         "category": payload.category,
+        "subcategory": payload.subcategory,
         "format": payload.format,
     }
     upsert_result = sb.table("products").upsert(product_row, on_conflict="name,brand,format").execute()
@@ -513,6 +517,7 @@ async def update_draft_offer(
             "name": payload.name,
             "brand": payload.brand,
             "category": payload.category,
+            "subcategory": payload.subcategory,
             "format": payload.format,
         }.items()
         if k in sent

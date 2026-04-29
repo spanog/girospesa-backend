@@ -169,6 +169,7 @@ class TestCreateDraftOffer:
                 "name": "Mozzarella",
                 "brand": "Galbani",
                 "category": "latticini",
+                "subcategory": "Latticini e Formaggi",
                 "format": "125g",
                 "image_url": None,
             },
@@ -200,6 +201,7 @@ class TestCreateDraftOffer:
         data = resp.json()
         assert data["name"] == "Mozzarella"
         assert data["is_confirmed"] is False
+        assert data["subcategory"] == "Latticini e Formaggi"
 
     @pytest.mark.asyncio
     async def test_create_inherits_flyer_dates(self):
@@ -248,6 +250,34 @@ class TestCreateDraftOffer:
             )
         assert resp.status_code == 422
 
+    @pytest.mark.asyncio
+    async def test_create_persists_subcategory_on_product_upsert(self):
+        sb = self._make_sb()
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post(
+                "/flyers/flyer-1/draft-offers",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                json={
+                    "name": "Mozzarella",
+                    "category": "alimentari-freschi",
+                    "subcategory": "Latticini e Formaggi",
+                    "price_offer": 1.99,
+                },
+            )
+
+        assert resp.status_code == 201
+        dispatch_table = sb.table("products")
+        dispatch_table.upsert.assert_called_once_with(
+            {
+                "name": "Mozzarella",
+                "brand": None,
+                "category": "alimentari-freschi",
+                "subcategory": "Latticini e Formaggi",
+                "format": None,
+            },
+            on_conflict="name,brand,format",
+        )
+
 
 # ---------------------------------------------------------------------------
 # list_draft_offers
@@ -275,6 +305,7 @@ class TestListDraftOffers:
                     "name": "Pasta",
                     "brand": "Barilla",
                     "category": "dispensa",
+                    "subcategory": "Primi Piatti e Preparati",
                     "format": "500g",
                     "image_url": None,
                 },
@@ -292,6 +323,7 @@ class TestListDraftOffers:
         data = resp.json()
         assert len(data) == 1
         assert data[0]["name"] == "Pasta"
+        assert data[0]["subcategory"] == "Primi Piatti e Preparati"
         assert data[0]["unit_price_label"] == "1,29 €/kg"
 
 
@@ -324,6 +356,7 @@ class TestUpdateDraftOffer:
                 "name": "Pasta",
                 "brand": "Barilla",
                 "category": "dispensa",
+                "subcategory": "Primi Piatti e Preparati",
                 "format": "500g",
                 "image_url": None,
             },
@@ -374,6 +407,23 @@ class TestUpdateDraftOffer:
             )
         assert resp.status_code == 200
 
+    @pytest.mark.asyncio
+    async def test_update_subcategory_updates_product_fields(self):
+        sb = self._make_sb(is_confirmed=False)
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _patch_req(
+                "/flyers/flyer-1/draft-offers/offer-1",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+                json={"subcategory": "Snack Salati e Dolciumi"},
+            )
+
+        assert resp.status_code == 200
+        update_calls = sb.table.return_value.update.call_args_list
+        assert any(
+            c.args[0].get("subcategory") == "Snack Salati e Dolciumi"
+            for c in update_calls
+        )
+
 
 # ---------------------------------------------------------------------------
 # confirm_offers
@@ -389,6 +439,9 @@ class TestConfirmOffers:
         updated_result = MagicMock()
         updated_result.data = [{"id": f"offer-{i}"} for i in range(confirmed_count)]
         sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = updated_result
+        total_confirmed_result = MagicMock()
+        total_confirmed_result.count = confirmed_count
+        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value = total_confirmed_result
         return sb
 
     @pytest.mark.asyncio

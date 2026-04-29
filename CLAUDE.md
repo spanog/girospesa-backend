@@ -15,6 +15,11 @@
 - Push ongoing V1 work to a dedicated long-lived branch.
 - Never commit local secrets or machine-specific env files.
 
+## Flyer Review
+
+- Manual draft-offer create/update endpoints on `/flyers/{flyer_id}/draft-offers` own canonical product fields too: `name`, `brand`, `category`, `subcategory`, `format`.
+- Draft and confirmed offer payloads returned by flyer review endpoints must flatten `products.subcategory` alongside `category`.
+
 ## Ignore Rules
 
 - Track `.env.example` and `.env.test.example`.
