@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     llm_provider: str = "gemini"
     google_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemma-4-31b-it"
     geocoding_provider: str = "disabled"
 
     vapid_private_key: str = ""

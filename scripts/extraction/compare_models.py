@@ -4,7 +4,7 @@ Compare multiple Gemini models on extraction quality.
 Usage:
     python -m scripts.extraction.compare_models \
         --fixture tests/extraction_eval/fixtures/example_ground_truth.json \
-        --models gemini-2.5-flash gemini-2.5-pro \
+        --models gemma-4-31b-it gemini-2.5-pro \
         --pdf flyer.pdf
 """
 

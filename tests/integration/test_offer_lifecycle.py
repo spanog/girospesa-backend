@@ -21,7 +21,7 @@ _config_mod.settings = types.SimpleNamespace(
     supabase_jwt_secret=os.environ.get("SUPABASE_JWT_SECRET", ""),
     llm_provider="gemini",
     google_api_key="",
-    gemini_model="gemini-2.5-flash",
+    gemini_model="gemma-4-31b-it",
     frontend_url="http://localhost:3000",
 )
 sys.modules["core.config"] = _config_mod

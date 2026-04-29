@@ -34,7 +34,7 @@ _config_mod = types.ModuleType("core.config")
 _settings_obj = MagicMock()
 _settings_obj.llm_provider = "gemini"
 _settings_obj.google_api_key = ""
-_settings_obj.gemini_model = "gemini-2.5-flash"
+_settings_obj.gemini_model = "gemma-4-31b-it"
 _config_mod.settings = _settings_obj  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 

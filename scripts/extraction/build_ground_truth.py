@@ -54,7 +54,7 @@ def main() -> None:
     except ImportError:
         pass
 
-    default_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    default_model = os.getenv("GEMINI_MODEL", "gemma-4-31b-it")
     default_api_key = os.getenv("GOOGLE_API_KEY", "")
 
     parser = argparse.ArgumentParser(description="Build ground truth fixture from a real flyer PDF")

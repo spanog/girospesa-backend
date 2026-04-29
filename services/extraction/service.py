@@ -73,10 +73,14 @@ class ExtractionService:
         t_start: float,
     ) -> None:
         flyer_id = flyer["id"]
-        content = self._download_file(flyer["file_url"])
+        content = self._download_file(sb, flyer["file_url"])
         file_name = flyer.get("file_name", "")
         mime_type = mime_type_for_filename(file_name)
         pages_count = count_pdf_pages(content) if is_pdf(file_name) else 1
+
+        sb.table("flyers").update({  # type: ignore[union-attr]
+            "extraction_metadata": {"stage": "extracting", "pages_total": pages_count},
+        }).eq("id", flyer_id).execute()
 
         logger.info(
             "  Sending to %s (%s, %d page(s))…",
@@ -85,6 +89,14 @@ class ExtractionService:
             pages_count,
         )
         all_products, retry_errors = self._provider.extract_products(content, mime_type)
+
+        sb.table("flyers").update({  # type: ignore[union-attr]
+            "extraction_metadata": {
+                "stage": "saving",
+                "pages_total": pages_count,
+                "products_found": len(all_products),
+            },
+        }).eq("id", flyer_id).execute()
 
         if retry_errors:
             log_event(
@@ -119,6 +131,7 @@ class ExtractionService:
             "status": "done",
             "products_count": len(offer_rows),
             "pages_count": pages_count,
+            "extraction_metadata": None,
         }).eq("id", flyer_id).execute()
 
         logger.info(
@@ -173,10 +186,16 @@ class ExtractionService:
             raise ValueError(f"Flyer not found: {flyer_id}")
         return result.data
 
-    def _download_file(self, url: str) -> bytes:
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        return resp.content
+    def _download_file(self, sb: object, file_url: str) -> bytes:
+        # flyers bucket is private — use storage SDK (service role) instead of HTTP GET
+        prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/flyers/"
+        storage_path = file_url.removeprefix(prefix)
+        if storage_path == file_url:
+            # fallback: signed-URL path or unknown format — try HTTP
+            resp = requests.get(file_url, timeout=30)
+            resp.raise_for_status()
+            return resp.content
+        return bytes(sb.storage.from_("flyers").download(storage_path))  # type: ignore[union-attr]
 
     def _upsert_product(self, sb: object, product_row: dict) -> str:
         """

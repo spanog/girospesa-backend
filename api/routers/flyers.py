@@ -15,7 +15,7 @@ from services.extraction.normalizer import format_unit_price_label, normalize_un
 
 router = APIRouter()
 
-ALLOWED_CONTENT_TYPES = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+ALLOWED_CONTENT_TYPES = {"application/pdf"}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 _OFFER_PRODUCT_SELECT = (
@@ -29,6 +29,20 @@ class DraftOfferUpdate(BaseModel):
     category: str | None = None
     format: str | None = None
     price_offer: float | None = Field(None, gt=0)
+    price_original: float | None = Field(None, gt=0)
+    unit_price_value: float | None = Field(None, gt=0)
+    unit_price_unit: str | None = None
+    offer_notes: str | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
+
+
+class DraftOfferCreate(BaseModel):
+    name: str = Field(..., min_length=1)
+    brand: str | None = None
+    category: str | None = None
+    format: str | None = None
+    price_offer: float = Field(..., gt=0)
     price_original: float | None = Field(None, gt=0)
     unit_price_value: float | None = Field(None, gt=0)
     unit_price_unit: str | None = None
@@ -83,7 +97,27 @@ async def list_public_flyers() -> list[dict]:
         .order("created_at", desc=True)
         .execute()
     )
-    return response.data
+    flyers = response.data
+    if not flyers:
+        return flyers
+
+    flyer_ids = [f["id"] for f in flyers]
+    confirmed_resp = (
+        sb.table("offers")
+        .select("flyer_id")
+        .in_("flyer_id", flyer_ids)
+        .eq("is_confirmed", True)
+        .execute()
+    )
+    confirmed_by_flyer: dict[str, int] = {}
+    for row in confirmed_resp.data or []:
+        fid = row["flyer_id"]
+        confirmed_by_flyer[fid] = confirmed_by_flyer.get(fid, 0) + 1
+
+    for flyer in flyers:
+        flyer["confirmed_count"] = confirmed_by_flyer.get(flyer["id"], 0)
+
+    return flyers
 
 
 _SIGNED_URL_TTL = 60  # seconds
@@ -308,6 +342,103 @@ async def list_draft_offers(
     return [_flatten_draft_offer(o) for o in (offers_resp.data or [])]
 
 
+@router.get("/{flyer_id}/confirmed-offers")
+async def list_confirmed_offers(
+    flyer_id: str,
+    profile: dict = Depends(require_admin_or_manager),
+) -> list[dict]:
+    """Return all confirmed offers for a flyer."""
+    sb = get_supabase()
+    result = sb.table("flyers").select("id, supermarket_id").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    assert_flyer_access(profile, result.data)
+
+    offers_resp = (
+        sb.table("offers")
+        .select(_OFFER_PRODUCT_SELECT)
+        .eq("flyer_id", flyer_id)
+        .eq("is_confirmed", True)
+        .execute()
+    )
+    return [_flatten_draft_offer(o) for o in (offers_resp.data or [])]
+
+
+@router.post("/{flyer_id}/draft-offers", status_code=status.HTTP_201_CREATED)
+async def create_draft_offer(
+    flyer_id: str,
+    payload: DraftOfferCreate,
+    profile: dict = Depends(require_admin_or_manager),
+) -> dict:
+    """Manually add a draft offer to a flyer."""
+    sb = get_supabase()
+    flyer_result = (
+        sb.table("flyers")
+        .select("id, supermarket_id, supermarket_name, valid_from, valid_to")
+        .eq("id", flyer_id)
+        .maybe_single()
+        .execute()
+    )
+    if not flyer_result or not flyer_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    flyer = flyer_result.data
+    assert_flyer_access(profile, flyer)
+
+    product_row = {
+        "name": payload.name,
+        "brand": payload.brand,
+        "category": payload.category,
+        "format": payload.format,
+    }
+    upsert_result = sb.table("products").upsert(product_row, on_conflict="name,brand,format").execute()
+    if upsert_result.data:
+        product_id = upsert_result.data[0]["id"]
+    else:
+        query = sb.table("products").select("id").eq("name", payload.name)
+        query = query.is_("brand", "null") if payload.brand is None else query.eq("brand", payload.brand)
+        query = query.is_("format", "null") if payload.format is None else query.eq("format", payload.format)
+        existing = query.limit(1).execute()
+        if not existing.data:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upsert product")
+        product_id = existing.data[0]["id"]
+
+    normalized_unit = normalize_unit_price_measure(payload.unit_price_unit) if payload.unit_price_unit else None
+    unit_price_label = format_unit_price_label(payload.unit_price_value, normalized_unit) if payload.unit_price_value else None
+
+    offer_id = str(uuid.uuid4())
+    offer_row = {
+        "id": offer_id,
+        "product_id": product_id,
+        "flyer_id": flyer_id,
+        "supermarket_id": flyer["supermarket_id"],
+        "supermarket_name": flyer.get("supermarket_name"),
+        "price_offer": payload.price_offer,
+        "price_original": payload.price_original,
+        "unit_price_value": payload.unit_price_value,
+        "unit_price_unit": normalized_unit,
+        "unit_price": unit_price_label,
+        "offer_notes": payload.offer_notes,
+        "valid_from": payload.valid_from or flyer.get("valid_from"),
+        "valid_to": payload.valid_to or flyer.get("valid_to"),
+        "is_confirmed": False,
+    }
+
+    insert_result = sb.table("offers").insert(offer_row).execute()
+    if not insert_result.data:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create offer")
+
+    inserted = (
+        sb.table("offers")
+        .select(_OFFER_PRODUCT_SELECT)
+        .eq("id", offer_id)
+        .single()
+        .execute()
+    )
+    return _flatten_draft_offer(inserted.data)
+
+
 @router.patch("/{flyer_id}/draft-offers/{offer_id}")
 async def update_draft_offer(
     flyer_id: str,
@@ -335,22 +466,20 @@ async def update_draft_offer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offer not found")
 
     offer = offer_result.data
-    if offer.get("is_confirmed"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Cannot edit an already-confirmed offer",
-        )
+    sent = payload.model_fields_set
 
     offer_fields = {
-        k: v for k, v in {
+        k: (normalize_unit_price_measure(v) if k == "unit_price_unit" else v)
+        for k, v in {
             "price_offer": payload.price_offer,
             "price_original": payload.price_original,
             "unit_price_value": payload.unit_price_value,
-            "unit_price_unit": normalize_unit_price_measure(payload.unit_price_unit),
+            "unit_price_unit": payload.unit_price_unit,
             "offer_notes": payload.offer_notes,
             "valid_from": payload.valid_from,
             "valid_to": payload.valid_to,
-        }.items() if v is not None
+        }.items()
+        if k in sent
     }
     if "unit_price_value" in offer_fields and "unit_price_unit" in offer_fields:
         offer_fields["unit_price"] = format_unit_price_label(
@@ -366,7 +495,8 @@ async def update_draft_offer(
             "brand": payload.brand,
             "category": payload.category,
             "format": payload.format,
-        }.items() if v is not None
+        }.items()
+        if k in sent
     }
     if product_fields:
         sb.table("products").update(product_fields).eq("id", offer["product_id"]).execute()
@@ -379,6 +509,34 @@ async def update_draft_offer(
         .execute()
     )
     return _flatten_draft_offer(updated.data)
+
+
+@router.delete("/{flyer_id}/draft-offers/{offer_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_draft_offer(
+    flyer_id: str,
+    offer_id: str,
+    profile: dict = Depends(require_admin_or_manager),
+) -> None:
+    """Delete a single unconfirmed draft offer. Cannot delete already-confirmed offers."""
+    sb = get_supabase()
+    flyer_result = sb.table("flyers").select("id, supermarket_id").eq("id", flyer_id).maybe_single().execute()
+    if not flyer_result or not flyer_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    assert_flyer_access(profile, flyer_result.data)
+
+    offer_result = (
+        sb.table("offers")
+        .select("id, flyer_id, is_confirmed")
+        .eq("id", offer_id)
+        .eq("flyer_id", flyer_id)
+        .maybe_single()
+        .execute()
+    )
+    if not offer_result or not offer_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offer not found")
+
+    sb.table("offers").delete().eq("id", offer_id).execute()
 
 
 @router.post("/{flyer_id}/offers/confirm")

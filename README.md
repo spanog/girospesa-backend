@@ -636,7 +636,7 @@ FRONTEND_URL=http://127.0.0.1:3000
 # ── Gemini extraction (solo se usi estrazione AI) ---------------------------
 LLM_PROVIDER=gemini
 GOOGLE_API_KEY=<google-api-key>
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemma-4-31b-it
 
 # ── Servizi esterni opzionali in locale -------------------------------------
 GEOCODING_PROVIDER=disabled          # usa "nominatim" solo se vuoi geocoding reale

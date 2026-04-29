@@ -84,18 +84,25 @@ async def list_products(
     q: str | None = Query(None, description="Full-text or name ILIKE search"),
     category: str | None = Query(None),
     archived: bool = Query(False, description="Return archived products only"),
+    no_image: bool = Query(False, description="Return only products without image"),
+    sort_by: str = Query("created_at", description="Column to sort by: name|brand|category|created_at"),
+    sort_dir: str = Query("desc", description="Sort direction: asc|desc"),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
 ) -> list[dict]:
     """Paginated list of all products (archived or not). Admin only."""
     sb = get_supabase()
 
+    _SORTABLE = {"name", "brand", "category", "created_at"}
+    safe_sort_by = sort_by if sort_by in _SORTABLE else "created_at"
+    safe_sort_dir_desc = sort_dir != "asc"
+
     # Count offers per product via a join
     query = (
         sb.table("products")
         .select("*, offers(id)")
         .eq("is_archived", archived)
-        .order("created_at", desc=True)
+        .order(safe_sort_by, desc=safe_sort_dir_desc)
         .range(offset, offset + limit - 1)
     )
 
@@ -104,6 +111,9 @@ async def list_products(
 
     if category:
         query = query.eq("category", category)
+
+    if no_image:
+        query = query.is_("image_url", "null")
 
     resp = query.execute()
     products = resp.data or []

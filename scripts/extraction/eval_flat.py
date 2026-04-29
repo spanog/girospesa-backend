@@ -51,7 +51,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Flat-format extraction eval")
     parser.add_argument("--pdf", required=True, type=Path)
     parser.add_argument("--ground-truth", required=True, type=Path)
-    parser.add_argument("--model", default="gemini-2.5-flash")
+    parser.add_argument("--model", default="gemma-4-31b-it")
     args = parser.parse_args()
 
     api_key = os.environ.get("GOOGLE_API_KEY", "")

@@ -28,7 +28,7 @@ SUPPORTED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp"}
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    default_gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    default_gemini_model = os.getenv("GEMINI_MODEL", "gemma-4-31b-it")
     default_api_key = os.getenv("GOOGLE_API_KEY", "")
 
     parser = argparse.ArgumentParser(description="Extract product offers from a local flyer file.")
@@ -50,7 +50,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     except ImportError:
         pass
 
-    default_gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    default_gemini_model = os.getenv("GEMINI_MODEL", "gemma-4-31b-it")
     args = parse_args(argv)
 
     source_path = Path(args.file)

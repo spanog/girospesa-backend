@@ -27,7 +27,7 @@ def _retry_delay(exc: Exception) -> float:
 
 
 class GeminiProvider:
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
+    def __init__(self, api_key: str, model: str = "gemma-4-31b-it") -> None:
         self._api_key = api_key
         self._model = model
 

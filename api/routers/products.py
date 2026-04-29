@@ -55,6 +55,38 @@ def _nearby_supermarket_ids(sb, lat: float, lng: float, max_distance_km: float) 
 router = APIRouter()
 
 
+def _resolve_supermarket_id(sb, slug: str) -> str | None:
+    resp = (
+        sb.table("supermarkets")
+        .select("id")
+        .eq("slug", slug)
+        .maybe_single()
+        .execute()
+    )
+    return resp.data["id"] if resp.data else None
+
+
+def _apply_offer_filters(query, *, q, category, subcategory, supermarket_id, nearby_ids):
+    if q:
+        query = query.text_search("products.name_tsv", q, config="italian")
+    if category:
+        query = query.eq("products.category", category)
+    if subcategory:
+        query = query.eq("products.subcategory", subcategory)
+    if supermarket_id:
+        query = query.eq("supermarket_id", supermarket_id)
+    if nearby_ids is not None:
+        query = query.in_("supermarket_id", nearby_ids)
+    return query
+
+
+_SORT_OPTIONS: dict[str, tuple[str, bool]] = {
+    "discount": ("discount_pct", True),
+    "expiry": ("valid_to", False),
+    "default": ("discount_pct", True),
+}
+
+
 @router.get("")
 async def list_products(
     q: str | None = Query(None, description="Full-text search query"),
@@ -64,6 +96,7 @@ async def list_products(
     lat: float | None = Query(None, description="User latitude for distance filtering"),
     lng: float | None = Query(None, description="User longitude for distance filtering"),
     max_distance_km: float = Query(10.0, gt=0, le=100, description="Max supermarket distance in km"),
+    sort: str | None = Query(None, description="Sort mode: discount | expiry"),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
 ) -> dict:
@@ -73,47 +106,48 @@ async def list_products(
     """
     sb = get_supabase()
 
-    query = (
+    supermarket_id: str | None = None
+    if supermarket:
+        supermarket_id = _resolve_supermarket_id(sb, supermarket)
+        if not supermarket_id:
+            return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0}
+
+    nearby_ids: list[str] | None = None
+    if lat is not None and lng is not None:
+        nearby_ids = _nearby_supermarket_ids(sb, lat, lng, max_distance_km)
+        if not nearby_ids:
+            return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0}
+
+    filter_kwargs = dict(q=q, category=category, subcategory=subcategory, supermarket_id=supermarket_id, nearby_ids=nearby_ids)
+
+    sort_col, sort_desc = _SORT_OPTIONS.get(sort or "default", _SORT_OPTIONS["default"])
+    nulls_first = not sort_desc  # ascending sorts (e.g. expiry) should put NULL last
+
+    base_query = (
         sb.table("offers")
         .select(_OFFER_PRODUCT_LIST_SELECT, count="exact")
         .eq("is_active", True)
         .eq("is_confirmed", True)
-        .order("discount_pct", desc=True)
-        .range(offset, offset + limit - 1)
+        .order(sort_col, desc=sort_desc, nulls_first=nulls_first)
     )
-
-    if q:
-        query = query.text_search("products.name_tsv", q, config="italian")
-
-    if category:
-        query = query.eq("products.category", category)
-
-    if subcategory:
-        query = query.eq("products.subcategory", subcategory)
-
-    if supermarket:
-        supermarket_resp = (
-            sb.table("supermarkets")
-            .select("id")
-            .eq("slug", supermarket)
-            .maybe_single()
-            .execute()
-        )
-        if not supermarket_resp.data:
-            return {"items": [], "nextPage": None}
-        query = query.eq("supermarket_id", supermarket_resp.data["id"])
-
-    if lat is not None and lng is not None:
-        nearby_ids = _nearby_supermarket_ids(sb, lat, lng, max_distance_km)
-        if not nearby_ids:
-            return {"items": [], "nextPage": None}
-        query = query.in_("supermarket_id", nearby_ids)
-
+    query = _apply_offer_filters(base_query, **filter_kwargs).range(offset, offset + limit - 1)
     response = query.execute()
+
     items = [_flatten_offer(offer) for offer in (response.data or [])]
     total = response.count or 0
     next_page = (offset // limit) + 1 if offset + limit < total else None
-    return {"items": items, "nextPage": next_page}
+
+    # Compute supermarket_count only on first page to avoid redundant work on subsequent pages
+    supermarket_count = 0
+    if offset == 0:
+        sc_query = _apply_offer_filters(
+            sb.table("offers").select("supermarket_id").eq("is_active", True).eq("is_confirmed", True),
+            **filter_kwargs,
+        )
+        sc_resp = sc_query.execute()
+        supermarket_count = len({row["supermarket_id"] for row in (sc_resp.data or [])})
+
+    return {"items": items, "nextPage": next_page, "total": total, "supermarket_count": supermarket_count}
 
 
 @router.get("/{product_id}")

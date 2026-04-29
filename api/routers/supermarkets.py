@@ -1,6 +1,13 @@
-from fastapi import APIRouter, Query
+import re
+from typing import Annotated
 
+from fastapi import APIRouter, Depends, Query, status
+from pydantic import BaseModel, Field
+
+from core.auth import require_admin
+from core.config import settings
 from core.database import get_supabase
+from services.geocoding import geocode_address
 
 router = APIRouter()
 
@@ -25,6 +32,28 @@ def _merge_distances(rows: list[dict], nearby_rows: list[dict]) -> list[dict]:
         for row in nearby_rows
         if row["id"] in rows_by_id
     ]
+
+
+def _make_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower().strip())
+    return slug.strip("-")
+
+
+def _unique_slug(sb, base: str) -> str:
+    slug, i = base, 2
+    while sb.table("supermarkets").select("id").eq("slug", slug).execute().data:
+        slug, i = f"{base}-{i}", i + 1
+    return slug
+
+
+class SupermarketCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    address: str | None = None
+    city: str | None = None
+    province: str | None = None
+    postal_code: str | None = None
+    lat: float | None = None
+    lng: float | None = None
 
 
 @router.get("")
@@ -60,3 +89,32 @@ async def list_supermarkets(
         return [{k: v for k, v in row.items() if k != "offers"} for row in resp.data]
     resp = sb.table("supermarkets").select("*").eq("is_active", True).order("name").execute()
     return resp.data
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_supermarket(
+    body: SupermarketCreate,
+    _admin: Annotated[dict, Depends(require_admin)],
+) -> dict:
+    """Create a new supermarket branch. Admin only."""
+    sb = get_supabase()
+    lat, lng = body.lat, body.lng
+    if lat is None and body.address and settings.geocoding_provider == "nominatim":
+        full_addr = f"{body.address}, {body.postal_code} {body.city} {body.province}".strip()
+        coords = geocode_address(full_addr)
+        if coords:
+            lat, lng = coords
+    slug = _unique_slug(sb, _make_slug(body.name))
+    row = {
+        "name": body.name,
+        "slug": slug,
+        "address": body.address,
+        "city": body.city,
+        "province": body.province,
+        "postal_code": body.postal_code,
+        "lat": lat,
+        "lng": lng,
+        "is_active": True,
+    }
+    resp = sb.table("supermarkets").insert(row).execute()
+    return resp.data[0]

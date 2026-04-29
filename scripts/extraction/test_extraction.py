@@ -109,7 +109,7 @@ def load_fixtures(fixtures_dir: Path) -> list[dict]:
 def run(
     fixtures_dir: Path,
     mock: bool,
-    model: str = "gemini-2.5-flash",
+    model: str = "gemma-4-31b-it",
     api_key: str = "",
     images_dir: Path | None = None,
 ) -> bool:
@@ -152,7 +152,7 @@ def main() -> None:
         type=Path,
         default=_BACKEND_ROOT / "tests" / "extraction_eval" / "fixtures",
     )
-    parser.add_argument("--model", default=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    parser.add_argument("--model", default=os.getenv("GEMINI_MODEL", "gemma-4-31b-it"))
     parser.add_argument("--api-key", default=os.getenv("GOOGLE_API_KEY", ""))
     parser.add_argument("--images-dir", type=Path)
     args = parser.parse_args()

@@ -18,7 +18,7 @@ def get_provider(settings: object) -> ExtractionProvider:
     if provider == "gemini":
         return GeminiProvider(
             api_key=getattr(settings, "google_api_key", ""),
-            model=getattr(settings, "gemini_model", "gemini-2.5-flash"),
+            model=getattr(settings, "gemini_model", "gemma-4-31b-it"),
         )
     raise ValueError(
         f"Unsupported llm_provider: {provider!r}. Supported: 'gemini'"

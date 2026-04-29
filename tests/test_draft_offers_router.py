@@ -20,7 +20,7 @@ _config_mod = types.ModuleType("core.config")
 _settings_obj = MagicMock()
 _settings_obj.llm_provider = "gemini"
 _settings_obj.google_api_key = ""
-_settings_obj.gemini_model = "gemini-2.5-flash"
+_settings_obj.gemini_model = "gemma-4-31b-it"
 _config_mod.settings = _settings_obj  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
@@ -121,6 +121,132 @@ class TestTriggerExtraction:
                 {_DEP_PROFILE: lambda: MANAGER_OTHER_PROFILE, _DEP_USER_ID: lambda: "mgr-2"},
             )
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# create_draft_offer
+# ---------------------------------------------------------------------------
+
+class TestCreateDraftOffer:
+    def _make_sb(self) -> MagicMock:
+        flyers_table = MagicMock()
+        flyer_result = MagicMock()
+        flyer_result.data = {
+            "id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Coop",
+            "valid_from": "2026-04-01",
+            "valid_to": "2026-04-30",
+        }
+        flyers_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+
+        products_table = MagicMock()
+        products_upsert_result = MagicMock()
+        products_upsert_result.data = [{"id": "prod-new"}]
+        products_table.upsert.return_value.execute.return_value = products_upsert_result
+
+        offers_table = MagicMock()
+        insert_result = MagicMock()
+        insert_result.data = [{"id": "offer-new"}]
+        offers_table.insert.return_value.execute.return_value = insert_result
+        final_result = MagicMock()
+        final_result.data = {
+            "id": "offer-new",
+            "flyer_id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Coop",
+            "price_offer": 1.99,
+            "price_original": None,
+            "unit_price": None,
+            "unit_price_value": None,
+            "unit_price_unit": None,
+            "offer_notes": None,
+            "valid_from": "2026-04-01",
+            "valid_to": "2026-04-30",
+            "is_confirmed": False,
+            "products": {
+                "id": "prod-new",
+                "name": "Mozzarella",
+                "brand": "Galbani",
+                "category": "latticini",
+                "format": "125g",
+                "image_url": None,
+            },
+        }
+        offers_table.select.return_value.eq.return_value.single.return_value.execute.return_value = final_result
+
+        sb = MagicMock()
+
+        def _dispatch(table_name):
+            if table_name == "flyers":
+                return flyers_table
+            if table_name == "products":
+                return products_table
+            return offers_table
+
+        sb.table.side_effect = _dispatch
+        return sb
+
+    @pytest.mark.asyncio
+    async def test_create_returns_201(self):
+        sb = self._make_sb()
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post(
+                "/flyers/flyer-1/draft-offers",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                json={"name": "Mozzarella", "brand": "Galbani", "price_offer": 1.99},
+            )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "Mozzarella"
+        assert data["is_confirmed"] is False
+
+    @pytest.mark.asyncio
+    async def test_create_inherits_flyer_dates(self):
+        sb = self._make_sb()
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post(
+                "/flyers/flyer-1/draft-offers",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                json={"name": "Mozzarella", "price_offer": 1.99},
+            )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["valid_from"] == "2026-04-01"
+        assert data["valid_to"] == "2026-04-30"
+
+    @pytest.mark.asyncio
+    async def test_manager_wrong_supermarket_403(self):
+        sb = self._make_sb()
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post(
+                "/flyers/flyer-1/draft-offers",
+                {_DEP_PROFILE: lambda: MANAGER_OTHER_PROFILE},
+                json={"name": "Mozzarella", "price_offer": 1.99},
+            )
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_missing_price_returns_422(self):
+        sb = self._make_sb()
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post(
+                "/flyers/flyer-1/draft-offers",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                json={"name": "Mozzarella"},
+            )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_missing_name_returns_422(self):
+        sb = self._make_sb()
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post(
+                "/flyers/flyer-1/draft-offers",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                json={"price_offer": 1.99},
+            )
+        assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +364,7 @@ class TestUpdateDraftOffer:
         )
 
     @pytest.mark.asyncio
-    async def test_already_confirmed_returns_409(self):
+    async def test_confirmed_offer_can_be_edited(self):
         sb = self._make_sb(is_confirmed=True)
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _patch_req(
@@ -246,7 +372,7 @@ class TestUpdateDraftOffer:
                 {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
                 json={"price_offer": 2.99},
             )
-        assert resp.status_code == 409
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
