@@ -5,7 +5,7 @@ import hashlib
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import RedirectResponse
+
 from pydantic import BaseModel, Field
 
 from core.auth import assert_flyer_access, get_current_user_id, get_optional_user_id, require_admin_or_manager
@@ -127,7 +127,7 @@ _SIGNED_URL_TTL = 60  # seconds
 async def download_flyer(
     flyer_id: str,
     user_id: str | None = Depends(get_optional_user_id),
-) -> RedirectResponse:
+) -> dict[str, str]:
     """Generate a short-lived signed download URL for a flyer file.
 
     Public+done flyers: accessible to anyone (guests included).
@@ -169,7 +169,7 @@ async def download_flyer(
         expires_in=_SIGNED_URL_TTL,
         options={"download": flyer.get("file_name") or True},
     )
-    return RedirectResponse(url=signed["signedURL"], status_code=302)
+    return {"download_url": signed["signedURL"]}
 
 
 @router.post("/upload", status_code=status.HTTP_201_CREATED)
