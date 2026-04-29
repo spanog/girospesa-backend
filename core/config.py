@@ -28,8 +28,6 @@ class Settings(BaseSettings):
 
     frontend_url: str = "http://localhost:3000"
 
-    resend_api_key: str = ""
-    admin_notification_email: str = ""
 
 
 settings = Settings()  # type: ignore[call-arg]

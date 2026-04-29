@@ -4,7 +4,6 @@ Tests verify:
 - Valid payload → 201 with { id, status: 'pending' }
 - Missing required city field → 422 validation error
 - Notes > 500 chars → 422 validation error
-- Resend failure does NOT cause a 500 — DB record is the safety net
 - Guest (no auth) is accepted (no 401)
 """
 
@@ -20,14 +19,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 # ---------------------------------------------------------------------------
 # Stub infrastructure modules
 # ---------------------------------------------------------------------------
-for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders", "resend"):
+for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
 _config_mod = types.ModuleType("core.config")
 _settings = MagicMock()
-_settings.resend_api_key = "re_test"
-_settings.admin_notification_email = "admin@example.com"
 _config_mod.settings = _settings  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 
@@ -128,23 +125,6 @@ async def test_notes_too_long_returns_422():
         json={"city": "Napoli", "notes": "x" * 501},
     )
     assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_resend_failure_does_not_cause_500():
-    """If Resend raises, the endpoint must still return 201 (DB is the safety net)."""
-    mock_sb = _make_supabase_mock()
-
-    with patch.object(_module, "get_supabase", return_value=mock_sb):
-        with patch.object(_module, "_send_admin_notification", side_effect=Exception("Resend down")):
-            resp = await _post(
-                "/flyer-requests",
-                {_DEP_OPTIONAL_USER: lambda: "user-xyz"},
-                json={"city": "Torino"},
-            )
-
-    assert resp.status_code == 201
-    assert resp.json()["status"] == "pending"
 
 
 @pytest.mark.asyncio
