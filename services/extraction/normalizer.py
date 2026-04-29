@@ -144,6 +144,7 @@ SUBCATEGORY_BY_CATEGORY: dict[str, list[str]] = {
         "Macelleria e Polleria",
         "Salumeria e Gastronomia",
         "Ortofrutta",
+        "Pescheria",
     ],
     "dispensa": [
         "Primi Piatti e Preparati",

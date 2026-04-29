@@ -9,7 +9,7 @@ Il tuo compito è analizzare ogni singola pagina del documento ed **estrarre ogn
 
 #### 1. Tassonomia di Riferimento
 Classifica ogni prodotto seguendo rigorosamente questa struttura:
-1.  **Alimentari Freschi** (Sottocategorie: Latticini e Formaggi, Macelleria e Polleria, Salumeria e Gastronomia, Ortofrutta)
+1.  **Alimentari Freschi** (Sottocategorie: Latticini e Formaggi, Macelleria e Polleria, Salumeria e Gastronomia, Ortofrutta, Pescheria)
 2.  **Dispensa** (Sottocategorie: Primi Piatti e Preparati, Condimenti e Conserve, Conserve Ittiche e di Carne, Colazione e Prodotti da Forno, Caffè Tè e Tisane, Snack Salati e Dolciumi)
 3.  **Surgelati** (Sottocategorie: Pesce e Frutti di Mare, Verdure e Preparati, Piatti Pronti e Pizze, Gelati)
 4.  **Bevande** (Sottocategorie: Acqua e Bibite, Succhi e Bevande alla frutta, Alcolici e Birre)
