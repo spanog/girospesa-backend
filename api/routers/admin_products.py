@@ -83,6 +83,7 @@ async def list_products(
     _admin: Annotated[dict, Depends(require_admin)],
     q: str | None = Query(None, description="Full-text or name ILIKE search"),
     category: str | None = Query(None),
+    subcategory: str | None = Query(None),
     archived: bool = Query(False, description="Return archived products only"),
     no_image: bool = Query(False, description="Return only products without image"),
     sort_by: str = Query("created_at", description="Column to sort by: name|brand|category|created_at"),
@@ -111,6 +112,9 @@ async def list_products(
 
     if category:
         query = query.eq("category", category)
+
+    if subcategory:
+        query = query.eq("subcategory", subcategory)
 
     if no_image:
         query = query.is_("image_url", "null")

@@ -209,7 +209,7 @@ Il backend usa tre livelli di autenticazione:
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `GET` | `/admin/products` | 👑 admin | Catalogo prodotti con filtri e paginazione |
+| `GET` | `/admin/products` | 👑 admin | Catalogo prodotti con filtri (`q`, `category`, `subcategory`, `archived`, `no_image`) e paginazione |
 | `POST` | `/admin/products` | 👑 admin | Crea prodotto manuale |
 | `GET` | `/admin/products/{id}` | 👑 admin | Dettaglio prodotto con tutte le offerte |
 | `PATCH` | `/admin/products/{id}` | 👑 admin | Modifica prodotto |
