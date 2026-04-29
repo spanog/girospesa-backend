@@ -19,6 +19,8 @@
 
 - Manual draft-offer create/update endpoints on `/flyers/{flyer_id}/draft-offers` own canonical product fields too: `name`, `brand`, `category`, `subcategory`, `format`.
 - Draft and confirmed offer payloads returned by flyer review endpoints must flatten `products.subcategory` alongside `category`.
+- Admin product delete on `/admin/products/{id}` is hard delete only when product has zero linked offers; endpoint must also delete linked favorites.
+- `purchase_history.product_id` is historical snapshot data, not live FK protection for canonical products.
 
 ## Supabase Query Builder
 

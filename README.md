@@ -217,6 +217,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python 
 | `PATCH` | `/admin/products/{id}` | 👑 admin | Modifica prodotto |
 | `POST` | `/admin/products/{id}/archive` | 👑 admin | Archivia prodotto (soft delete) |
 | `POST` | `/admin/products/{id}/restore` | 👑 admin | Ripristina prodotto archiviato |
+| `DELETE` | `/admin/products/{id}` | 👑 admin | Elimina definitivamente prodotto senza offerte collegate; rimuove anche i preferiti collegati |
 | `POST` | `/admin/products/{id}/image` | 👑 admin | Upload immagine prodotto → bucket `product-images` |
 | `PATCH` | `/admin/products/{id}/offers/{oid}` | 👑 admin | Modifica offerta |
 | `DELETE` | `/admin/products/{id}/offers/{oid}` | 👑 admin | Elimina offerta |
@@ -225,6 +226,11 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python 
 ## Scheduled Jobs
 
 The backend runs scheduled background jobs via APScheduler (`AsyncIOScheduler`), started in the FastAPI lifespan context manager in `main.py`.
+
+### Note storico acquisti
+
+- `purchase_history.product_id` resta valorizzabile come snapshot storico del prodotto acquistato, ma non mantiene più una foreign key verso `products`.
+- Questo permette di eliminare prodotti canonici non più usati senza perdere coerenza nello storico acquisti.
 
 | Job | Schedule | Service | Description |
 |-----|----------|---------|-------------|

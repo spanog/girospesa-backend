@@ -47,6 +47,13 @@ async def _get(url: str) -> httpx.Response:
         return await client.get(url)
 
 
+async def _delete(url: str) -> httpx.Response:
+    test_app.dependency_overrides = {_DEP_REQUIRE_ADMIN: _admin_dep}
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.delete(url)
+
+
 @pytest.mark.asyncio
 async def test_list_products_applies_category_and_subcategory_filters():
     sb = MagicMock()
@@ -83,3 +90,54 @@ async def test_list_products_without_subcategory_keeps_current_behavior():
     assert ("subcategory", "Primi Piatti e Preparati") not in [
         call.args for call in range_query.eq.return_value.eq.call_args_list
     ]
+
+
+@pytest.mark.asyncio
+async def test_delete_product_returns_409_when_product_has_linked_offers():
+    sb = MagicMock()
+    product_query = sb.table.return_value.select.return_value.eq.return_value.single.return_value
+    product_query.execute.return_value = MagicMock(
+        data={"id": "product-1", "name": "Pasta", "is_archived": True}
+    )
+    offers_query = sb.table.return_value.select.return_value.eq.return_value.limit.return_value
+    offers_query.execute.return_value = MagicMock(data=[{"id": "offer-1"}])
+
+    with patch("api.routers.admin_products.get_supabase", return_value=sb):
+        resp = await _delete("/admin/products/product-1")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Prodotto con offerte collegate: archivia invece di eliminare."
+
+
+@pytest.mark.asyncio
+async def test_delete_product_removes_favorites_then_product_when_no_offers():
+    sb = MagicMock()
+    product_query = sb.table.return_value.select.return_value.eq.return_value.single.return_value
+    product_query.execute.return_value = MagicMock(
+        data={"id": "product-1", "name": "Pasta", "is_archived": True}
+    )
+    offers_query = sb.table.return_value.select.return_value.eq.return_value.limit.return_value
+    offers_query.execute.return_value = MagicMock(data=[])
+
+    with patch("api.routers.admin_products.get_supabase", return_value=sb):
+        resp = await _delete("/admin/products/product-1")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": True}
+    sb.table.assert_any_call("favorites")
+    sb.table.return_value.delete.return_value.eq.assert_any_call("product_id", "product-1")
+    sb.table.assert_any_call("products")
+    sb.table.return_value.delete.return_value.eq.assert_any_call("id", "product-1")
+
+
+@pytest.mark.asyncio
+async def test_delete_product_returns_404_when_missing():
+    sb = MagicMock()
+    product_query = sb.table.return_value.select.return_value.eq.return_value.single.return_value
+    product_query.execute.return_value = MagicMock(data=None)
+
+    with patch("api.routers.admin_products.get_supabase", return_value=sb):
+        resp = await _delete("/admin/products/missing")
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Prodotto non trovato"

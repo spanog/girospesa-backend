@@ -75,6 +75,13 @@ def _require_offer(product_id: str, offer_id: str) -> dict:
     return resp.data
 
 
+def _product_has_offers(product_id: str) -> bool:
+    """Return True when at least one offer references product."""
+    sb = get_supabase()
+    resp = sb.table("offers").select("id").eq("product_id", product_id).limit(1).execute()
+    return bool(resp.data)
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
@@ -257,6 +264,25 @@ async def restore_product(
     if not resp.data:
         raise HTTPException(status_code=500, detail="Errore durante il ripristino")
     return resp.data[0]
+
+
+@router.delete("/{product_id}")
+async def delete_product(
+    product_id: str,
+    _admin: Annotated[dict, Depends(require_admin)],
+) -> dict:
+    """Hard-delete archived canonical product when no offers are linked."""
+    _require_product(product_id)
+    if _product_has_offers(product_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Prodotto con offerte collegate: archivia invece di eliminare.",
+        )
+
+    sb = get_supabase()
+    sb.table("favorites").delete().eq("product_id", product_id).execute()
+    sb.table("products").delete().eq("id", product_id).execute()
+    return {"deleted": True}
 
 
 @router.post("/{product_id}/image")
