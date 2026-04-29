@@ -169,6 +169,7 @@ class ExtractionService:
                 "name": p["name"],
                 "brand": p.get("brand"),
                 "category": p.get("category"),
+                "subcategory": p.get("subcategory"),
                 "format": p.get("format"),
             })
             offer_rows.append(self._build_offer_row(product_id, p, flyer, supermarket_id, supermarket_name))

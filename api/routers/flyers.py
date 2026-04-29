@@ -567,6 +567,17 @@ async def confirm_offers(
         .execute()
     )
     confirmed_count = len(updated.data) if updated.data else 0
+
+    total_confirmed = (
+        sb.table("offers")
+        .select("id", count="exact")
+        .eq("flyer_id", flyer_id)
+        .eq("is_confirmed", True)
+        .execute()
+    )
+    if (total_confirmed.count or 0) > 0:
+        sb.table("flyers").update({"is_public": True}).eq("id", flyer_id).execute()
+
     return {"confirmed": confirmed_count, "flyer_id": flyer_id}
 
 

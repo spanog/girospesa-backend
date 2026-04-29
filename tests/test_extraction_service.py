@@ -243,3 +243,28 @@ class TestUpsertProductFallback:
             svc = ExtractionService()
             with pytest.raises(ValueError, match="Product not found after upsert"):
                 svc._upsert_product(sb, {"name": "Pasta", "brand": None, "format": None})
+
+
+class TestExtractionServiceSubcategoryPersisted:
+    """Subcategory from LLM response must reach the product upsert."""
+
+    def test_subcategory_written_to_upsert(self):
+        sb = _make_sb()
+        mock_provider = MagicMock()
+        mock_provider.extract_products.return_value = (_EXTRACTED_PRODUCTS_V2, [])
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=1),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+            svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
+            svc.run("flyer-1")
+
+        upsert_calls = sb.table.return_value.upsert.call_args_list
+        assert upsert_calls, "Expected at least one product upsert"
+        product_row = upsert_calls[0][0][0]
+        assert product_row.get("subcategory") == "Conserve Ittiche e di Carne"
