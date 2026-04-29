@@ -19,6 +19,7 @@ router = APIRouter()
 class FlyerRequestBody(BaseModel):
     city: str = Field(..., min_length=1, max_length=200)
     supermarket: str | None = Field(None, max_length=200)
+    supermarket_id: str | None = Field(None)
     flyer_url: str | None = Field(None, max_length=2000)
     notes: str | None = Field(None, max_length=500)
     email: str | None = Field(None, max_length=254)
@@ -44,7 +45,7 @@ def _send_admin_notification(payload: FlyerRequestBody, user_id: str | None) -> 
     <h2>Nuova richiesta volantino</h2>
     <ul>
       <li><b>Città:</b> {payload.city}</li>
-      <li><b>Supermercato:</b> {payload.supermarket or '—'}</li>
+      <li><b>Supermercato:</b> {payload.supermarket or '—'} (id: {payload.supermarket_id or '—'})</li>
       <li><b>Link volantino:</b> {payload.flyer_url or '—'}</li>
       <li><b>Note:</b> {payload.notes or '—'}</li>
       <li><b>Email utente:</b> {payload.email or '—'}</li>
@@ -77,6 +78,7 @@ async def create_flyer_request(
             {
                 "city": body.city,
                 "supermarket": body.supermarket,
+                "supermarket_id": body.supermarket_id,
                 "flyer_url": body.flyer_url,
                 "notes": body.notes,
                 "email": body.email,
