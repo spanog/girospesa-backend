@@ -2,7 +2,7 @@
 
 Tests verify that:
 - Upload requires admin or manager role
-- Manager cannot set is_public=True
+- Upload always creates private flyers
 - Manager auto-fills supermarket_id from profile
 - Manager cannot upload for a different supermarket
 - File type and size validation are enforced
@@ -135,15 +135,22 @@ async def _post_upload(dep_overrides: dict, files: list, data: dict | None = Non
         return await client.post("/flyers/upload", files=files, data=data or {})
 
 
+async def _get(url: str, dep_overrides: dict | None = None) -> httpx.Response:
+    test_app.dependency_overrides = dep_overrides or {}
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get(url)
+
+
 # ---------------------------------------------------------------------------
-# Tests — is_public admin gating
+# Tests — upload privacy
 # ---------------------------------------------------------------------------
 
 
-class TestUploadFlyerIsPublic:
+class TestUploadFlyerPrivacy:
     @pytest.mark.asyncio
-    async def test_admin_upload_is_public_false_by_default(self):
-        """Admin upload creates a private flyer (is_public=False) by default."""
+    async def test_admin_upload_creates_private_flyer(self):
+        """Admin upload creates a private flyer (is_public=False)."""
         sb = _mock_supabase_for_upload({"id": "f1", "is_public": False, "status": "pending", "user_id": "admin-456"})
 
         with patch("api.routers.flyers.get_supabase", return_value=sb):
@@ -157,9 +164,9 @@ class TestUploadFlyerIsPublic:
         assert insert_call_kwargs["is_public"] is False
 
     @pytest.mark.asyncio
-    async def test_admin_can_set_is_public_true(self):
-        """An admin user can upload a public flyer (is_public=True)."""
-        sb = _mock_supabase_for_upload({"id": "f2", "is_public": True, "status": "pending", "user_id": "admin-456"})
+    async def test_upload_ignores_is_public_form_field(self):
+        """Upload endpoint ignores any submitted is_public field and keeps flyer private."""
+        sb = _mock_supabase_for_upload({"id": "f2", "is_public": False, "status": "pending", "user_id": "admin-456"})
 
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post_upload(
@@ -170,22 +177,7 @@ class TestUploadFlyerIsPublic:
 
         assert resp.status_code == 201
         insert_call_kwargs = sb.table.return_value.insert.call_args[0][0]
-        assert insert_call_kwargs["is_public"] is True
-
-    @pytest.mark.asyncio
-    async def test_manager_cannot_set_is_public_true(self):
-        """A manager requesting is_public=True receives 403 Forbidden."""
-        sb = _mock_supabase_for_upload()
-
-        with patch("api.routers.flyers.get_supabase", return_value=sb):
-            resp = await _post_upload(
-                {_DEP_GET_USER_ID: lambda: "mgr-123", _DEP_PROFILE: lambda: MANAGER_PROFILE},
-                [_make_upload_file()],
-                data={"is_public": "true"},
-            )
-
-        assert resp.status_code == 403
-        assert "Managers" in resp.json()["detail"]
+        assert insert_call_kwargs["is_public"] is False
 
     @pytest.mark.asyncio
     async def test_manager_auto_fills_supermarket_id(self):
@@ -272,3 +264,80 @@ class TestUploadFlyerDuplicate:
 
         assert resp.status_code == 201
         sb.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.assert_not_called()
+
+
+class TestPublicFlyersVisibility:
+    @pytest.mark.asyncio
+    async def test_public_list_excludes_unconfirmed_flyers(self):
+        sb = MagicMock()
+
+        flyers_table = MagicMock()
+        flyers_result = MagicMock()
+        flyers_result.data = [
+            {"id": "flyer-hidden", "status": "done", "is_public": True},
+            {"id": "flyer-visible", "status": "done", "is_public": True},
+        ]
+        flyers_table.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
+            flyers_result
+        )
+
+        offers_table = MagicMock()
+        confirmed_result = MagicMock()
+        confirmed_result.data = [{"flyer_id": "flyer-visible"}]
+        offers_table.select.return_value.in_.return_value.eq.return_value.execute.return_value = (
+            confirmed_result
+        )
+
+        def _dispatch(table_name: str) -> MagicMock:
+            if table_name == "flyers":
+                return flyers_table
+            return offers_table
+
+        sb.table.side_effect = _dispatch
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _get("/flyers/public")
+
+        assert resp.status_code == 200
+        assert resp.json() == [
+            {
+                "id": "flyer-visible",
+                "status": "done",
+                "is_public": True,
+                "confirmed_count": 1,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_guest_download_requires_confirmed_public_flyer(self):
+        sb = MagicMock()
+        flyer_result = MagicMock()
+        flyer_result.data = {
+            "id": "flyer-1",
+            "status": "done",
+            "is_public": True,
+            "supermarket_id": "sup-1",
+        }
+
+        flyers_table = MagicMock()
+        flyers_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = (
+            flyer_result
+        )
+
+        offers_table = MagicMock()
+        count_result = MagicMock()
+        count_result.count = 0
+        offers_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = count_result
+
+        def _dispatch(table_name: str) -> MagicMock:
+            if table_name == "flyers":
+                return flyers_table
+            return offers_table
+
+        sb.table.side_effect = _dispatch
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _get("/flyers/flyer-1/download", {_flyers_module.get_optional_user_id: lambda: None})
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Authentication required"

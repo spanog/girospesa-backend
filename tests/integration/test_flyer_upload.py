@@ -215,8 +215,8 @@ class TestFlyerUploadIntegration:
         assert r2.status_code == 409
         assert "already exists" in r2.json()["detail"]
 
-    async def test_admin_can_create_public_flyer(self, supabase_client, clean_db):
-        """An admin user can set is_public=True; the DB row reflects this."""
+    async def test_upload_always_creates_private_flyer(self, supabase_client, clean_db):
+        """Upload ignores any is_public field; flyers stay private until offer confirmation."""
         sb = _make_supabase_real_db_mock_storage()
 
         async with httpx.AsyncClient(app=app, base_url="http://test") as client:
@@ -229,7 +229,7 @@ class TestFlyerUploadIntegration:
 
         assert resp.status_code == 201
         body = resp.json()
-        assert body["is_public"] is True
+        assert body["is_public"] is False
 
         rows = (
             supabase_client.table("flyers")
@@ -237,4 +237,4 @@ class TestFlyerUploadIntegration:
             .eq("id", body["id"])
             .execute()
         )
-        assert rows.data[0]["is_public"] is True
+        assert rows.data[0]["is_public"] is False

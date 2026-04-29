@@ -145,7 +145,7 @@ Il backend usa tre livelli di autenticazione:
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
 | `GET` | `/flyers` | ✅ admin/manager | Lista volantini gestibili; i manager vedono solo il proprio supermercato |
-| `GET` | `/flyers/public` | ❌ | Lista volantini pubblici completati |
+| `GET` | `/flyers/public` | ❌ | Lista volantini pubblici completati con almeno un'offerta confermata |
 | `GET` | `/flyers/{flyer_id}` | ✅ admin/manager | Dettaglio singolo volantino |
 | `POST` | `/flyers/upload` | ✅ admin/manager | Upload volantino (PDF/JPG/PNG/WebP, max 50 MB); crea riga `status='pending'` |
 | `POST` | `/flyers/{flyer_id}/extract` | ✅ admin/manager | Avvia estrazione AI per un volantino pending/error |

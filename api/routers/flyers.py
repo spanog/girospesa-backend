@@ -68,6 +68,35 @@ def _flatten_draft_offer(offer: dict) -> dict:
     }
 
 
+def _confirmed_count_by_flyer(sb, flyer_ids: list[str]) -> dict[str, int]:
+    if not flyer_ids:
+        return {}
+
+    confirmed_resp = (
+        sb.table("offers")
+        .select("flyer_id")
+        .in_("flyer_id", flyer_ids)
+        .eq("is_confirmed", True)
+        .execute()
+    )
+    confirmed_by_flyer: dict[str, int] = {}
+    for row in confirmed_resp.data or []:
+        fid = row["flyer_id"]
+        confirmed_by_flyer[fid] = confirmed_by_flyer.get(fid, 0) + 1
+    return confirmed_by_flyer
+
+
+def _has_confirmed_offers(sb, flyer_id: str) -> bool:
+    result = (
+        sb.table("offers")
+        .select("id", count="exact")
+        .eq("flyer_id", flyer_id)
+        .eq("is_confirmed", True)
+        .execute()
+    )
+    return (result.count or 0) > 0
+
+
 @router.get("")
 async def list_flyers(
     admin: bool = Query(False),
@@ -87,7 +116,7 @@ async def list_flyers(
 
 @router.get("/public")
 async def list_public_flyers() -> list[dict]:
-    """Return all active (done) public flyers — accessible to everyone."""
+    """Return done public flyers that already contain confirmed offers."""
     sb = get_supabase()
     response = (
         sb.table("flyers")
@@ -101,23 +130,16 @@ async def list_public_flyers() -> list[dict]:
     if not flyers:
         return flyers
 
-    flyer_ids = [f["id"] for f in flyers]
-    confirmed_resp = (
-        sb.table("offers")
-        .select("flyer_id")
-        .in_("flyer_id", flyer_ids)
-        .eq("is_confirmed", True)
-        .execute()
-    )
-    confirmed_by_flyer: dict[str, int] = {}
-    for row in confirmed_resp.data or []:
-        fid = row["flyer_id"]
-        confirmed_by_flyer[fid] = confirmed_by_flyer.get(fid, 0) + 1
-
+    confirmed_by_flyer = _confirmed_count_by_flyer(sb, [f["id"] for f in flyers])
+    visible_flyers: list[dict] = []
     for flyer in flyers:
-        flyer["confirmed_count"] = confirmed_by_flyer.get(flyer["id"], 0)
+        confirmed_count = confirmed_by_flyer.get(flyer["id"], 0)
+        if confirmed_count <= 0:
+            continue
+        flyer["confirmed_count"] = confirmed_count
+        visible_flyers.append(flyer)
 
-    return flyers
+    return visible_flyers
 
 
 _SIGNED_URL_TTL = 60  # seconds
@@ -130,7 +152,7 @@ async def download_flyer(
 ) -> dict[str, str]:
     """Generate a short-lived signed download URL for a flyer file.
 
-    Public+done flyers: accessible to anyone (guests included).
+    Public+done flyers with confirmed offers: accessible to anyone (guests included).
     All other flyers: require a valid JWT with admin or supermarket_manager role.
     """
     sb = get_supabase()
@@ -139,7 +161,11 @@ async def download_flyer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
     flyer = result.data
 
-    is_public_done = flyer.get("is_public") and flyer.get("status") == "done"
+    is_public_done = (
+        flyer.get("is_public")
+        and flyer.get("status") == "done"
+        and _has_confirmed_offers(sb, flyer_id)
+    )
 
     if not is_public_done:
         if user_id is None:
@@ -179,7 +205,6 @@ async def upload_flyer(
     supermarket_id: str | None = Form(None),
     valid_from: str | None = Form(None),
     valid_to: str | None = Form(None),
-    is_public: bool = Form(False),
     user_id: str = Depends(get_current_user_id),
     profile: dict = Depends(require_admin_or_manager),
 ) -> dict:
@@ -187,18 +212,12 @@ async def upload_flyer(
 
     Managers:
     - Auto-fill supermarket_id from managed_supermarket_id if not provided.
-    - Cannot set is_public=True.
     - Cannot upload for a different supermarket.
     """
     role = profile.get("role")
     managed_id = profile.get("managed_supermarket_id")
 
     if role == "supermarket_manager":
-        if is_public:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Managers cannot upload public flyers",
-            )
         if supermarket_id is None:
             supermarket_id = managed_id
         elif supermarket_id != managed_id:
@@ -264,7 +283,7 @@ async def upload_flyer(
                 "valid_from": valid_from,
                 "valid_to": valid_to,
                 "status": "pending",
-                "is_public": is_public,
+                "is_public": False,
                 "file_hash": file_hash,
             }
         )
