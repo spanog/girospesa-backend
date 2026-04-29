@@ -20,6 +20,10 @@
 - Manual draft-offer create/update endpoints on `/flyers/{flyer_id}/draft-offers` own canonical product fields too: `name`, `brand`, `category`, `subcategory`, `format`.
 - Draft and confirmed offer payloads returned by flyer review endpoints must flatten `products.subcategory` alongside `category`.
 
+## Supabase Query Builder
+
+- Match pinned client API exactly. Example: PostgREST `.order()` expects `nullsfirst`, not `nulls_first`.
+
 ## Ignore Rules
 
 - Track `.env.example` and `.env.test.example`.

@@ -121,14 +121,14 @@ async def list_products(
     filter_kwargs = dict(q=q, category=category, subcategory=subcategory, supermarket_id=supermarket_id, nearby_ids=nearby_ids)
 
     sort_col, sort_desc = _SORT_OPTIONS.get(sort or "default", _SORT_OPTIONS["default"])
-    nulls_first = not sort_desc  # ascending sorts (e.g. expiry) should put NULL last
+    nullsfirst = not sort_desc  # PostgREST Python client uses `nullsfirst`.
 
     base_query = (
         sb.table("offers")
         .select(_OFFER_PRODUCT_LIST_SELECT, count="exact")
         .eq("is_active", True)
         .eq("is_confirmed", True)
-        .order(sort_col, desc=sort_desc, nulls_first=nulls_first)
+        .order(sort_col, desc=sort_desc, nullsfirst=nullsfirst)
     )
     query = _apply_offer_filters(base_query, **filter_kwargs).range(offset, offset + limit - 1)
     response = query.execute()

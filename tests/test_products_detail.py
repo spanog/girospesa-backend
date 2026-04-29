@@ -13,7 +13,7 @@ from __future__ import annotations
 import sys
 import os
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -156,6 +156,34 @@ class TestListProducts:
         select_mock = sb.table.return_value.select.return_value
         select_mock.eq.assert_any_call("is_active", True)
         select_mock.eq.return_value.eq.assert_any_call("is_confirmed", True)
+        select_mock.eq.return_value.eq.return_value.order.assert_called_once_with(
+            "discount_pct",
+            desc=True,
+            nullsfirst=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_expiry_sort_uses_postgrest_nullsfirst_keyword(self):
+        sb = MagicMock()
+        execute_result = MagicMock(data=[_LIST_ROW], count=1)
+        (
+            sb.table.return_value
+            .select.return_value
+            .eq.return_value.eq.return_value
+            .order.return_value
+            .range.return_value
+            .execute.return_value
+        ) = execute_result
+
+        with patch("api.routers.products.get_supabase", return_value=sb):
+            resp = await _get("/products?sort=expiry")
+
+        assert resp.status_code == 200
+        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.order.assert_called_once_with(
+            "valid_to",
+            desc=False,
+            nullsfirst=True,
+        )
 
     @pytest.mark.asyncio
     async def test_distance_filtering_restricts_to_nearby_supermarkets(self):
@@ -167,8 +195,8 @@ class TestListProducts:
             .select.return_value
             .eq.return_value.eq.return_value
             .order.return_value
-            .range.return_value
             .in_.return_value
+            .range.return_value
             .execute.return_value
         ) = execute_result
 
@@ -182,13 +210,12 @@ class TestListProducts:
             resp = await _get("/products?lat=45.464&lng=9.189&max_distance_km=10")
 
         assert resp.status_code == 200
-        range_chain = (
+        order_chain = (
             offers_chain.select.return_value
             .eq.return_value.eq.return_value
             .order.return_value
-            .range.return_value
         )
-        range_chain.in_.assert_called_once_with("supermarket_id", ["sm-1"])
+        order_chain.in_.assert_called_once_with("supermarket_id", ["sm-1"])
 
     @pytest.mark.asyncio
     async def test_distance_filtering_returns_empty_when_no_nearby_supermarkets(self):
@@ -202,7 +229,12 @@ class TestListProducts:
             resp = await _get("/products?lat=45.464&lng=9.189&max_distance_km=10")
 
         assert resp.status_code == 200
-        assert resp.json() == {"items": [], "nextPage": None}
+        assert resp.json() == {
+            "items": [],
+            "nextPage": None,
+            "total": 0,
+            "supermarket_count": 0,
+        }
         # Offers query should never be executed when nearby_ids is empty
         offers_chain.select.return_value.eq.return_value.eq.return_value.order.return_value.range.return_value.execute.assert_not_called()
 
@@ -216,8 +248,8 @@ class TestListProducts:
             .select.return_value
             .eq.return_value.eq.return_value
             .order.return_value
-            .range.return_value
             .in_.return_value
+            .range.return_value
             .execute.return_value
         ) = execute_result
 
@@ -239,14 +271,13 @@ class TestListProducts:
                 "radius_m": 10000.0,
             },
         )
-        sb.table.assert_called_once_with("offers")
-        range_chain = (
+        assert sb.table.call_args_list == [call("offers"), call("offers")]
+        order_chain = (
             offers_chain.select.return_value
             .eq.return_value.eq.return_value
             .order.return_value
-            .range.return_value
         )
-        range_chain.in_.assert_called_once_with("supermarket_id", ["sm-1"])
+        order_chain.in_.assert_called_once_with("supermarket_id", ["sm-1"])
 
 
 # ---------------------------------------------------------------------------

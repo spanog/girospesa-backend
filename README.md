@@ -131,6 +131,8 @@ Il backend usa tre livelli di autenticazione:
 | `GET` | `/products/{id}` | ❌ | Dettaglio singola offerta (prodotto + supermercato) |
 | `GET` | `/products/{id}/similar` | ❌ | Altre offerte attive per lo stesso prodotto canonico (ordinate per prezzo) |
 
+Nota implementativa: ordinamento `/products` usa query builder PostgREST Python con keyword `nullsfirst` per mantenere stabile ordinamento default e per scadenza.
+
 ### Preferiti (`/favorites`)
 
 | Metodo | Path | Auth | Descrizione |
