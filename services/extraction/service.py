@@ -35,10 +35,11 @@ from services.extraction.pdf_utils import count_pdf_pages, is_pdf, mime_type_for
 from services.extraction.providers import ExtractionProvider, get_provider
 from services.extraction.extraction_log import ERROR, SUCCESS, WARNING, log_event
 from services.product_format import NormalizedFormatBundle
+from services.push_notify import notify_extraction_complete
 
 logger = logging.getLogger(__name__)
 
-_FLYER_SELECT = "id, file_url, file_name, supermarket_id, supermarket_name, valid_from, valid_to"
+_FLYER_SELECT = "id, file_url, file_name, supermarket_id, supermarket_name, valid_from, valid_to, user_id"
 _PRODUCT_COLUMNS = (
     "name",
     "brand",
@@ -74,10 +75,11 @@ class ExtractionService:
             flyer.get("file_name"),
         )
 
+        user_id: str | None = flyer.get("user_id")
         try:
             self._run_pipeline(sb, flyer, supermarket_id, supermarket_name, t_start)
         except Exception as exc:
-            self._handle_error(sb, flyer_id, supermarket_id, supermarket_name, exc, t_start)
+            self._handle_error(sb, flyer_id, supermarket_id, supermarket_name, exc, t_start, user_id=user_id)
 
     def _run_pipeline(
         self,
@@ -230,6 +232,15 @@ class ExtractionService:
                 **summary_metadata,
             },
         )
+        if flyer.get("user_id"):
+            notify_extraction_complete(
+                sb,
+                flyer_id=flyer_id,
+                user_id=flyer["user_id"],
+                success=True,
+                supermarket_name=supermarket_name,
+                products_count=len(offer_rows),
+            )
 
     def _conflict_key(self, row: dict) -> tuple[str, str | None, str]:
         return (row["name"], row.get("brand"), row["format_key"])
@@ -411,6 +422,7 @@ class ExtractionService:
         supermarket_name: str,
         exc: Exception,
         t_start: float,
+        user_id: str | None = None,
     ) -> None:
         elapsed = int(time.time() - t_start)
         logger.error(
@@ -433,3 +445,12 @@ class ExtractionService:
             supermarket_name=supermarket_name,
             details={"error": str(exc), "elapsed_seconds": elapsed},
         )
+        if user_id:
+            notify_extraction_complete(
+                sb,
+                flyer_id=flyer_id,
+                user_id=user_id,
+                success=False,
+                supermarket_name=supermarket_name,
+                error_message=str(exc)[:100],
+            )

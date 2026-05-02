@@ -46,6 +46,7 @@ def _make_sb(
         "supermarket_name": "Test Super",
         "valid_from": None,
         "valid_to": "2026-05-01",
+        "user_id": "user-1",
     }
 
     # _upsert_product — .upsert().execute()
@@ -410,3 +411,68 @@ class TestExtractionServiceSubcategoryPersisted:
         product_row = upsert_calls[0][0][0][0]
         assert product_row["format"] == {"tipo": "confezione_singola"}
         assert product_row["format_label"] == ""
+
+
+class TestExtractionServicePushNotification:
+    """notify_extraction_complete called on success and error; skipped when no user_id."""
+
+    def _run_with_provider(self, sb: MagicMock, provider: MagicMock) -> None:
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=1),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+            from services.extraction.service import ExtractionService
+            svc = ExtractionService(provider=provider, supabase_factory=lambda: sb)
+            svc.run("flyer-1")
+
+    def test_notifies_on_success(self):
+        sb = _make_sb()
+        mock_provider = MagicMock()
+        mock_provider.extract_products.return_value = (_EXTRACTED_PRODUCTS, [])
+
+        with patch("services.extraction.service.notify_extraction_complete") as mock_notify:
+            self._run_with_provider(sb, mock_provider)
+
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        assert kwargs["success"] is True
+        assert kwargs["flyer_id"] == "flyer-1"
+        assert kwargs["user_id"] == "user-1"
+        assert kwargs["products_count"] >= 1
+
+    def test_notifies_on_error(self):
+        sb = _make_sb()
+        mock_provider = MagicMock()
+        mock_provider.extract_products.side_effect = RuntimeError("Gemini timeout")
+
+        with patch("services.extraction.service.notify_extraction_complete") as mock_notify:
+            self._run_with_provider(sb, mock_provider)
+
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        assert kwargs["success"] is False
+        assert kwargs["flyer_id"] == "flyer-1"
+        assert kwargs["user_id"] == "user-1"
+        assert "Gemini timeout" in kwargs["error_message"]
+
+    def test_skips_notify_without_user_id(self):
+        flyer_data_no_user = {
+            "id": "flyer-1",
+            "file_url": "https://example.com/flyer.jpg",
+            "file_name": "flyer.jpg",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Test Super",
+            "valid_from": None,
+            "valid_to": "2026-05-01",
+            "user_id": None,
+        }
+        sb = _make_sb(flyer_data=flyer_data_no_user)
+        mock_provider = MagicMock()
+        mock_provider.extract_products.return_value = (_EXTRACTED_PRODUCTS, [])
+
+        with patch("services.extraction.service.notify_extraction_complete") as mock_notify:
+            self._run_with_provider(sb, mock_provider)
+
+        mock_notify.assert_not_called()

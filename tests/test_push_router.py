@@ -46,7 +46,7 @@ import pytest
 from pydantic import ValidationError
 
 from api.routers.push import SubscribeBody, UnsubscribeBody
-from services.push_notify import PushEndpointGoneError, PushSubscription, send_push_notification
+from services.push_notify import PushEndpointGoneError, PushSubscription, notify_extraction_complete, send_push_notification
 
 
 # ── SubscribeBody ─────────────────────────────────────────────────────────────
@@ -171,3 +171,113 @@ class TestSendPushNotification:
         assert payload["title"] == "Nuova offerta"
         assert payload["body"] == "€1.99"
         assert payload["data"]["url"] == "/offerte?product=abc"
+
+
+# ── notify_extraction_complete ────────────────────────────────────────────────
+
+def _make_sb_with_subscriptions(subs: list) -> MagicMock:
+    sb = MagicMock()
+    select_result = MagicMock()
+    select_result.data = subs
+    sb.table.return_value.select.return_value.eq.return_value.execute.return_value = select_result
+    delete_result = MagicMock()
+    sb.table.return_value.delete.return_value.eq.return_value.execute.return_value = delete_result
+    return sb
+
+
+_SAMPLE_SUB = {
+    "endpoint": "https://push.example.com/token",
+    "p256dh": "dGVzdA==",
+    "auth_key": "YXV0aA==",
+}
+
+
+class TestNotifyExtractionComplete:
+    def test_sends_success_push(self):
+        sb = _make_sb_with_subscriptions([_SAMPLE_SUB])
+        with patch("services.push_notify.send_push_notification") as mock_send:
+            notify_extraction_complete(
+                sb,
+                flyer_id="flyer-42",
+                user_id="user-1",
+                success=True,
+                supermarket_name="Coop",
+                products_count=15,
+            )
+        mock_send.assert_called_once()
+        call_kwargs = mock_send.call_args.kwargs
+        assert call_kwargs["title"] == "Estrazione completata"
+        assert "15" in call_kwargs["body"]
+        assert "Coop" in call_kwargs["body"]
+        assert call_kwargs["data"]["url"] == "/admin/volantini/flyer-42"
+
+    def test_sends_error_push(self):
+        sb = _make_sb_with_subscriptions([_SAMPLE_SUB])
+        with patch("services.push_notify.send_push_notification") as mock_send:
+            notify_extraction_complete(
+                sb,
+                flyer_id="flyer-42",
+                user_id="user-1",
+                success=False,
+                supermarket_name="Esselunga",
+                error_message="Gemini timeout",
+            )
+        mock_send.assert_called_once()
+        call_kwargs = mock_send.call_args.kwargs
+        assert call_kwargs["title"] == "Estrazione fallita"
+        assert "Esselunga" in call_kwargs["body"]
+
+    def test_no_subscriptions_noop(self):
+        sb = _make_sb_with_subscriptions([])
+        with patch("services.push_notify.send_push_notification") as mock_send:
+            notify_extraction_complete(
+                sb,
+                flyer_id="flyer-1",
+                user_id="user-1",
+                success=True,
+                supermarket_name="Coop",
+            )
+        mock_send.assert_not_called()
+
+    def test_stale_410_endpoint_deleted(self):
+        sb = _make_sb_with_subscriptions([_SAMPLE_SUB])
+        with patch(
+            "services.push_notify.send_push_notification",
+            side_effect=PushEndpointGoneError(_SAMPLE_SUB["endpoint"]),
+        ):
+            notify_extraction_complete(
+                sb,
+                flyer_id="flyer-1",
+                user_id="user-1",
+                success=True,
+                supermarket_name="Coop",
+            )
+        delete_calls = sb.table.return_value.delete.call_args_list
+        assert len(delete_calls) >= 1
+
+    def test_push_failure_does_not_raise(self):
+        sb = _make_sb_with_subscriptions([_SAMPLE_SUB])
+        with patch(
+            "services.push_notify.send_push_notification",
+            side_effect=RuntimeError("network error"),
+        ):
+            notify_extraction_complete(
+                sb,
+                flyer_id="flyer-1",
+                user_id="user-1",
+                success=True,
+                supermarket_name="Coop",
+            )
+
+    def test_db_fetch_failure_does_not_raise(self):
+        sb = MagicMock()
+        sb.table.return_value.select.return_value.eq.return_value.execute.side_effect = RuntimeError("DB error")
+        with patch("services.push_notify.send_push_notification") as mock_send:
+            notify_extraction_complete(
+                sb,
+                flyer_id="flyer-1",
+                user_id="user-1",
+                success=True,
+                supermarket_name="Coop",
+            )
+        mock_send.assert_not_called()
