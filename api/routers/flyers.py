@@ -336,6 +336,32 @@ async def get_flyer(
     return flyer
 
 
+@router.delete("/{flyer_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_flyer(
+    flyer_id: str,
+    profile: dict = Depends(require_admin_or_manager),
+) -> None:
+    """Delete a flyer immediately: removes storage file (best-effort) and DB row."""
+    sb = get_supabase()
+    result = sb.table("flyers").select("id, file_url, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    flyer = result.data
+    assert_flyer_access(profile, flyer)
+
+    file_url = flyer.get("file_url") or ""
+    supabase_prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/flyers/"
+    storage_path = file_url.removeprefix(supabase_prefix)
+    if storage_path and storage_path != file_url:
+        try:
+            sb.storage.from_("flyers").remove([storage_path])
+        except Exception:
+            pass
+
+    sb.table("flyers").delete().eq("id", flyer_id).execute()
+
+
 @router.post("/{flyer_id}/extract", status_code=status.HTTP_202_ACCEPTED)
 async def trigger_extraction(
     flyer_id: str,

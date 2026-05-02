@@ -86,6 +86,19 @@ def notify_extraction_complete(
     if not subscriptions:
         return
 
+    try:
+        profile_resp = (
+            sb.table("user_profiles")  # type: ignore[union-attr]
+            .select("notification_deals")
+            .eq("id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        if profile_resp.data is not None and not profile_resp.data.get("notification_deals", True):
+            return
+    except Exception as exc:
+        logger.warning("Failed to fetch notification_deals pref for user %s: %s", user_id, exc)
+
     if success:
         title = "Estrazione completata"
         body = f"{products_count} prodotti estratti da {supermarket_name}"

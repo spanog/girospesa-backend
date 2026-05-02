@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 
 from services.product_format import (
     NormalizedFormatBundle,
@@ -230,6 +231,12 @@ def normalize_brand(raw: str | None) -> str | None:
     if not raw:
         return None
     return raw.strip().title()
+
+
+def normalize_for_comparison(s: str) -> str:
+    """NFD decompose → strip combining diacritics → casefold. Used only for similarity checks, not storage."""
+    nfd = unicodedata.normalize("NFD", s)
+    return "".join(c for c in nfd if unicodedata.category(c) != "Mn").casefold()
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@
 - LLM/provider output should keep `format` sparse too: emit only `tipo` plus relevant fields. Backend canonicalization stays authoritative.
 - Extraction-only `format.varianti` must be exploded before persistence. Persisted products/offers always point to one concrete format.
 - Extraction pipeline should normalize each concrete format once, dedupe on `(name, brand, format_key)` before persistence, and batch-upsert unique products for the flyer.
+- Before upserting, pipeline runs a fuzzy pre-check per `format_key` bucket: `_find_similar_product()` in `ExtractionService` uses `rapidfuzz.fuzz.partial_ratio` on names (≥0.85) and `fuzz.ratio` on diacritic-normalized brands (≥0.90). Thresholds configurable via `product_name_similarity_threshold` / `product_brand_similarity_threshold` in `core/config.py`. Matches reuse the existing `product_id` — no duplicate row is created. `format_key` is always an exact-match gate; never fuzzified.
 - Draft and confirmed offer payloads returned by flyer review endpoints must flatten `products.subcategory` alongside `category`.
 - Draft and confirmed offer payloads must expose both `format` and `format_label`.
 - `flyers.extraction_metadata` should keep per-stage timing keys (`provider_seconds`, `variant_expansion_seconds`, `normalization_seconds`, `dedupe_seconds`, `product_upsert_seconds`, `offer_insert_seconds`, `total_seconds`) plus product-count and average-format-size telemetry.

@@ -28,6 +28,10 @@ class Settings(BaseSettings):
 
     frontend_url: str = "http://localhost:3000"
 
+    # Product fuzzy deduplication thresholds (pre-upsert similarity check)
+    product_name_similarity_threshold: float = 0.85   # rapidfuzz partial_ratio / 100
+    product_brand_similarity_threshold: float = 0.90  # rapidfuzz ratio / 100 (after diacritic normalization)
+
 
 
 settings = Settings()  # type: ignore[call-arg]

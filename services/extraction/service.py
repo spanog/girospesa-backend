@@ -25,10 +25,13 @@ import requests
 
 from core.config import settings
 from core.database import get_supabase
+from rapidfuzz import fuzz
+
 from services.extraction.normalizer import (
     deduplicate_products,
     expand_products,
     json_size_bytes,
+    normalize_for_comparison,
     normalize_product,
 )
 from services.extraction.pdf_utils import count_pdf_pages, is_pdf, mime_type_for_filename
@@ -248,6 +251,37 @@ class ExtractionService:
     def _product_row_from_normalized(self, row: dict) -> dict:
         return {column: row.get(column) for column in _PRODUCT_COLUMNS}
 
+    def _find_similar_product(
+        self,
+        incoming: dict,
+        candidates: list[dict],
+    ) -> str | None:
+        """Return existing product_id if a candidate is similar enough to incoming, else None.
+
+        format_key must already match exactly (candidates are pre-filtered by format_key).
+        Brand uses ratio() on diacritic-normalized strings (catches Pomi/Pomì).
+        Name uses partial_ratio() (catches "Miscela Forte" vs "Miscela Forte Macinatura Moka").
+        """
+        name_b = normalize_for_comparison(incoming["name"])
+        brand_b = normalize_for_comparison(incoming.get("brand") or "")
+
+        for existing in candidates:
+            brand_a = normalize_for_comparison(existing.get("brand") or "")
+
+            if brand_a or brand_b:
+                if not brand_a or not brand_b:
+                    continue  # one branded, other not → different product
+                brand_score = fuzz.ratio(brand_a, brand_b) / 100
+                if brand_score < settings.product_brand_similarity_threshold:
+                    continue
+
+            name_a = normalize_for_comparison(existing["name"])
+            name_score = fuzz.partial_ratio(name_a, name_b) / 100
+            if name_score >= settings.product_name_similarity_threshold:
+                return existing["id"]
+
+        return None
+
     def _upsert_products_batch(
         self,
         sb: object,
@@ -257,38 +291,66 @@ class ExtractionService:
             return {}
         canonical_rows = [self._product_row_from_normalized(row) for row in product_rows]
 
-        result = (
-            sb.table("products")  # type: ignore[union-attr]
-            .upsert(canonical_rows, on_conflict="name,brand,format_key")
-            .execute()
-        )
-
+        # --- Fuzzy pre-upsert deduplication against existing DB products ---
+        # Group by format_key and fetch candidates once per unique format_key.
+        # If a similar product already exists, reuse its id instead of inserting a duplicate.
         by_conflict_key: dict[tuple[str, str | None, str], str] = {}
-        returned_rows = result.data or []
-        if len(returned_rows) == len(canonical_rows):
-            for original, returned in zip(canonical_rows, returned_rows, strict=False):
-                product_id = returned.get("id")
-                if product_id:
-                    by_conflict_key[self._conflict_key(original)] = product_id
-        else:
-            for row in returned_rows:
-                if all(key in row for key in ("id", "name", "format_key")):
-                    by_conflict_key[self._conflict_key(row)] = row["id"]
+        to_upsert: list[dict] = []
+        candidates_cache: dict[str, list[dict]] = {}
 
-        if len(by_conflict_key) == len(canonical_rows):
-            return by_conflict_key
+        for row in canonical_rows:
+            fk = row["format_key"]
+            if fk not in candidates_cache:
+                res = (
+                    sb.table("products")  # type: ignore[union-attr]
+                    .select("id, name, brand, format_key")
+                    .eq("format_key", fk)
+                    .execute()
+                )
+                candidates_cache[fk] = res.data or []
 
-        names = sorted({row["name"] for row in canonical_rows})
-        existing = (
-            sb.table("products")
-            .select("id, name, brand, format_key")
-            .in_("name", names)
-            .execute()
-        )
-        for row in existing.data or []:
+            existing_id = self._find_similar_product(row, candidates_cache[fk])
             key = self._conflict_key(row)
-            if key not in by_conflict_key:
-                by_conflict_key[key] = row["id"]
+            if existing_id:
+                by_conflict_key[key] = existing_id
+            else:
+                to_upsert.append(row)
+
+        # --- Upsert only products with no fuzzy match ---
+        if to_upsert:
+            result = (
+                sb.table("products")  # type: ignore[union-attr]
+                .upsert(to_upsert, on_conflict="name,brand,format_key")
+                .execute()
+            )
+
+            returned_rows = result.data or []
+            if len(returned_rows) == len(to_upsert):
+                for original, returned in zip(to_upsert, returned_rows, strict=False):
+                    product_id = returned.get("id")
+                    if product_id:
+                        by_conflict_key[self._conflict_key(original)] = product_id
+            else:
+                for row in returned_rows:
+                    if all(key in row for key in ("id", "name", "format_key")):
+                        by_conflict_key[self._conflict_key(row)] = row["id"]
+
+            if len(by_conflict_key) == len(canonical_rows):
+                return by_conflict_key
+
+            # Fallback: fetch by name for any still-missing products
+            names = sorted({row["name"] for row in to_upsert if self._conflict_key(row) not in by_conflict_key})
+            if names:
+                existing = (
+                    sb.table("products")
+                    .select("id, name, brand, format_key")
+                    .in_("name", names)
+                    .execute()
+                )
+                for row in existing.data or []:
+                    key = self._conflict_key(row)
+                    if key not in by_conflict_key:
+                        by_conflict_key[key] = row["id"]
 
         missing = [
             self._conflict_key(row)
