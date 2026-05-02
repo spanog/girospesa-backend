@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from fastapi import APIRouter, HTTPException, Query
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label
@@ -69,7 +71,7 @@ def _resolve_supermarket_id(sb, slug: str) -> str | None:
 
 def _apply_offer_filters(query, *, q, category, subcategory, supermarket_id, nearby_ids):
     if q:
-        query = query.text_search("products.name_tsv", q, config="italian")
+        query = query.ilike("products.name", f"%{q}%")
     if category:
         query = query.eq("products.category", category)
     if subcategory:
@@ -111,13 +113,13 @@ async def list_products(
     if supermarket:
         supermarket_id = _resolve_supermarket_id(sb, supermarket)
         if not supermarket_id:
-            return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0}
+            return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0, "expiring_soon_count": 0}
 
     nearby_ids: list[str] | None = None
     if lat is not None and lng is not None:
         nearby_ids = _nearby_supermarket_ids(sb, lat, lng, max_distance_km)
         if not nearby_ids:
-            return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0}
+            return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0, "expiring_soon_count": 0}
 
     filter_kwargs = dict(q=q, category=category, subcategory=subcategory, supermarket_id=supermarket_id, nearby_ids=nearby_ids)
 
@@ -138,8 +140,9 @@ async def list_products(
     total = response.count or 0
     next_page = (offset // limit) + 1 if offset + limit < total else None
 
-    # Compute supermarket_count only on first page to avoid redundant work on subsequent pages
+    # Compute supermarket_count and expiring_soon_count only on first page
     supermarket_count = 0
+    expiring_soon_count = 0
     if offset == 0:
         sc_query = _apply_offer_filters(
             sb.table("offers").select("supermarket_id, products!inner(id)").eq("is_active", True).eq("is_confirmed", True),
@@ -148,7 +151,22 @@ async def list_products(
         sc_resp = sc_query.execute()
         supermarket_count = len({row["supermarket_id"] for row in (sc_resp.data or [])})
 
-    return {"items": items, "nextPage": next_page, "total": total, "supermarket_count": supermarket_count}
+        today = date.today()
+        cutoff = today + timedelta(days=3)
+        es_query = (
+            sb.table("offers")
+            .select("id, products!inner(id)", count="exact")
+            .eq("is_active", True)
+            .eq("is_confirmed", True)
+            .gte("valid_to", today.isoformat())
+            .lte("valid_to", cutoff.isoformat())
+        )
+        if nearby_ids is not None:
+            es_query = es_query.in_("supermarket_id", nearby_ids)
+        es_resp = es_query.execute()
+        expiring_soon_count = es_resp.count or 0
+
+    return {"items": items, "nextPage": next_page, "total": total, "supermarket_count": supermarket_count, "expiring_soon_count": expiring_soon_count}
 
 
 @router.get("/{product_id}")
