@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from services.extraction.normalizer import deduplicate_products, normalize_product
+from services.extraction.normalizer import deduplicate_products, normalize_products
 from services.extraction.pdf_utils import count_pdf_pages, is_pdf, mime_type_for_filename
 from services.extraction.providers import GeminiProvider
 
@@ -79,7 +79,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     for error in retry_errors:
         logger.warning(error)
 
-    normalized = [normalize_product(p) for p in all_products if p.get("name") and p.get("price_offer")]
+    normalized = normalize_products(all_products)
+    normalized = [p for p in normalized if p.get("name") and p.get("price_offer")]
     unique = deduplicate_products(normalized)
     if not unique:
         logger.error("No products extracted from file.")

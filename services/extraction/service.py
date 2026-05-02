@@ -25,14 +25,29 @@ import requests
 
 from core.config import settings
 from core.database import get_supabase
-from services.extraction.normalizer import deduplicate_products, normalize_product
+from services.extraction.normalizer import (
+    deduplicate_products,
+    expand_products,
+    json_size_bytes,
+    normalize_product,
+)
 from services.extraction.pdf_utils import count_pdf_pages, is_pdf, mime_type_for_filename
 from services.extraction.providers import ExtractionProvider, get_provider
 from services.extraction.extraction_log import ERROR, SUCCESS, WARNING, log_event
+from services.product_format import NormalizedFormatBundle
 
 logger = logging.getLogger(__name__)
 
 _FLYER_SELECT = "id, file_url, file_name, supermarket_id, supermarket_name, valid_from, valid_to"
+_PRODUCT_COLUMNS = (
+    "name",
+    "brand",
+    "category",
+    "subcategory",
+    "format",
+    "format_key",
+    "format_label",
+)
 
 
 class ExtractionService:
@@ -88,13 +103,16 @@ class ExtractionService:
             mime_type,
             pages_count,
         )
+        provider_started_at = time.perf_counter()
         all_products, retry_errors = self._provider.extract_products(content, mime_type)
+        provider_seconds = time.perf_counter() - provider_started_at
 
         sb.table("flyers").update({  # type: ignore[union-attr]
             "extraction_metadata": {
                 "stage": "saving",
                 "pages_total": pages_count,
                 "products_found": len(all_products),
+                "provider_seconds": round(provider_seconds, 3),
             },
         }).eq("id", flyer_id).execute()
 
@@ -112,34 +130,92 @@ class ExtractionService:
         if not all_products:
             raise ValueError("No products extracted from flyer")
 
+        variant_started_at = time.perf_counter()
+        expanded_products = expand_products(all_products)
+        variant_expansion_seconds = time.perf_counter() - variant_started_at
+
+        normalized_started_at = time.perf_counter()
         normalized = [
-            p for p in (normalize_product(r) for r in all_products)
-            if p.get("name") and p.get("price_offer")
+            normalize_product(candidate)
+            for candidate in expanded_products
+            if candidate.get("name") and (candidate.get("price_offer") or candidate.get("price_current"))
         ]
+        normalization_seconds = time.perf_counter() - normalized_started_at
+
+        dedupe_started_at = time.perf_counter()
+        normalized = [p for p in normalized if p.get("name") and p.get("price_offer")]
         normalized = deduplicate_products(normalized)
+        dedupe_seconds = time.perf_counter() - dedupe_started_at
 
         if not normalized:
             raise ValueError("No valid products after normalization")
 
-        offer_rows = self._build_offer_rows(sb, normalized, flyer, supermarket_id, supermarket_name)
+        avg_compact_bytes, avg_normalized_bytes = self._format_size_metrics(expanded_products)
+
+        saving_metadata = {
+            "stage": "saving",
+            "pages_total": pages_count,
+            "products_found": len(all_products),
+            "products_raw_count": len(all_products),
+            "products_after_variants_count": len(expanded_products),
+            "products_unique_count": len(normalized),
+            "provider_seconds": round(provider_seconds, 3),
+            "variant_expansion_seconds": round(variant_expansion_seconds, 3),
+            "normalization_seconds": round(normalization_seconds, 3),
+            "dedupe_seconds": round(dedupe_seconds, 3),
+            "avg_format_bytes_compact": round(avg_compact_bytes, 2),
+            "avg_format_bytes_normalized": round(avg_normalized_bytes, 2),
+        }
+        sb.table("flyers").update({  # type: ignore[union-attr]
+            "extraction_metadata": saving_metadata,
+        }).eq("id", flyer_id).execute()
+
+        product_upsert_started_at = time.perf_counter()
+        product_ids = self._upsert_products_batch(sb, normalized)
+        product_upsert_seconds = time.perf_counter() - product_upsert_started_at
+
+        offer_insert_started_at = time.perf_counter()
+        offer_rows = self._build_offer_rows(product_ids, normalized, flyer, supermarket_id, supermarket_name)
 
         if offer_rows:
             sb.table("offers").insert(offer_rows).execute()  # type: ignore[union-attr]
+        offer_insert_seconds = time.perf_counter() - offer_insert_started_at
 
-        elapsed = int(time.time() - t_start)
+        total_seconds = time.time() - t_start
+        elapsed = int(total_seconds)
+        summary_metadata = {
+            "provider_seconds": round(provider_seconds, 3),
+            "variant_expansion_seconds": round(variant_expansion_seconds, 3),
+            "normalization_seconds": round(normalization_seconds, 3),
+            "dedupe_seconds": round(dedupe_seconds, 3),
+            "product_upsert_seconds": round(product_upsert_seconds, 3),
+            "offer_insert_seconds": round(offer_insert_seconds, 3),
+            "total_seconds": round(total_seconds, 3),
+            "products_raw_count": len(all_products),
+            "products_after_variants_count": len(expanded_products),
+            "products_unique_count": len(normalized),
+            "avg_format_bytes_compact": round(avg_compact_bytes, 2),
+            "avg_format_bytes_normalized": round(avg_normalized_bytes, 2),
+        }
         sb.table("flyers").update({  # type: ignore[union-attr]
             "status": "done",
             "products_count": len(offer_rows),
             "pages_count": pages_count,
-            "extraction_metadata": None,
+            "extraction_metadata": summary_metadata,
         }).eq("id", flyer_id).execute()
 
         logger.info(
-            "Done flyer %s (%s) — %d products in %ds",
+            "Done flyer %s (%s) — %d products in %ds [provider=%.3fs variants=%.3fs normalize=%.3fs dedupe=%.3fs upsert=%.3fs offers=%.3fs]",
             flyer_id,
             supermarket_name,
             len(offer_rows),
             elapsed,
+            provider_seconds,
+            variant_expansion_seconds,
+            normalization_seconds,
+            dedupe_seconds,
+            product_upsert_seconds,
+            offer_insert_seconds,
         )
         log_event(
             sb,
@@ -151,13 +227,70 @@ class ExtractionService:
             details={
                 "products_count": len(offer_rows),
                 "pages_count": pages_count,
-                "elapsed_seconds": elapsed,
+                **summary_metadata,
             },
         )
 
-    def _build_offer_rows(
+    def _conflict_key(self, row: dict) -> tuple[str, str | None, str]:
+        return (row["name"], row.get("brand"), row["format_key"])
+
+    def _product_row_from_normalized(self, row: dict) -> dict:
+        return {column: row.get(column) for column in _PRODUCT_COLUMNS}
+
+    def _upsert_products_batch(
         self,
         sb: object,
+        product_rows: list[dict],
+    ) -> dict[tuple[str, str | None, str], str]:
+        if not product_rows:
+            return {}
+        canonical_rows = [self._product_row_from_normalized(row) for row in product_rows]
+
+        result = (
+            sb.table("products")  # type: ignore[union-attr]
+            .upsert(canonical_rows, on_conflict="name,brand,format_key")
+            .execute()
+        )
+
+        by_conflict_key: dict[tuple[str, str | None, str], str] = {}
+        returned_rows = result.data or []
+        if len(returned_rows) == len(canonical_rows):
+            for original, returned in zip(canonical_rows, returned_rows, strict=False):
+                product_id = returned.get("id")
+                if product_id:
+                    by_conflict_key[self._conflict_key(original)] = product_id
+        else:
+            for row in returned_rows:
+                if all(key in row for key in ("id", "name", "format_key")):
+                    by_conflict_key[self._conflict_key(row)] = row["id"]
+
+        if len(by_conflict_key) == len(canonical_rows):
+            return by_conflict_key
+
+        names = sorted({row["name"] for row in canonical_rows})
+        existing = (
+            sb.table("products")
+            .select("id, name, brand, format_key")
+            .in_("name", names)
+            .execute()
+        )
+        for row in existing.data or []:
+            key = self._conflict_key(row)
+            if key not in by_conflict_key:
+                by_conflict_key[key] = row["id"]
+
+        missing = [
+            self._conflict_key(row)
+            for row in canonical_rows
+            if self._conflict_key(row) not in by_conflict_key
+        ]
+        if missing:
+            raise ValueError(f"Product(s) not found after batch upsert: {missing!r}")
+        return by_conflict_key
+
+    def _build_offer_rows(
+        self,
+        product_ids: dict[tuple[str, str | None, str], str],
         normalized: list[dict],
         flyer: dict,
         supermarket_id: str | None,
@@ -165,15 +298,29 @@ class ExtractionService:
     ) -> list[dict]:
         offer_rows: list[dict] = []
         for p in normalized:
-            product_id = self._upsert_product(sb, {
-                "name": p["name"],
-                "brand": p.get("brand"),
-                "category": p.get("category"),
-                "subcategory": p.get("subcategory"),
-                "format": p.get("format"),
-            })
+            key = self._conflict_key(p)
+            product_id = product_ids[key]
             offer_rows.append(self._build_offer_row(product_id, p, flyer, supermarket_id, supermarket_name))
         return offer_rows
+
+    def _format_size_metrics(self, expanded_products: list[dict]) -> tuple[float, float]:
+        if not expanded_products:
+            return (0.0, 0.0)
+
+        compact_total = 0
+        normalized_total = 0
+        counted = 0
+        for candidate in expanded_products:
+            bundle = candidate.get("_format_bundle")
+            if not isinstance(bundle, NormalizedFormatBundle):
+                continue
+            compact_total += json_size_bytes(bundle.format_compact)
+            normalized_total += json_size_bytes(bundle.format_normalized)
+            counted += 1
+
+        if counted == 0:
+            return (0.0, 0.0)
+        return (compact_total / counted, normalized_total / counted)
 
     def _fetch_flyer(self, sb: object, flyer_id: str) -> dict:
         result = (
@@ -202,32 +349,33 @@ class ExtractionService:
         """
         Upsert a canonical product row and return its stable UUID.
 
-        Uses ON CONFLICT (name, brand, format) DO UPDATE to always get the row
+        Uses ON CONFLICT (name, brand, format_key) DO UPDATE to always get the row
         back in the RETURNING clause, even when the product already existed.
         Falls back to a SELECT when the upsert returns an empty result set.
 
         Raises ValueError if the product cannot be found or created.
         """
+        canonical_row = self._product_row_from_normalized(product_row)
         result = (
             sb.table("products")  # type: ignore[union-attr]
-            .upsert(product_row, on_conflict="name,brand,format")
+            .upsert(canonical_row, on_conflict="name,brand,format_key")
             .execute()
         )
         if result.data:
             return result.data[0]["id"]
 
-        # Fallback: SELECT with NULL-safe filters
-        query = sb.table("products").select("id").eq("name", product_row["name"])  # type: ignore[union-attr]
-        brand = product_row.get("brand")
-        fmt = product_row.get("format")
+        # Fallback: SELECT with conflict-key filters
+        query = sb.table("products").select("id").eq("name", canonical_row["name"])  # type: ignore[union-attr]
+        brand = canonical_row.get("brand")
+        format_key = canonical_row.get("format_key")
         query = query.is_("brand", "null") if brand is None else query.eq("brand", brand)
-        query = query.is_("format", "null") if fmt is None else query.eq("format", fmt)
+        query = query.eq("format_key", format_key)
         existing = query.limit(1).execute()
 
         if not existing.data:
             raise ValueError(
-                f"Product not found after upsert: name={product_row['name']!r} "
-                f"brand={brand!r} format={fmt!r}"
+                f"Product not found after upsert: name={canonical_row['name']!r} "
+                f"brand={brand!r} format_key={format_key!r}"
             )
         return existing.data[0]["id"]
 

@@ -28,7 +28,8 @@ class ProductAlternative(BaseModel):
     product_id: str
     brand: str | None
     name: str
-    format: str | None
+    format: dict
+    format_label: str
     price_offer: float
     price_original: float | None
     discount_pct: int | None
@@ -49,7 +50,8 @@ class MatchedProduct(BaseModel):
     product_id: str
     product_name: str
     brand: str | None
-    format: str | None
+    format: dict
+    format_label: str
     price_offer: float
     price_original: float | None
     discount_pct: int | None
@@ -158,7 +160,7 @@ async def optimize(
         .select(
             "id, product_id, price_original, price_offer, discount_pct, "
             "unit_price, unit_price_value, unit_price_unit, valid_to,"
-            " products(id, name, brand, format),"
+            " products(id, name, brand, format, format_label),"
             " supermarkets(id, name, logo_url)"
         )
         .gte("valid_to", "now()")
@@ -283,7 +285,8 @@ async def optimize(
                     product_id=alt["offer"]["product_id"],
                     brand=alt["product_info"].get("brand"),
                     name=alt["product_info"].get("name", ""),
-                    format=alt["product_info"].get("format"),
+                    format=alt["product_info"].get("format") or {},
+                    format_label=alt["product_info"].get("format_label") or "",
                     price_offer=float(alt["offer"].get("price_offer", 0)),
                     price_original=(
                         float(alt["offer"]["price_original"])
@@ -314,7 +317,8 @@ async def optimize(
                     product_id=offer["product_id"],
                     product_name=product_info.get("name", ""),
                     brand=product_info.get("brand"),
-                    format=product_info.get("format"),
+                    format=product_info.get("format") or {},
+                    format_label=product_info.get("format_label") or "",
                     price_offer=float(offer["price_offer"]),
                     price_original=(
                         float(offer["price_original"]) if offer.get("price_original") else None

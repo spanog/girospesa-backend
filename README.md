@@ -162,9 +162,25 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python 
 - `price_original` resta il prezzo pieno/non in offerta solo se stampato sul volantino. Non viene mai inferito.
 - `offers` salva anche il prezzo unitario strutturato:
   - `unit_price_value NUMERIC(8,2)`
-  - `unit_price_unit TEXT` con valori ammessi `kg`, `l`, `kg sgocc`
+  - `unit_price_unit TEXT` con valori ammessi `kg`, `L`, `kg sgocc`
   - `unit_price TEXT` come label derivata per compatibilità
 - Gli endpoint che restituiscono offerte (`/products`, `/flyers/{flyer_id}/draft-offers`, `/favorites`, `/optimize`) espongono anche `unit_price_value`, `unit_price_unit`, `unit_price_label`.
+
+### Contratto formato prodotto
+
+- `products.format` non e più una stringa: è `JSONB` strutturato.
+- Ogni prodotto canonico salva:
+  - `format`: oggetto canonico compatto, senza campi `null` o default inutili
+  - `format_key`: chiave canonica deterministica derivata da `format`
+  - `format_label`: label leggibile derivata da `format`
+- Identità prodotto canonico: `name + brand + format_key`.
+- `format_label` è solo display/search aid. Non definisce unicità.
+- Le API pubbliche e admin restituiscono sempre sia `format` sia `format_label`.
+- Le API admin e draft-offer accettano solo `format` strutturato. Il backend rifiuta `format` testuale legacy.
+- Il provider LLM deve emettere un `format` strutturato sparso: solo `tipo` e campi pertinenti, senza `null` superflui. Il backend resta source of truth per canonicalizzazione e compattazione.
+- `format.varianti` è consentito solo in input estrazione LLM: il backend lo espande in prodotti/offerte distinti prima dell'upsert. Nessun prodotto persistito rappresenta un parent con varianti miste.
+- Matching fuzzy/optimizer usa `name`, `brand`, `format_label`; mai JSON raw.
+- Durante l'estrazione il backend deduplica prima in memoria su `(name, brand, format_key)`, fa batch upsert dei prodotti unici del volantino e registra timing per `provider`, `varianti`, `normalizzazione`, `dedupe`, `upsert prodotti`, `insert offerte`.
 
 ### Ottimizzazione (`/optimize`)
 

@@ -6,12 +6,12 @@ from services.extraction.normalizer import format_unit_price_label
 
 _OFFER_PRODUCT_SELECT = (
     "*, "
-    "products(id, name, brand, category, subcategory, format, image_url), "
+    "products(id, name, brand, category, subcategory, format, format_label, image_url), "
     "supermarkets(name, slug, logo_url, color_hex)"
 )
 _OFFER_PRODUCT_LIST_SELECT = (
     "*, "
-    "products!inner(id, name, brand, category, subcategory, format, image_url), "
+    "products!inner(id, name, brand, category, subcategory, format, format_label, image_url), "
     "supermarkets(name, slug, logo_url, color_hex)"
 )
 
@@ -29,6 +29,7 @@ def _flatten_offer(offer: dict) -> dict:
         "category": product.get("category"),
         "subcategory": product.get("subcategory"),
         "format": product.get("format"),
+        "format_label": product.get("format_label") or "",
         "image_url": product.get("image_url"),
         "supermarket_name": supermarket.get("name") or offer.get("supermarket_name", ""),
         "supermarket_logo_url": supermarket.get("logo_url"),

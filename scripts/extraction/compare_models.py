@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 
-from services.extraction.normalizer import deduplicate_products, normalize_product
+from services.extraction.normalizer import deduplicate_products, normalize_products
 from services.extraction.pdf_utils import pdf_to_images_b64
 from services.extraction.providers.gemini import GeminiProvider
 from scripts.extraction.extraction_metrics import SCORED_FIELDS, SupermarketReport, build_report
@@ -53,8 +53,9 @@ def _run_model_on_pdf(
         total_time += time.time() - t0
         all_raw.extend(raw)
 
-    normalized = [normalize_product(p) for p in all_raw if _has_minimum_product_fields(p)]
-    normalized = deduplicate_products(normalized)
+    normalized = deduplicate_products(
+        [p for p in normalize_products(all_raw) if _has_minimum_product_fields(p)]
+    )
     expected = fixture["pages"][0]["expected_products"] if fixture["pages"] else []
     report = build_report(fixture["supermarket"], [("whole_flyer", expected, normalized)])
     avg_time = total_time / len(pages_b64) if pages_b64 else 0.0
@@ -82,8 +83,9 @@ def _run_model(
         raw = _extract_image(provider, image_path.read_bytes())
         total_time += time.time() - t0
         page_count += 1
-        normalized = [normalize_product(p) for p in raw if _has_minimum_product_fields(p)]
-        normalized = deduplicate_products(normalized)
+        normalized = deduplicate_products(
+            [p for p in normalize_products(raw) if _has_minimum_product_fields(p)]
+        )
         pages_data.append((page_id, expected, normalized))
 
     report = build_report(fixture["supermarket"], pages_data)

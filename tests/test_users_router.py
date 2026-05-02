@@ -125,8 +125,8 @@ class TestGeocodeUserAddress:
 
         from api.routers import users
 
-        users.geocode_address.return_value = (45.4642, 9.19)
-        users.get_supabase.return_value = sb
+        users.geocode_address = MagicMock(return_value=(45.4642, 9.19))
+        users.get_supabase = MagicMock(return_value=sb)
 
         result = await geocode_user_address(GeocodeBody(address="Via Roma 1"), "user-1")
 

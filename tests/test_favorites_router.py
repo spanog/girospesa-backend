@@ -91,7 +91,12 @@ class TestListFavorites:
                 "id": PRODUCT_ID,
                 "name": "Pasta",
                 "brand": "Barilla",
-                "format": "500g",
+                "format": {
+                    "tipo": "confezione_singola",
+                    "peso_volume": 500,
+                    "unita_misura": "g",
+                },
+                "format_label": "500 g",
                 "image_url": None,
                 "category": "dispensa",
             },
@@ -124,6 +129,7 @@ class TestListFavorites:
         data = resp.json()
         assert data[0]["favorite_id"] == "fav-1"
         assert data[0]["product_id"] == PRODUCT_ID
+        assert data[0]["format_label"] == "500 g"
         assert data[0]["best_offer"]["offer_id"] == "offer-1"
         assert data[0]["best_offer"]["unit_price_value"] == pytest.approx(1.98)
         assert data[0]["best_offer"]["unit_price_unit"] == "kg"

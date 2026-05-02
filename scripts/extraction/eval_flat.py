@@ -30,7 +30,7 @@ try:
 except ImportError:
     pass
 
-from services.extraction.normalizer import deduplicate_products, normalize_product  # noqa: E402
+from services.extraction.normalizer import deduplicate_products, normalize_products  # noqa: E402
 from services.extraction.providers.gemini import GeminiProvider  # noqa: E402
 from scripts.extraction.extraction_metrics import (  # noqa: E402
     SCORED_FIELDS,
@@ -83,11 +83,9 @@ def main() -> None:
         for e in errors:
             print(f"  {e}")
 
-    normalized = [
-        p for p in (normalize_product(r) for r in raw_products)
-        if _has_minimum_product_fields(p)
-    ]
-    extracted = deduplicate_products(normalized)
+    extracted = deduplicate_products(
+        [p for p in normalize_products(raw_products) if _has_minimum_product_fields(p)]
+    )
 
     print(f"Extracted    : {len(raw_products)} raw → {len(extracted)} after normalize+dedup")
     print(f"Elapsed      : {elapsed:.0f}s")

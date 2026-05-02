@@ -24,7 +24,7 @@ async def list_favorites(
     sb = get_supabase()
     favs_resp = (
         sb.table("favorites")
-        .select("product_id, products(id, name, brand, format, image_url, category)")
+        .select("product_id, products(id, name, brand, format, format_label, image_url, category)")
         .eq("user_id", user_id)
         .execute()
     )
@@ -73,6 +73,7 @@ async def list_favorites(
                 "name": product.get("name"),
                 "brand": product.get("brand"),
                 "format": product.get("format"),
+                "format_label": product.get("format_label") or "",
                 "category": product.get("category"),
                 "image_url": product.get("image_url"),
                 "best_offer": best_offer,

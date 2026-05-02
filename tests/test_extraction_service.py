@@ -81,7 +81,11 @@ _EXTRACTED_PRODUCTS = [
         "name": "Pasta Barilla",
         "brand": "Barilla",
         "category": "dispensa",
-        "format": "500g",
+        "format": {
+            "tipo": "confezione_singola",
+            "peso_volume": 500,
+            "unita_misura": "g",
+        },
         "price_offer": 1.29,
         "price_original": 1.79,
         "valid_from": "2026-04-21",
@@ -95,7 +99,12 @@ _EXTRACTED_PRODUCTS_V2 = [
         "brand": "Rio Mare",
         "category_main": "Dispensa",
         "category_sub": "Conserve Ittiche e di Carne",
-        "format": "2x80g",
+        "format": {
+            "tipo": "multipack_omogeneo",
+            "quantita": 2,
+            "peso_volume": 80,
+            "unita_misura": "g",
+        },
         "price_current": 4.99,
         "price_original": 6.79,
         "discount_percentage": 26,
@@ -217,7 +226,7 @@ class TestUpsertProductFallback:
         sb = MagicMock()
         # upsert returns empty → triggers SELECT fallback
         sb.table.return_value.upsert.return_value.execute.return_value = MagicMock(data=[])
-        # For brand/format present: chain is .select().eq(name).eq(brand).eq(format).limit().execute()
+        # For brand/format_key present: chain is .select().eq(name).eq(brand).eq(format_key).limit().execute()
         existing = MagicMock()
         existing.data = [{"id": "existing-prod-uuid"}]
         sb.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = existing
@@ -225,7 +234,7 @@ class TestUpsertProductFallback:
         with patch("services.extraction.service.get_provider", return_value=MagicMock()):
             from services.extraction.service import ExtractionService
             svc = ExtractionService()
-            product_id = svc._upsert_product(sb, {"name": "Pasta", "brand": "Barilla", "format": "500g"})
+            product_id = svc._upsert_product(sb, {"name": "Pasta", "brand": "Barilla", "format_key": "v1:500g"})
 
         assert product_id == "existing-prod-uuid"
 
@@ -233,16 +242,16 @@ class TestUpsertProductFallback:
         sb = MagicMock()
         # upsert returns empty
         sb.table.return_value.upsert.return_value.execute.return_value = MagicMock(data=[])
-        # For None brand/format: chain is .select().eq(name).is_(brand).is_(format).limit().execute()
+        # For None brand: chain is .select().eq(name).is_(brand).eq(format_key).limit().execute()
         empty = MagicMock()
         empty.data = []
-        sb.table.return_value.select.return_value.eq.return_value.is_.return_value.is_.return_value.limit.return_value.execute.return_value = empty
+        sb.table.return_value.select.return_value.eq.return_value.is_.return_value.eq.return_value.limit.return_value.execute.return_value = empty
 
         with patch("services.extraction.service.get_provider", return_value=MagicMock()):
             from services.extraction.service import ExtractionService
             svc = ExtractionService()
             with pytest.raises(ValueError, match="Product not found after upsert"):
-                svc._upsert_product(sb, {"name": "Pasta", "brand": None, "format": None})
+                svc._upsert_product(sb, {"name": "Pasta", "brand": None, "format_key": "v1:empty"})
 
 
 class TestExtractionServiceSubcategoryPersisted:
@@ -266,5 +275,138 @@ class TestExtractionServiceSubcategoryPersisted:
 
         upsert_calls = sb.table.return_value.upsert.call_args_list
         assert upsert_calls, "Expected at least one product upsert"
-        product_row = upsert_calls[0][0][0]
+        product_row = upsert_calls[0][0][0][0]
         assert product_row.get("subcategory") == "Conserve Ittiche e di Carne"
+        assert product_row.get("format_key")
+        assert product_row.get("format_label") == "2x80 g"
+        assert "discount_pct" not in product_row
+        assert "price_offer" not in product_row
+
+    def test_batch_upsert_is_used_for_multiple_products(self):
+        sb = _make_sb(
+            upsert_data=[
+                {"id": "prod-1"},
+                {"id": "prod-2"},
+            ]
+        )
+        mock_provider = MagicMock()
+        mock_provider.extract_products.return_value = (
+            [
+                {
+                    "name": "Pasta Barilla",
+                    "brand": "Barilla",
+                    "category": "dispensa",
+                    "format": {
+                        "tipo": "confezione_singola",
+                        "peso_volume": 500,
+                        "unita_misura": "g",
+                    },
+                    "price_offer": 1.29,
+                },
+                {
+                    "name": "Latte Berna",
+                    "brand": "Berna",
+                    "category": "alimentari-freschi",
+                    "format": {
+                        "tipo": "confezione_singola",
+                        "peso_volume": 1,
+                        "unita_misura": "L",
+                    },
+                    "price_offer": 1.59,
+                },
+            ],
+            [],
+        )
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=1),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+            svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
+            svc.run("flyer-1")
+
+        upsert_calls = sb.table.return_value.upsert.call_args_list
+        assert len(upsert_calls) == 1
+        batch_payload = upsert_calls[0][0][0]
+        assert isinstance(batch_payload, list)
+        assert len(batch_payload) == 2
+        assert all("discount_pct" not in row for row in batch_payload)
+        assert all("price_offer" not in row for row in batch_payload)
+
+    def test_done_metadata_includes_stage_timings_and_format_sizes(self):
+        sb = _make_sb()
+        mock_provider = MagicMock()
+        mock_provider.extract_products.return_value = (_EXTRACTED_PRODUCTS_V2, [])
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=1),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+            svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
+            svc.run("flyer-1")
+
+        update_calls = sb.table.return_value.update.call_args_list
+        done_payloads = [c[0][0] for c in update_calls if c[0][0].get("status") == "done"]
+        assert done_payloads, "Expected final flyer completion update"
+
+        metadata = done_payloads[-1]["extraction_metadata"]
+        expected_keys = {
+            "provider_seconds",
+            "variant_expansion_seconds",
+            "normalization_seconds",
+            "dedupe_seconds",
+            "product_upsert_seconds",
+            "offer_insert_seconds",
+            "total_seconds",
+            "products_raw_count",
+            "products_after_variants_count",
+            "products_unique_count",
+            "avg_format_bytes_compact",
+            "avg_format_bytes_normalized",
+        }
+        assert expected_keys.issubset(metadata.keys())
+        assert metadata["avg_format_bytes_normalized"] >= metadata["avg_format_bytes_compact"]
+
+    def test_incomplete_extraction_format_does_not_fail_entire_flyer(self):
+        sb = _make_sb()
+        mock_provider = MagicMock()
+        mock_provider.extract_products.return_value = (
+            [
+                {
+                    "name": "Pasta Barilla",
+                    "brand": "Barilla",
+                    "category": "dispensa",
+                    "format": {"tipo": "confezione_singola"},
+                    "price_offer": 1.29,
+                }
+            ],
+            [],
+        )
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=1),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+            svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
+            svc.run("flyer-1")
+
+        update_calls = sb.table.return_value.update.call_args_list
+        done_calls = [c for c in update_calls if c[0][0].get("status") == "done"]
+        assert done_calls, "Expected flyer to complete despite incomplete format"
+
+        upsert_calls = sb.table.return_value.upsert.call_args_list
+        product_row = upsert_calls[0][0][0][0]
+        assert product_row["format"] == {"tipo": "confezione_singola"}
+        assert product_row["format_label"] == ""

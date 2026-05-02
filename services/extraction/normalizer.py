@@ -11,8 +11,14 @@ Handles:
 
 from __future__ import annotations
 
+import json
 import re
 
+from services.product_format import (
+    NormalizedFormatBundle,
+    build_extraction_format_bundle,
+    explode_format_variants,
+)
 
 # ---------------------------------------------------------------------------
 # Category normalization
@@ -238,6 +244,7 @@ _UNIT_PRICE_MEASURES = {
     "l": "l",
     "lt": "l",
     "litro": "l",
+    "litri": "l",
     "kg sgocc": "kg sgocc",
     "kg sgocc.": "kg sgocc",
     "kg sgocciolato": "kg sgocc",
@@ -280,8 +287,6 @@ def normalize_unit_price_measure(raw: str | None) -> str | None:
     cleaned = (
         raw.strip()
         .lower()
-        .replace("litri", "l")
-        .replace("litro", "l")
         .replace("l.", "l")
     )
     cleaned = re.sub(r"\s+", " ", cleaned)
@@ -293,8 +298,7 @@ def format_unit_price_label(value: float | None, measure: str | None) -> str | N
     if value is None or measure is None:
         return None
     formatted = f"{value:.2f}".replace(".", ",")
-    symbol = "l" if measure == "l" else measure
-    return f"{formatted} €/{symbol}"
+    return f"{formatted} €/{measure}"
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +322,7 @@ def calculate_discount_pct(price_original: float | None, price_offer: float | No
 def deduplicate_products(products: list[dict]) -> list[dict]:
     """
     Remove duplicate products extracted from multiple pages.
-    Deduplication key: (name, brand, format) — case-insensitive.
+    Deduplication key: (name, brand, format_key) — case-insensitive.
     Keeps the first occurrence.
     """
     seen: set[tuple[str, str, str]] = set()
@@ -327,7 +331,7 @@ def deduplicate_products(products: list[dict]) -> list[dict]:
         key = (
             (p.get("name") or "").strip().lower(),
             (p.get("brand") or "").strip().lower(),
-            (p.get("format") or "").strip().lower(),
+            (p.get("format_key") or "").strip().lower(),
         )
         if key not in seen:
             seen.add(key)
@@ -356,6 +360,17 @@ def _coerce_int(value: object) -> int | None:
         return None
 
 
+def _coerce_format_bundle(raw: dict) -> NormalizedFormatBundle:
+    existing_bundle = raw.get("_format_bundle")
+    if isinstance(existing_bundle, NormalizedFormatBundle):
+        return existing_bundle
+    return build_extraction_format_bundle(raw.get("format"))
+
+
+def json_size_bytes(value: object) -> int:
+    return len(json.dumps(value, separators=(",", ":"), ensure_ascii=False))
+
+
 def normalize_product(raw: dict) -> dict:
     """Apply all normalization steps to a single extracted product dict."""
     price_offer = normalize_price(raw.get("price_offer") or raw.get("price_current"))
@@ -367,13 +382,16 @@ def normalize_product(raw: dict) -> dict:
     raw_subcategory = _coerce_str(raw.get("subcategory")) or _coerce_str(raw.get("category_sub"))
     category = normalize_category(raw_category)
     subcategory = normalize_subcategory(raw_subcategory)
+    format_bundle = _coerce_format_bundle(raw)
 
     return {
         "name": _coerce_str(raw.get("name")) or "",
         "brand": normalize_brand(_coerce_str(raw.get("brand"))),
         "category": category,
         "subcategory": subcategory,
-        "format": _coerce_str(raw.get("format")),
+        "format": format_bundle.format_compact,
+        "format_key": format_bundle.format_key,
+        "format_label": format_bundle.format_label,
         "price_offer": price_offer,
         "price_original": price_original,
         "discount_pct": discount_pct or calculate_discount_pct(price_original, price_offer),
@@ -384,3 +402,14 @@ def normalize_product(raw: dict) -> dict:
         "valid_from": _coerce_str(raw.get("valid_from")),
         "valid_to": _coerce_str(raw.get("valid_to")),
     }
+
+
+def expand_products(raw_products: list[dict]) -> list[dict]:
+    expanded: list[dict] = []
+    for raw in raw_products:
+        expanded.extend(explode_format_variants(raw))
+    return expanded
+
+
+def normalize_products(raw_products: list[dict]) -> list[dict]:
+    return [normalize_product(candidate) for candidate in expand_products(raw_products)]

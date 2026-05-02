@@ -12,6 +12,7 @@ from core.auth import assert_flyer_access, get_current_user_id, get_optional_use
 from core.config import settings
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
+from services.product_format import ProductFormat, build_format_bundle
 
 router = APIRouter()
 
@@ -19,7 +20,7 @@ ALLOWED_CONTENT_TYPES = {"application/pdf"}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 _OFFER_PRODUCT_SELECT = (
-    "*, products(id, name, brand, category, subcategory, format, image_url)"
+    "*, products(id, name, brand, category, subcategory, format, format_label, image_url)"
 )
 
 
@@ -28,7 +29,7 @@ class DraftOfferUpdate(BaseModel):
     brand: str | None = None
     category: str | None = None
     subcategory: str | None = None
-    format: str | None = None
+    format: ProductFormat | None = None
     price_offer: float | None = Field(None, gt=0)
     price_original: float | None = Field(None, gt=0)
     unit_price_value: float | None = Field(None, gt=0)
@@ -43,7 +44,7 @@ class DraftOfferCreate(BaseModel):
     brand: str | None = None
     category: str | None = None
     subcategory: str | None = None
-    format: str | None = None
+    format: ProductFormat = Field(default_factory=ProductFormat)
     price_offer: float = Field(..., gt=0)
     price_original: float | None = Field(None, gt=0)
     unit_price_value: float | None = Field(None, gt=0)
@@ -63,6 +64,7 @@ def _flatten_draft_offer(offer: dict) -> dict:
         "category": product.get("category"),
         "subcategory": product.get("subcategory"),
         "format": product.get("format"),
+        "format_label": product.get("format_label") or "",
         "image_url": product.get("image_url"),
         "unit_price_label": offer.get("unit_price") or format_unit_price_label(
             offer.get("unit_price_value"),
@@ -413,15 +415,18 @@ async def create_draft_offer(
         "brand": payload.brand,
         "category": payload.category,
         "subcategory": payload.subcategory,
-        "format": payload.format,
     }
-    upsert_result = sb.table("products").upsert(product_row, on_conflict="name,brand,format").execute()
+    format_bundle = build_format_bundle(payload.format.model_dump(mode="json"))
+    product_row["format"] = format_bundle.format_compact
+    product_row["format_key"] = format_bundle.format_key
+    product_row["format_label"] = format_bundle.format_label
+    upsert_result = sb.table("products").upsert(product_row, on_conflict="name,brand,format_key").execute()
     if upsert_result.data:
         product_id = upsert_result.data[0]["id"]
     else:
         query = sb.table("products").select("id").eq("name", payload.name)
         query = query.is_("brand", "null") if payload.brand is None else query.eq("brand", payload.brand)
-        query = query.is_("format", "null") if payload.format is None else query.eq("format", payload.format)
+        query = query.eq("format_key", product_row["format_key"])
         existing = query.limit(1).execute()
         if not existing.data:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upsert product")
@@ -518,10 +523,15 @@ async def update_draft_offer(
             "brand": payload.brand,
             "category": payload.category,
             "subcategory": payload.subcategory,
-            "format": payload.format,
+            "format": payload.format.model_dump(mode="json") if payload.format is not None else None,
         }.items()
         if k in sent
     }
+    if "format" in product_fields:
+        format_bundle = build_format_bundle(product_fields["format"])
+        product_fields["format"] = format_bundle.format_compact
+        product_fields["format_key"] = format_bundle.format_key
+        product_fields["format_label"] = format_bundle.format_label
     if product_fields:
         sb.table("products").update(product_fields).eq("id", offer["product_id"]).execute()
 

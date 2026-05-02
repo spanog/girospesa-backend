@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from core.auth import require_admin
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
+from services.product_format import ProductFormat, build_format_bundle
 
 router = APIRouter()
 
@@ -25,7 +26,7 @@ class ProductCreate(BaseModel):
     brand: str | None = None
     category: str | None = None
     subcategory: str | None = None
-    format: str | None = None
+    format: ProductFormat = Field(default_factory=ProductFormat)
 
 
 class ProductUpdate(BaseModel):
@@ -33,7 +34,7 @@ class ProductUpdate(BaseModel):
     brand: str | None = None
     category: str | None = None
     subcategory: str | None = None
-    format: str | None = None
+    format: ProductFormat | None = None
 
 
 class OfferUpdate(BaseModel):
@@ -145,22 +146,21 @@ async def create_product(
     """Create a canonical product manually. Admin only."""
     sb = get_supabase()
 
-    # Check uniqueness (name, brand, format) — mirrors DB UNIQUE constraint
+    format_bundle = build_format_bundle(payload.format.model_dump(mode="json"))
+
+    # Check uniqueness (name, brand, format_key) — mirrors DB UNIQUE constraint
     exists_q = sb.table("products").select("id").eq("name", payload.name)
     if payload.brand is not None:
         exists_q = exists_q.eq("brand", payload.brand)
     else:
         exists_q = exists_q.is_("brand", "null")
-    if payload.format is not None:
-        exists_q = exists_q.eq("format", payload.format)
-    else:
-        exists_q = exists_q.is_("format", "null")
+    exists_q = exists_q.eq("format_key", format_bundle.format_key)
 
     existing = exists_q.execute()
     if existing.data:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Un prodotto con questo nome, brand e formato esiste già",
+            detail="Un prodotto con questo nome, brand e formato canonico esiste già",
         )
 
     resp = (
@@ -172,7 +172,9 @@ async def create_product(
                 "brand": payload.brand,
                 "category": payload.category,
                 "subcategory": payload.subcategory,
-                "format": payload.format,
+                "format": format_bundle.format_compact,
+                "format_key": format_bundle.format_key,
+                "format_label": format_bundle.format_label,
                 "is_archived": False,
             }
         )
@@ -228,6 +230,11 @@ async def update_product(
     updates = payload.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Nessun campo da aggiornare")
+    if "format" in updates:
+        format_bundle = build_format_bundle(payload.format.model_dump(mode="json"))
+        updates["format"] = format_bundle.format_compact
+        updates["format_key"] = format_bundle.format_key
+        updates["format_label"] = format_bundle.format_label
 
     sb = get_supabase()
     resp = sb.table("products").update(updates).eq("id", product_id).execute()

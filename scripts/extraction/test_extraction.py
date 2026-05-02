@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-from services.extraction.normalizer import deduplicate_products, normalize_product
+from services.extraction.normalizer import deduplicate_products, normalize_products
 from services.extraction.providers.gemini import GeminiProvider
 from scripts.extraction.extraction_metrics import SCORED_FIELDS, SupermarketReport, build_report
 
@@ -55,7 +55,7 @@ def _live_extract(page_id: str, model: str, api_key: str, images_dir: Path) -> l
         return []
     provider = GeminiProvider(api_key=api_key, model=model)
     products, _retry_errors = provider.extract_products(image_path.read_bytes(), "image/jpeg")
-    normalized = [normalize_product(p) for p in products if p.get("name") and p.get("price_offer")]
+    normalized = [p for p in normalize_products(products) if p.get("name") and p.get("price_offer")]
     return deduplicate_products(normalized)
 
 

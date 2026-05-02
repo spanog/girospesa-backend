@@ -29,6 +29,14 @@ from services.extraction.normalizer import (
 )
 
 
+def _single_format(weight: float, unit: str = "g") -> dict:
+    return {
+        "tipo": "confezione_singola",
+        "peso_volume": weight,
+        "unita_misura": unit,
+    }
+
+
 # ---------------------------------------------------------------------------
 # normalize_category
 # ---------------------------------------------------------------------------
@@ -158,8 +166,14 @@ class TestCalculateDiscountPct:
 # ---------------------------------------------------------------------------
 
 class TestDeduplicateProducts:
-    def _p(self, name: str, brand: str = "", fmt: str = "") -> dict:
-        return {"name": name, "brand": brand, "format": fmt, "price_offer": 1.0}
+    def _p(self, name: str, brand: str = "", fmt_key: str = "") -> dict:
+        return {
+            "name": name,
+            "brand": brand,
+            "format": _single_format(500),
+            "format_key": fmt_key or "v1:{}",
+            "price_offer": 1.0,
+        }
 
     def test_no_duplicates(self):
         products = [self._p("Mela"), self._p("Pera")]
@@ -170,8 +184,8 @@ class TestDeduplicateProducts:
         assert len(deduplicate_products(products)) == 1
 
     def test_keeps_first_occurrence(self):
-        p1 = {"name": "Latte", "brand": "Parmalat", "format": "1L", "price_offer": 1.0}
-        p2 = {"name": "Latte", "brand": "Parmalat", "format": "1L", "price_offer": 1.5}
+        p1 = {"name": "Latte", "brand": "Parmalat", "format": _single_format(1, "L"), "format_key": "v1:same", "price_offer": 1.0}
+        p2 = {"name": "Latte", "brand": "Parmalat", "format": _single_format(1, "L"), "format_key": "v1:same", "price_offer": 1.5}
         result = deduplicate_products([p1, p2])
         assert len(result) == 1
         assert result[0]["price_offer"] == 1.0
@@ -181,8 +195,8 @@ class TestDeduplicateProducts:
         assert len(deduplicate_products(products)) == 1
 
     def test_different_format_not_deduped(self):
-        p1 = {"name": "Latte", "brand": "Granarolo", "format": "1L", "price_offer": 1.0}
-        p2 = {"name": "Latte", "brand": "Granarolo", "format": "500ml", "price_offer": 0.6}
+        p1 = {"name": "Latte", "brand": "Granarolo", "format": _single_format(1, "L"), "format_key": "v1:1L", "price_offer": 1.0}
+        p2 = {"name": "Latte", "brand": "Granarolo", "format": _single_format(500, "ml"), "format_key": "v1:500ml", "price_offer": 0.6}
         assert len(deduplicate_products([p1, p2])) == 2
 
 
@@ -196,7 +210,7 @@ class TestNormalizeProduct:
             "name": "Petto di pollo  ",
             "brand": "barilla",
             "category": "carne",
-            "format": "500g",
+            "format": _single_format(500),
             "price_offer": "3,99",
             "price_original": "5,49",
             "offer_notes": None,
@@ -207,6 +221,8 @@ class TestNormalizeProduct:
         assert result["name"] == "Petto di pollo"
         assert result["brand"] == "Barilla"
         assert result["category"] == "alimentari-freschi"
+        assert result["format"]["tipo"] == "confezione_singola"
+        assert result["format_label"] == "500 g"
         assert result["price_offer"] == pytest.approx(3.99)
         assert result["price_original"] == pytest.approx(5.49)
         assert result["discount_pct"] == 27  # (5.49 - 3.99) / 5.49 ≈ 27%
@@ -215,7 +231,8 @@ class TestNormalizeProduct:
         raw = {"name": "Pane", "price_offer": 1.5}
         result = normalize_product(raw)
         assert result["brand"] is None
-        assert result["format"] is None
+        assert result["format"] == {}
+        assert result["format_label"] == ""
 
     def test_prompt_v2_fields_are_accepted_and_mapped(self):
         raw = {
@@ -223,7 +240,12 @@ class TestNormalizeProduct:
             "brand": "rio mare",
             "category_main": "Dispensa",
             "category_sub": "Conserve Ittiche e di Carne",
-            "format": "2x80g",
+            "format": {
+                "tipo": "multipack_omogeneo",
+                "quantita": 2,
+                "peso_volume": 80,
+                "unita_misura": "g",
+            },
             "price_current": "4,99",
             "price_original": "6,79",
             "discount_percentage": 26,
@@ -244,3 +266,42 @@ class TestNormalizeProduct:
         assert result["discount_pct"] == 26
         assert result["unit_price_value"] == pytest.approx(31.19)
         assert result["unit_price_unit"] == "kg"
+        assert result["format_label"] == "2x80 g"
+
+    def test_prompt_v2_liter_unit_is_lowercased_for_offers(self):
+        raw = {
+            "name": "Detersivo liquido",
+            "category_main": "Cura della Casa",
+            "format": {
+                "tipo": "confezione_singola",
+                "peso_volume": 1,
+                "unita_misura": "L",
+            },
+            "price_current": "2,12",
+            "price_per_unit": "2,12",
+            "price_per_unit_measure": "L",
+        }
+
+        result = normalize_product(raw)
+
+        assert result["unit_price_unit"] == "l"
+        assert result["unit_price"] == "2,12 €/l"
+
+    def test_plain_text_format_is_rejected(self):
+        with pytest.raises(ValueError, match="Plain text product format"):
+            normalize_product({
+                "name": "Pasta",
+                "format": "500g",
+                "price_offer": 1.0,
+            })
+
+    def test_incomplete_extraction_format_falls_back_to_partial_bundle(self):
+        result = normalize_product({
+            "name": "Pasta",
+            "format": {"tipo": "confezione_singola"},
+            "price_offer": 1.0,
+        })
+
+        assert result["format"] == {"tipo": "confezione_singola"}
+        assert result["format_label"] == ""
+        assert result["format_key"] == 'v1:{"tipo":"confezione_singola"}'

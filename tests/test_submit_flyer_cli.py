@@ -51,7 +51,11 @@ def test_main_writes_normalized_output(tmp_path: Path, monkeypatch: pytest.Monke
                 "name": "Pasta Barilla",
                 "brand": "Barilla",
                 "category": "dispensa",
-                "format": "500g",
+                "format": {
+                    "tipo": "confezione_singola",
+                    "peso_volume": 500,
+                    "unita_misura": "g",
+                },
                 "price_offer": 1.29,
                 "price_original": 1.79,
             }
@@ -80,3 +84,4 @@ def test_main_writes_normalized_output(tmp_path: Path, monkeypatch: pytest.Monke
     assert result["supermarket"] == "Conad"
     assert result["products_count"] == 1
     assert result["products"][0]["name"] == "Pasta Barilla"
+    assert result["products"][0]["format_label"] == "500 g"

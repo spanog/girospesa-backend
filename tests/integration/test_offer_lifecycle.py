@@ -129,7 +129,13 @@ def _make_mock_extraction_service(supabase_client):
                 "name": "Pasta Barilla",
                 "brand": "Barilla",
                 "category": "dispensa",
-                "format": "500g",
+                "format": {
+                    "tipo": "confezione_singola",
+                    "peso_volume": 500,
+                    "unita_misura": "g",
+                },
+                "format_key": 'v1:{"peso_volume":500,"tipo":"confezione_singola","unita_misura":"g"}',
+                "format_label": "500 g",
             }
             try:
                 product = (
@@ -143,7 +149,7 @@ def _make_mock_extraction_service(supabase_client):
                     .select("id")
                     .eq("name", product_payload["name"])
                     .eq("brand", product_payload["brand"])
-                    .eq("format", product_payload["format"])
+                    .eq("format_key", product_payload["format_key"])
                     .single()
                     .execute()
                 ).data

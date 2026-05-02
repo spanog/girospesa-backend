@@ -170,7 +170,12 @@ class TestCreateDraftOffer:
                 "brand": "Galbani",
                 "category": "latticini",
                 "subcategory": "Latticini e Formaggi",
-                "format": "125g",
+                "format": {
+                    "tipo": "confezione_singola",
+                    "peso_volume": 125,
+                    "unita_misura": "g",
+                },
+                "format_label": "125 g",
                 "image_url": None,
             },
         }
@@ -273,9 +278,11 @@ class TestCreateDraftOffer:
                 "brand": None,
                 "category": "alimentari-freschi",
                 "subcategory": "Latticini e Formaggi",
-                "format": None,
+                "format": {},
+                "format_key": "v1:{}",
+                "format_label": "",
             },
-            on_conflict="name,brand,format",
+            on_conflict="name,brand,format_key",
         )
 
 
@@ -306,7 +313,12 @@ class TestListDraftOffers:
                     "brand": "Barilla",
                     "category": "dispensa",
                     "subcategory": "Primi Piatti e Preparati",
-                    "format": "500g",
+                    "format": {
+                        "tipo": "confezione_singola",
+                        "peso_volume": 500,
+                        "unita_misura": "g",
+                    },
+                    "format_label": "500 g",
                     "image_url": None,
                 },
             }
@@ -357,7 +369,12 @@ class TestUpdateDraftOffer:
                 "brand": "Barilla",
                 "category": "dispensa",
                 "subcategory": "Primi Piatti e Preparati",
-                "format": "500g",
+                "format": {
+                    "tipo": "confezione_singola",
+                    "peso_volume": 500,
+                    "unita_misura": "g",
+                },
+                "format_label": "500 g",
                 "image_url": None,
             },
         }
