@@ -119,19 +119,42 @@ async def list_flyers(
     return response.data
 
 
+def _nearby_supermarket_ids(sb, lat: float, lng: float, max_distance_km: float) -> list[str]:
+    response = sb.rpc(
+        "nearby_supermarkets",
+        {"user_lat": lat, "user_lng": lng, "radius_m": max_distance_km * 1000},
+    ).execute()
+    return [row["id"] for row in (response.data or [])]
+
+
 @router.get("/public")
-async def list_public_flyers() -> list[dict]:
-    """Return done public flyers that already contain confirmed offers."""
+async def list_public_flyers(
+    lat: float | None = Query(None),
+    lng: float | None = Query(None),
+    max_distance_km: float | None = Query(None, gt=0, le=100),
+) -> list[dict]:
+    """Return done public flyers that already contain confirmed offers.
+
+    When lat/lng are provided, only flyers from supermarkets within max_distance_km
+    (default 10 km) are returned.
+    """
     sb = get_supabase()
-    response = (
+    query = (
         sb.table("flyers")
         .select("*")
         .eq("status", "done")
         .eq("is_public", True)
         .order("created_at", desc=True)
-        .execute()
     )
-    flyers = response.data
+
+    if lat is not None and lng is not None:
+        radius = max_distance_km if max_distance_km is not None else 10.0
+        nearby_ids = _nearby_supermarket_ids(sb, lat, lng, radius)
+        if not nearby_ids:
+            return []
+        query = query.in_("supermarket_id", nearby_ids)
+
+    flyers = query.execute().data
     if not flyers:
         return flyers
 
