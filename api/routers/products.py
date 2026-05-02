@@ -142,7 +142,7 @@ async def list_products(
     supermarket_count = 0
     if offset == 0:
         sc_query = _apply_offer_filters(
-            sb.table("offers").select("supermarket_id").eq("is_active", True).eq("is_confirmed", True),
+            sb.table("offers").select("supermarket_id, products!inner(id)").eq("is_active", True).eq("is_confirmed", True),
             **filter_kwargs,
         )
         sc_resp = sc_query.execute()
