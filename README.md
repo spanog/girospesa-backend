@@ -280,7 +280,7 @@ Frontend
                     ▼
   Carica items non spuntati dalla lista
   Carica posizione utente (search_location, oppure home_location)
-  Carica tutte le offerte attive con prodotto + supermercato
+  Carica tutte le offerte attive nella finestra corrente (`valid_from <= oggi <= valid_to`, null-safe) con prodotto + supermercato
                     │
                     ▼ per ogni item
   Fuzzy-match item vs offerte (difflib, soglia 0.5)

@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from fastapi import APIRouter, HTTPException, Query
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label
+from services.offer_visibility import apply_current_offer_window
 
 _OFFER_PRODUCT_SELECT = (
     "*, "
@@ -129,10 +130,10 @@ async def list_products(
     base_query = (
         sb.table("offers")
         .select(_OFFER_PRODUCT_LIST_SELECT, count="exact")
-        .eq("is_active", True)
         .eq("is_confirmed", True)
         .order(sort_col, desc=sort_desc, nullsfirst=nullsfirst)
     )
+    base_query = apply_current_offer_window(base_query)
     query = _apply_offer_filters(base_query, **filter_kwargs).range(offset, offset + limit - 1)
     response = query.execute()
 
@@ -145,7 +146,11 @@ async def list_products(
     expiring_soon_count = 0
     if offset == 0:
         sc_query = _apply_offer_filters(
-            sb.table("offers").select("supermarket_id, products!inner(id)").eq("is_active", True).eq("is_confirmed", True),
+            apply_current_offer_window(
+                sb.table("offers")
+                .select("supermarket_id, products!inner(id)")
+                .eq("is_confirmed", True)
+            ),
             **filter_kwargs,
         )
         sc_resp = sc_query.execute()
@@ -156,11 +161,11 @@ async def list_products(
         es_query = (
             sb.table("offers")
             .select("id, products!inner(id)", count="exact")
-            .eq("is_active", True)
             .eq("is_confirmed", True)
             .gte("valid_to", today.isoformat())
             .lte("valid_to", cutoff.isoformat())
         )
+        es_query = apply_current_offer_window(es_query, today=today)
         if nearby_ids is not None:
             es_query = es_query.in_("supermarket_id", nearby_ids)
         es_resp = es_query.execute()
@@ -177,10 +182,12 @@ async def get_product(product_id: str) -> dict:
     """
     sb = get_supabase()
     resp = (
-        sb.table("offers")
-        .select(_OFFER_PRODUCT_SELECT)
-        .eq("id", product_id)
-        .eq("is_confirmed", True)
+        apply_current_offer_window(
+            sb.table("offers")
+            .select(_OFFER_PRODUCT_SELECT)
+            .eq("id", product_id)
+            .eq("is_confirmed", True)
+        )
         .single()
         .execute()
     )
@@ -212,14 +219,15 @@ async def get_similar_products(product_id: str) -> list[dict]:
     current_supermarket_id: str = ref_resp.data["supermarket_id"]
 
     similar_resp = (
-        sb.table("offers")
-        .select(_OFFER_PRODUCT_SELECT)
-        .eq("product_id", canonical_product_id)
-        .eq("is_active", True)
-        .eq("is_confirmed", True)
-        .neq("id", product_id)
-        .neq("supermarket_id", current_supermarket_id)
-        .order("price_offer", desc=False)
+        apply_current_offer_window(
+            sb.table("offers")
+            .select(_OFFER_PRODUCT_SELECT)
+            .eq("product_id", canonical_product_id)
+            .eq("is_confirmed", True)
+            .neq("id", product_id)
+            .neq("supermarket_id", current_supermarket_id)
+            .order("price_offer", desc=False)
+        )
         .limit(6)
         .execute()
     )

@@ -12,6 +12,7 @@ from core.auth import assert_flyer_access, get_current_user_id, get_optional_use
 from core.config import settings
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
+from services.offer_visibility import apply_current_offer_window
 from services.product_format import ProductFormat, build_format_bundle
 
 router = APIRouter()
@@ -77,13 +78,12 @@ def _confirmed_count_by_flyer(sb, flyer_ids: list[str]) -> dict[str, int]:
     if not flyer_ids:
         return {}
 
-    confirmed_resp = (
+    confirmed_resp = apply_current_offer_window(
         sb.table("offers")
         .select("flyer_id")
         .in_("flyer_id", flyer_ids)
         .eq("is_confirmed", True)
-        .execute()
-    )
+    ).execute()
     confirmed_by_flyer: dict[str, int] = {}
     for row in confirmed_resp.data or []:
         fid = row["flyer_id"]
@@ -92,14 +92,56 @@ def _confirmed_count_by_flyer(sb, flyer_ids: list[str]) -> dict[str, int]:
 
 
 def _has_confirmed_offers(sb, flyer_id: str) -> bool:
-    result = (
+    result = apply_current_offer_window(
         sb.table("offers")
         .select("id", count="exact")
         .eq("flyer_id", flyer_id)
         .eq("is_confirmed", True)
+    ).execute()
+    return (result.count or 0) > 0
+
+
+def _normalize_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(value.split()).strip().lower()
+    return normalized or None
+
+
+def _managed_supermarket_name(sb, managed_id: str | None) -> str | None:
+    if not managed_id:
+        return None
+    result = (
+        sb.table("supermarkets")
+        .select("name")
+        .eq("id", managed_id)
+        .maybe_single()
         .execute()
     )
-    return (result.count or 0) > 0
+    if not result or not result.data:
+        return None
+    return result.data.get("name")
+
+
+def _manager_can_access_flyer(sb, profile: dict, flyer: dict) -> bool:
+    if profile.get("role") != "supermarket_manager":
+        return True
+
+    managed_id = profile.get("managed_supermarket_id")
+    if flyer.get("supermarket_id") == managed_id:
+        return True
+
+    if flyer.get("supermarket_id") is not None:
+        return False
+
+    managed_name = _normalize_name(_managed_supermarket_name(sb, managed_id))
+    flyer_name = _normalize_name(flyer.get("supermarket_name"))
+    return managed_name is not None and managed_name == flyer_name
+
+
+def _assert_flyer_access(sb, profile: dict, flyer: dict) -> None:
+    if not _manager_can_access_flyer(sb, profile, flyer):
+        assert_flyer_access(profile, flyer)
 
 
 @router.get("")
@@ -110,13 +152,11 @@ async def list_flyers(
     """Return flyers for admin/manager. Managers see only their supermarket's flyers."""
     sb = get_supabase()
     query = sb.table("flyers").select("*").order("created_at", desc=True)
-
-    if profile.get("role") == "supermarket_manager":
-        managed_id = profile.get("managed_supermarket_id")
-        query = query.eq("supermarket_id", managed_id)
-
     response = query.execute()
-    return response.data
+    flyers = response.data or []
+    if profile.get("role") != "supermarket_manager":
+        return flyers
+    return [flyer for flyer in flyers if _manager_can_access_flyer(sb, profile, flyer)]
 
 
 def _nearby_supermarket_ids(sb, lat: float, lng: float, max_distance_km: float) -> list[str]:
@@ -287,6 +327,16 @@ async def upload_flyer(
             )
 
     sb = get_supabase()
+    if supermarket_id and not supermarket_name:
+        supermarket_result = (
+            sb.table("supermarkets")
+            .select("name")
+            .eq("id", supermarket_id)
+            .maybe_single()
+            .execute()
+        )
+        if supermarket_result and supermarket_result.data:
+            supermarket_name = supermarket_result.data.get("name")
     ext = "pdf" if file.content_type == "application/pdf" else "jpg"
     storage_path = f"{user_id}/{uuid.uuid4()}.{ext}"
     sb.storage.from_("flyers").upload(
@@ -332,7 +382,7 @@ async def get_flyer(
     if not result or not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
     flyer = result.data
-    assert_flyer_access(profile, flyer)
+    _assert_flyer_access(sb, profile, flyer)
     return flyer
 
 
@@ -348,7 +398,7 @@ async def delete_flyer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
     flyer = result.data
-    assert_flyer_access(profile, flyer)
+    _assert_flyer_access(sb, profile, flyer)
 
     file_url = flyer.get("file_url") or ""
     supabase_prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/flyers/"
@@ -375,7 +425,7 @@ async def trigger_extraction(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
     flyer = result.data
-    assert_flyer_access(profile, flyer)
+    _assert_flyer_access(sb, profile, flyer)
 
     allowed_statuses = {"pending", "error"}
     if flyer.get("status") not in allowed_statuses:
@@ -399,11 +449,11 @@ async def list_draft_offers(
 ) -> list[dict]:
     """Return all unconfirmed offers for a flyer."""
     sb = get_supabase()
-    result = sb.table("flyers").select("id, supermarket_id").eq("id", flyer_id).maybe_single().execute()
+    result = sb.table("flyers").select("id, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
     if not result or not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
-    assert_flyer_access(profile, result.data)
+    _assert_flyer_access(sb, profile, result.data)
 
     offers_resp = (
         sb.table("offers")
@@ -422,11 +472,11 @@ async def list_confirmed_offers(
 ) -> list[dict]:
     """Return all confirmed offers for a flyer."""
     sb = get_supabase()
-    result = sb.table("flyers").select("id, supermarket_id").eq("id", flyer_id).maybe_single().execute()
+    result = sb.table("flyers").select("id, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
     if not result or not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
-    assert_flyer_access(profile, result.data)
+    _assert_flyer_access(sb, profile, result.data)
 
     offers_resp = (
         sb.table("offers")
@@ -457,7 +507,7 @@ async def create_draft_offer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
     flyer = flyer_result.data
-    assert_flyer_access(profile, flyer)
+    _assert_flyer_access(sb, profile, flyer)
 
     product_row = {
         "name": payload.name,
@@ -525,11 +575,11 @@ async def update_draft_offer(
 ) -> dict:
     """Inline-edit a single draft offer (and its canonical product if needed)."""
     sb = get_supabase()
-    flyer_result = sb.table("flyers").select("id, supermarket_id").eq("id", flyer_id).maybe_single().execute()
+    flyer_result = sb.table("flyers").select("id, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
     if not flyer_result or not flyer_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
-    assert_flyer_access(profile, flyer_result.data)
+    _assert_flyer_access(sb, profile, flyer_result.data)
 
     offer_result = (
         sb.table("offers")
@@ -602,11 +652,11 @@ async def delete_draft_offer(
 ) -> None:
     """Delete a single unconfirmed draft offer. Cannot delete already-confirmed offers."""
     sb = get_supabase()
-    flyer_result = sb.table("flyers").select("id, supermarket_id").eq("id", flyer_id).maybe_single().execute()
+    flyer_result = sb.table("flyers").select("id, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
     if not flyer_result or not flyer_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
-    assert_flyer_access(profile, flyer_result.data)
+    _assert_flyer_access(sb, profile, flyer_result.data)
 
     offer_result = (
         sb.table("offers")
@@ -634,7 +684,7 @@ async def confirm_offers(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
     flyer = flyer_result.data
-    assert_flyer_access(profile, flyer)
+    _assert_flyer_access(sb, profile, flyer)
 
     if flyer.get("status") != "done":
         raise HTTPException(

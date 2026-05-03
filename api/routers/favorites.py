@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from core.auth import get_current_user_id
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label
+from services.offer_visibility import apply_current_offer_window
 
 router = APIRouter()
 
@@ -33,15 +34,15 @@ async def list_favorites(
         product_id: str = fav["product_id"]
         product: dict = fav.get("products") or {}
         offer_resp = (
-            sb.table("offers")
-            .select(
-                "id, price_offer, price_original, discount_pct, valid_to, created_at, "
-                "supermarket_name, supermarket_id, unit_price, unit_price_value, unit_price_unit, "
-                "supermarkets(logo_url)"
+            apply_current_offer_window(
+                sb.table("offers").select(
+                    "id, price_offer, price_original, discount_pct, valid_to, created_at, "
+                    "supermarket_name, supermarket_id, unit_price, unit_price_value, unit_price_unit, "
+                    "supermarkets(logo_url)"
+                )
+                .eq("product_id", product_id)
+                .order("price_offer")
             )
-            .eq("product_id", product_id)
-            .eq("is_active", True)
-            .order("price_offer")
             .limit(1)
             .execute()
         )

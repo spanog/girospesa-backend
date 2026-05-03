@@ -183,6 +183,9 @@ class TestUploadFlyerPrivacy:
     async def test_manager_auto_fills_supermarket_id(self):
         """Manager upload without supermarket_id uses managed_supermarket_id."""
         sb = _mock_supabase_for_upload({"id": "f3", "is_public": False, "status": "pending", "user_id": "mgr-123"})
+        sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+            data={"name": "Manager Market"}
+        )
 
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post_upload(
@@ -193,6 +196,7 @@ class TestUploadFlyerPrivacy:
         assert resp.status_code == 201
         insert_call_kwargs = sb.table.return_value.insert.call_args[0][0]
         assert insert_call_kwargs["supermarket_id"] == "sup-1"
+        assert insert_call_kwargs["supermarket_name"] == "Manager Market"
 
     @pytest.mark.asyncio
     async def test_manager_wrong_supermarket_id_403(self):
@@ -284,9 +288,48 @@ class TestPublicFlyersVisibility:
         offers_table = MagicMock()
         confirmed_result = MagicMock()
         confirmed_result.data = [{"flyer_id": "flyer-visible"}]
-        offers_table.select.return_value.in_.return_value.eq.return_value.execute.return_value = (
-            confirmed_result
+        offers_table.select.return_value.in_.return_value.eq.return_value.execute.return_value = confirmed_result
+
+        def _dispatch(table_name: str) -> MagicMock:
+            if table_name == "flyers":
+                return flyers_table
+            return offers_table
+
+        sb.table.side_effect = _dispatch
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _get("/flyers/public")
+
+        assert resp.status_code == 200
+        assert resp.json() == [
+            {
+                "id": "flyer-visible",
+                "status": "done",
+                "is_public": True,
+                "confirmed_count": 1,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_public_list_excludes_future_start_flyers(self):
+        sb = MagicMock()
+
+        flyers_table = MagicMock()
+        flyers_result = MagicMock()
+        flyers_result.data = [
+            {"id": "flyer-future", "status": "done", "is_public": True},
+            {"id": "flyer-visible", "status": "done", "is_public": True},
+        ]
+        flyers_table.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
+            flyers_result
         )
+
+        offers_table = MagicMock()
+        confirmed_result = MagicMock()
+        confirmed_result.data = [
+            {"flyer_id": "flyer-visible"},
+        ]
+        offers_table.select.return_value.in_.return_value.eq.return_value.execute.return_value = confirmed_result
 
         def _dispatch(table_name: str) -> MagicMock:
             if table_name == "flyers":
@@ -341,3 +384,90 @@ class TestPublicFlyersVisibility:
 
         assert resp.status_code == 403
         assert resp.json()["detail"] == "Authentication required"
+
+
+class TestManagerLegacyFlyerAccess:
+    @pytest.mark.asyncio
+    async def test_list_flyers_includes_legacy_null_supermarket_id_when_name_matches(self):
+        sb = MagicMock()
+
+        flyers_table = MagicMock()
+        flyers_table.select.return_value.order.return_value.execute.return_value = MagicMock(
+            data=[
+                {
+                    "id": "flyer-legacy",
+                    "supermarket_id": None,
+                    "supermarket_name": "Manager Market",
+                    "status": "done",
+                    "is_public": True,
+                },
+                {
+                    "id": "flyer-other",
+                    "supermarket_id": None,
+                    "supermarket_name": "Other Market",
+                    "status": "done",
+                    "is_public": True,
+                },
+            ]
+        )
+
+        supermarkets_table = MagicMock()
+        supermarkets_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+            data={"name": "Manager Market"}
+        )
+
+        def _dispatch(table_name: str) -> MagicMock:
+            if table_name == "flyers":
+                return flyers_table
+            if table_name == "supermarkets":
+                return supermarkets_table
+            raise AssertionError(f"unexpected table {table_name}")
+
+        sb.table.side_effect = _dispatch
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _get(
+                "/flyers?admin=true",
+                {_DEP_PROFILE: lambda: MANAGER_PROFILE},
+            )
+
+        assert resp.status_code == 200
+        assert [row["id"] for row in resp.json()] == ["flyer-legacy"]
+
+    @pytest.mark.asyncio
+    async def test_get_flyer_allows_legacy_null_supermarket_id_when_name_matches(self):
+        sb = MagicMock()
+
+        flyers_table = MagicMock()
+        flyers_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+            data={
+                "id": "flyer-legacy",
+                "supermarket_id": None,
+                "supermarket_name": "Manager Market",
+                "status": "done",
+                "is_public": True,
+            }
+        )
+
+        supermarkets_table = MagicMock()
+        supermarkets_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+            data={"name": "Manager Market"}
+        )
+
+        def _dispatch(table_name: str) -> MagicMock:
+            if table_name == "flyers":
+                return flyers_table
+            if table_name == "supermarkets":
+                return supermarkets_table
+            raise AssertionError(f"unexpected table {table_name}")
+
+        sb.table.side_effect = _dispatch
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _get(
+                "/flyers/flyer-legacy",
+                {_DEP_PROFILE: lambda: MANAGER_PROFILE},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["id"] == "flyer-legacy"

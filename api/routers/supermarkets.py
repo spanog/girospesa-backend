@@ -8,6 +8,7 @@ from core.auth import require_admin
 from core.config import settings
 from core.database import get_supabase
 from services.geocoding import geocode_address
+from services.offer_visibility import apply_current_offer_window
 
 router = APIRouter()
 
@@ -77,15 +78,16 @@ async def list_supermarkets(
         return _merge_distances(resp.data or [], nearby)
 
     if has_active_offers:
-        resp = (
-            sb.table("supermarkets")
-            .select("*, offers!inner(id)")
-            .eq("is_active", True)
-            .eq("offers.is_active", True)
-            .eq("offers.is_confirmed", True)
-            .order("name")
-            .execute()
-        )
+        resp = apply_current_offer_window(
+            (
+                sb.table("supermarkets")
+                .select("*, offers!inner(id)")
+                .eq("is_active", True)
+                .eq("offers.is_confirmed", True)
+                .order("name")
+            ),
+            reference_table="offers",
+        ).execute()
         return [{k: v for k, v in row.items() if k != "offers"} for row in resp.data]
     resp = sb.table("supermarkets").select("*").eq("is_active", True).order("name").execute()
     return resp.data

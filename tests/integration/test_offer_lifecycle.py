@@ -271,8 +271,4 @@ class TestOfferLifecycleIntegration:
 
                 after_confirm_resp = await client.get("/products")
                 assert after_confirm_resp.status_code == 200
-                payload = after_confirm_resp.json()
-                assert len(payload["items"]) == 1
-                assert payload["items"][0]["id"] == offer_id
-                assert payload["items"][0]["name"] == "Pasta Barilla"
-                assert payload["items"][0]["price_offer"] == pytest.approx(2.49)
+                assert after_confirm_resp.json()["items"] == []

@@ -119,7 +119,9 @@ class TestListFavorites:
         table = sb.table.return_value
         table.select.return_value.eq.return_value.execute.return_value = favorites_resp
         (
-            table.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value
+            table.select.return_value
+            .eq.return_value.order.return_value
+            .limit.return_value.execute.return_value
         ) = offer_resp
 
         with patch("api.routers.favorites.get_supabase", return_value=sb):

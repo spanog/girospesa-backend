@@ -133,14 +133,17 @@ class TestListProducts:
     async def test_returns_paginated_confirmed_active_offers(self):
         sb = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
-        (
-            sb.table.return_value
-            .select.return_value
-            .eq.return_value.eq.return_value
-            .order.return_value
-            .range.return_value
-            .execute.return_value
-        ) = execute_result
+        select_mock = sb.table.return_value.select.return_value
+        eq_mock = select_mock.eq.return_value
+        order_mock = eq_mock.order.return_value
+        order_mock.range.return_value.execute.return_value = execute_result
+        eq_mock.execute.return_value = MagicMock(
+            data=[{"supermarket_id": "sm-1"}]
+        )
+        eq_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
+            data=[],
+            count=0,
+        )
 
         with patch("api.routers.products.get_supabase", return_value=sb):
             resp = await _get("/products")
@@ -153,33 +156,56 @@ class TestListProducts:
         assert data["items"][0]["name"] == "Latte intero"
         assert data["items"][0]["supermarket_slug"] == "lidl"
 
-        select_mock = sb.table.return_value.select.return_value
-        select_mock.eq.assert_any_call("is_active", True)
-        select_mock.eq.return_value.eq.assert_any_call("is_confirmed", True)
-        select_mock.eq.return_value.eq.return_value.order.assert_called_once_with(
+        select_mock.eq.assert_any_call("is_confirmed", True)
+        select_mock.eq.return_value.order.assert_called_once_with(
             "discount_pct",
             desc=True,
             nullsfirst=False,
         )
 
     @pytest.mark.asyncio
+    async def test_excludes_future_start_offers(self):
+        sb = MagicMock()
+        execute_result = MagicMock(data=[], count=0)
+        select_mock = sb.table.return_value.select.return_value
+        eq_mock = select_mock.eq.return_value
+        order_mock = eq_mock.order.return_value
+        order_mock.range.return_value.execute.return_value = execute_result
+        eq_mock.execute.return_value = MagicMock(
+            data=[]
+        )
+        eq_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
+            data=[],
+            count=0,
+        )
+
+        with patch("api.routers.products.get_supabase", return_value=sb):
+            resp = await _get("/products")
+
+        assert resp.status_code == 200
+        order_mock.range.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_expiry_sort_uses_postgrest_nullsfirst_keyword(self):
         sb = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
-        (
-            sb.table.return_value
-            .select.return_value
-            .eq.return_value.eq.return_value
-            .order.return_value
-            .range.return_value
-            .execute.return_value
-        ) = execute_result
+        select_mock = sb.table.return_value.select.return_value
+        eq_mock = select_mock.eq.return_value
+        order_mock = eq_mock.order.return_value
+        order_mock.range.return_value.execute.return_value = execute_result
+        eq_mock.execute.return_value = MagicMock(
+            data=[]
+        )
+        eq_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
+            data=[],
+            count=0,
+        )
 
         with patch("api.routers.products.get_supabase", return_value=sb):
             resp = await _get("/products?sort=expiry")
 
         assert resp.status_code == 200
-        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.order.assert_called_once_with(
+        sb.table.return_value.select.return_value.eq.return_value.order.assert_called_once_with(
             "valid_to",
             desc=False,
             nullsfirst=True,
@@ -190,15 +216,19 @@ class TestListProducts:
         """When lat/lng provided, only supermarkets within max_distance_km are included."""
         offers_chain = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
-        (
-            offers_chain
-            .select.return_value
-            .eq.return_value.eq.return_value
-            .order.return_value
-            .in_.return_value
-            .range.return_value
-            .execute.return_value
-        ) = execute_result
+        select_mock = offers_chain.select.return_value
+        eq_mock = select_mock.eq.return_value
+        order_mock = eq_mock.order.return_value
+        order_mock.in_.return_value.range.return_value.execute.return_value = (
+            execute_result
+        )
+        eq_mock.in_.return_value.execute.return_value = MagicMock(
+            data=[{"supermarket_id": "sm-1"}]
+        )
+        eq_mock.gte.return_value.lte.return_value.in_.return_value.execute.return_value = MagicMock(
+            data=[],
+            count=0,
+        )
 
         sb = MagicMock()
         sb.table.return_value = offers_chain
@@ -210,12 +240,7 @@ class TestListProducts:
             resp = await _get("/products?lat=45.464&lng=9.189&max_distance_km=10")
 
         assert resp.status_code == 200
-        order_chain = (
-            offers_chain.select.return_value
-            .eq.return_value.eq.return_value
-            .order.return_value
-        )
-        order_chain.in_.assert_called_once_with("supermarket_id", ["sm-1"])
+        order_mock.in_.assert_called_once_with("supermarket_id", ["sm-1"])
 
     @pytest.mark.asyncio
     async def test_distance_filtering_returns_empty_when_no_nearby_supermarkets(self):
@@ -234,24 +259,29 @@ class TestListProducts:
             "nextPage": None,
             "total": 0,
             "supermarket_count": 0,
+            "expiring_soon_count": 0,
         }
         # Offers query should never be executed when nearby_ids is empty
-        offers_chain.select.return_value.eq.return_value.eq.return_value.order.return_value.range.return_value.execute.assert_not_called()
+        offers_chain.select.return_value.eq.return_value.order.return_value.range.return_value.execute.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_distance_filtering_uses_postgis_rpc(self):
         """When lat/lng provided, nearby supermarket filtering runs in PostGIS."""
         offers_chain = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
-        (
-            offers_chain
-            .select.return_value
-            .eq.return_value.eq.return_value
-            .order.return_value
-            .in_.return_value
-            .range.return_value
-            .execute.return_value
-        ) = execute_result
+        select_mock = offers_chain.select.return_value
+        eq_mock = select_mock.eq.return_value
+        order_mock = eq_mock.order.return_value
+        order_mock.in_.return_value.range.return_value.execute.return_value = (
+            execute_result
+        )
+        eq_mock.in_.return_value.execute.return_value = MagicMock(
+            data=[{"supermarket_id": "sm-1"}]
+        )
+        eq_mock.gte.return_value.lte.return_value.in_.return_value.execute.return_value = MagicMock(
+            data=[],
+            count=0,
+        )
 
         sb = MagicMock()
         sb.table.return_value = offers_chain
@@ -271,13 +301,8 @@ class TestListProducts:
                 "radius_m": 10000.0,
             },
         )
-        assert sb.table.call_args_list == [call("offers"), call("offers")]
-        order_chain = (
-            offers_chain.select.return_value
-            .eq.return_value.eq.return_value
-            .order.return_value
-        )
-        order_chain.in_.assert_called_once_with("supermarket_id", ["sm-1"])
+        assert sb.table.call_args_list == [call("offers"), call("offers"), call("offers")]
+        order_mock.in_.assert_called_once_with("supermarket_id", ["sm-1"])
 
 
 # ---------------------------------------------------------------------------
@@ -350,11 +375,11 @@ class TestGetSimilarProducts:
         ref_execute = MagicMock(data={"product_id": "prod-1", "supermarket_id": "sm-1"})
         sb.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = ref_execute
 
-        # similar query: .select().eq(product_id).eq(is_active).eq(is_confirmed).neq(id).neq(supermarket_id).order().limit().execute()
+        # similar query: .select().eq(product_id).eq(is_confirmed).neq(id).neq(supermarket_id).order().limit().execute()
         similar_execute = MagicMock(data=[_SIMILAR_ROW])
         (
             sb.table.return_value.select.return_value
-            .eq.return_value.eq.return_value.eq.return_value.eq.return_value
+            .eq.return_value.eq.return_value
             .neq.return_value.neq.return_value
             .order.return_value.limit.return_value.execute.return_value
         ) = similar_execute
