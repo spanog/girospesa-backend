@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from core.auth import get_current_user_id
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label
+from services.offer_visibility import apply_current_offer_window
 
 router = APIRouter()
 
@@ -102,6 +103,50 @@ def _nearby_distances(sb, lat: float, lng: float, max_distance_km: float) -> dic
     return {row["id"]: row["distance_km"] for row in (response.data or [])}
 
 
+def _offer_select() -> str:
+    return (
+        "id, product_id, price_original, price_offer, discount_pct, "
+        "unit_price, unit_price_value, unit_price_unit, valid_to,"
+        " products(id, name, brand, format, format_label),"
+        " supermarkets(id, name, logo_url)"
+    )
+
+
+def _offer_distance(match: dict, nearby_distances: dict[str, float] | None) -> float | None:
+    store_id = (match.get("supermarkets") or {}).get("id")
+    if nearby_distances is None:
+        return None
+    return nearby_distances.get(store_id)
+
+
+def _is_nearby(offer: dict, nearby_distances: dict[str, float] | None) -> bool:
+    if nearby_distances is None:
+        return True
+    store_id = (offer.get("supermarkets") or {}).get("id")
+    return store_id in nearby_distances
+
+
+def _offer_savings(offer: dict) -> float:
+    if not offer.get("price_original"):
+        return 0.0
+    return float(offer["price_original"]) - float(offer["price_offer"])
+
+
+def _coverage_match(
+    offer: dict,
+    score: float,
+    nearby_distances: dict[str, float] | None,
+) -> dict:
+    return {
+        "offer": offer,
+        "product_info": offer.get("products") or {},
+        "store": offer.get("supermarkets") or {},
+        "score": score,
+        "savings": _offer_savings(offer),
+        "distance": _offer_distance(offer, nearby_distances),
+    }
+
+
 @router.post("")
 async def optimize(
     body: OptimizeBody,
@@ -155,51 +200,46 @@ async def optimize(
         nearby_distances = _nearby_distances(sb, user_lat, user_lng, max_km)
 
     # Fetch all active offers joined with product catalog and supermarket info
-    offers_resp = (
-        sb.table("offers")
-        .select(
-            "id, product_id, price_original, price_offer, discount_pct, "
-            "unit_price, unit_price_value, unit_price_unit, valid_to,"
-            " products(id, name, brand, format, format_label),"
-            " supermarkets(id, name, logo_url)"
-        )
-        .gte("valid_to", "now()")
-        .execute()
+    offers_query = apply_current_offer_window(
+        sb.table("offers").select(_offer_select())
     )
-    all_offers: list[dict] = offers_resp.data
+    all_offers: list[dict] = offers_query.execute().data or []
+    offers_by_id = {offer["id"]: offer for offer in all_offers}
 
     # Build coverage matrix: item_id → list of matched offers
     coverage: dict[str, list[dict]] = {item["id"]: [] for item in unchecked}
 
     for item in unchecked:
+        pinned_offer_id = item.get("pinned_offer_id")
+        if pinned_offer_id:
+            offer = offers_by_id.get(pinned_offer_id)
+            if offer and _is_nearby(offer, nearby_distances):
+                coverage[item["id"]].append(_coverage_match(offer, 1.0, nearby_distances))
+            continue
+
+        pinned_product_id = item.get("pinned_product_id")
+        if pinned_product_id:
+            product_offers = [
+                offer for offer in all_offers
+                if offer.get("product_id") == pinned_product_id
+                and _is_nearby(offer, nearby_distances)
+            ]
+            coverage[item["id"]].extend(
+                _coverage_match(offer, 1.0, nearby_distances)
+                for offer in product_offers
+            )
+            continue
+
         for offer in all_offers:
+            if not _is_nearby(offer, nearby_distances):
+                continue
             product_info: dict = offer.get("products") or {}
             product_name = product_info.get("name", "")
             score = _match_score(item["name"], product_name)
             if score < 0.5:
                 continue
 
-            store: dict = offer.get("supermarkets") or {}
-            store_id = store.get("id")
-            distance = None
-            if nearby_distances is not None:
-                if store_id not in nearby_distances:
-                    continue
-                distance = nearby_distances[store_id]
-
-            savings = (
-                (float(offer["price_original"]) - float(offer["price_offer"]))
-                if offer.get("price_original")
-                else 0.0
-            )
-            coverage[item["id"]].append({
-                "offer": offer,
-                "product_info": product_info,
-                "store": store,
-                "score": score,
-                "savings": savings,
-                "distance": distance,
-            })
+            coverage[item["id"]].append(_coverage_match(offer, score, nearby_distances))
 
     # Sort matches by price_offer ASC, then score DESC for each item
     for item_id in coverage:

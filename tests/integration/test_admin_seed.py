@@ -33,6 +33,28 @@ def test_admin_seed_creates_loginable_admin_and_profile(supabase_client):
         seed = admin_seed.load_admin_seed_from_env()
         result = admin_seed.seed_admin_user(supabase_client, seed)
         smoke = admin_seed.check_admin_seed_health(supabase_client=supabase_client, seed=seed)
+        profile = (
+            supabase_client.table("user_profiles")
+            .select("home_address,home_city,home_province,home_postal_code")
+            .eq("id", result.user_id)
+            .single()
+            .execute()
+            .data
+        )
+        lists = (
+            supabase_client.table("shopping_lists")
+            .select("id,name,items,is_active")
+            .eq("user_id", result.user_id)
+            .execute()
+            .data
+        )
+        members = (
+            supabase_client.table("list_members")
+            .select("list_id,user_id,role")
+            .eq("user_id", result.user_id)
+            .execute()
+            .data
+        )
     finally:
         if old_email is None:
             os.environ.pop("ADMIN_EMAIL", None)
@@ -47,3 +69,11 @@ def test_admin_seed_creates_loginable_admin_and_profile(supabase_client):
     assert smoke.auth_user_exists is True
     assert smoke.profile_role == "admin"
     assert smoke.login_ok is True
+    assert profile == {
+        "home_address": "Via Palmiro Togliatti",
+        "home_city": "Polistena",
+        "home_province": "RC",
+        "home_postal_code": "89024",
+    }
+    assert lists == [{"id": lists[0]["id"], "name": "Lista spesa", "items": [], "is_active": True}]
+    assert members == [{"list_id": lists[0]["id"], "user_id": result.user_id, "role": "owner"}]

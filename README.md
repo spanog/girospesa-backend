@@ -283,7 +283,7 @@ Frontend
   Carica tutte le offerte attive nella finestra corrente (`valid_from <= oggi <= valid_to`, null-safe) con prodotto + supermercato
                     │
                     ▼ per ogni item
-  Fuzzy-match item vs offerte (difflib, soglia 0.5)
+  Usa `pinned_offer_id` come match esatto; poi `pinned_product_id`; solo gli item manuali passano al fuzzy-match (difflib, soglia 0.5)
   Filtra per distanza con PostGIS (`nearby_supermarkets`, `ST_DWithin`)
                     │
                     ▼
@@ -461,9 +461,12 @@ Bootstrap admin condiviso per locale/test/prod:
   - utente auth esiste
   - `app_metadata.role = "admin"`
   - `public.user_profiles.role = 'admin'`
+  - profilo admin con indirizzo `Via Palmiro Togliatti, 89024 Polistena (RC)`
+  - almeno una `shopping_lists` attiva e vuota, con membership `owner`
 - Script e' idempotente:
   - crea admin se manca
   - se esiste gia', non duplica utente
+  - non crea liste duplicate se l'utente ha gia' una lista attiva
   - riallinea ruolo JWT/profile se necessario
 - Credenziali locali gia' configurate in `.env`:
   - `ADMIN_EMAIL=dev-admin@local.test`

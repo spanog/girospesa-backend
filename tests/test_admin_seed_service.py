@@ -49,25 +49,62 @@ class _FakeAuth:
 
 
 class _FakeTable:
-    def __init__(self):
+    def __init__(
+        self,
+        select_data: list[dict] | None = None,
+        insert_data: list[dict] | None = None,
+    ):
+        self.select_data = select_data or []
+        self.insert_data = insert_data or []
         self.upsert_calls: list[tuple[dict, str]] = []
+        self.insert_calls: list[dict] = []
+        self.select_calls: list[str] = []
+        self.eq_calls: list[tuple[str, object]] = []
+        self.limit_calls: list[int] = []
+        self._last_operation = ""
 
     def upsert(self, payload: dict, on_conflict: str):
         self.upsert_calls.append((payload, on_conflict))
         return self
 
+    def insert(self, payload: dict):
+        self.insert_calls.append(payload)
+        self._last_operation = "insert"
+        return self
+
+    def select(self, columns: str):
+        self.select_calls.append(columns)
+        self._last_operation = "select"
+        return self
+
+    def eq(self, column: str, value: object):
+        self.eq_calls.append((column, value))
+        return self
+
+    def limit(self, count: int):
+        self.limit_calls.append(count)
+        return self
+
     def execute(self):
-        return None
+        data = self.insert_data if self._last_operation == "insert" else self.select_data
+        return type("_Result", (), {"data": data})()
 
 
 class _FakeSupabase:
     def __init__(self, users: list[_FakeUser] | None = None):
         self.auth = _FakeAuth(_FakeAdminApi(users))
         self.user_profiles = _FakeTable()
+        self.shopping_lists = _FakeTable(insert_data=[{"id": "created-list-id"}])
+        self.list_members = _FakeTable()
 
     def table(self, name: str):
-        assert name == "user_profiles"
-        return self.user_profiles
+        tables = {
+            "user_profiles": self.user_profiles,
+            "shopping_lists": self.shopping_lists,
+            "list_members": self.list_members,
+        }
+        assert name in tables
+        return tables[name]
 
 
 def test_load_admin_seed_from_env(monkeypatch: pytest.MonkeyPatch):
@@ -114,10 +151,33 @@ def test_seed_admin_creates_missing_admin_user(monkeypatch: pytest.MonkeyPatch):
             {
                 "id": "created-admin-id",
                 "display_name": "admin",
+                "home_address": "Via Palmiro Togliatti",
+                "home_city": "Polistena",
+                "home_province": "RC",
+                "home_postal_code": "89024",
                 "role": "admin",
                 "managed_supermarket_id": None,
             },
             "id",
+        )
+    ]
+    assert result.default_list_created is True
+    assert supabase.shopping_lists.insert_calls == [
+        {
+            "user_id": "created-admin-id",
+            "name": "Lista spesa",
+            "items": [],
+            "is_active": True,
+        }
+    ]
+    assert supabase.list_members.upsert_calls == [
+        (
+            {
+                "list_id": "created-list-id",
+                "user_id": "created-admin-id",
+                "role": "owner",
+            },
+            "list_id,user_id",
         )
     ]
 
@@ -135,6 +195,31 @@ def test_seed_admin_skips_existing_admin_but_keeps_profile_in_sync(monkeypatch: 
     assert supabase.auth.admin.create_calls == []
     assert supabase.auth.admin.update_calls == []
     assert supabase.user_profiles.upsert_calls[0][0]["id"] == "existing-admin-id"
+
+
+def test_seed_admin_does_not_duplicate_existing_active_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("ADMIN_EMAIL", "admin@example.com")
+    monkeypatch.setenv("ADMIN_PASSWORD", "pw-123")
+    existing = _FakeUser("existing-admin-id", "admin@example.com", {"role": "admin"})
+    supabase = _FakeSupabase([existing])
+    supabase.shopping_lists.select_data = [{"id": "existing-list-id"}]
+
+    result = admin_seed.seed_admin_user(supabase, admin_seed.load_admin_seed_from_env())
+
+    assert result.default_list_created is False
+    assert supabase.shopping_lists.insert_calls == []
+    assert supabase.list_members.upsert_calls == [
+        (
+            {
+                "list_id": "existing-list-id",
+                "user_id": "existing-admin-id",
+                "role": "owner",
+            },
+            "list_id,user_id",
+        )
+    ]
 
 
 def test_seed_admin_updates_existing_user_missing_admin_role(monkeypatch: pytest.MonkeyPatch):

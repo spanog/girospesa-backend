@@ -12,6 +12,12 @@ import httpx
 
 from core.config import settings
 
+ADMIN_HOME_ADDRESS = "Via Palmiro Togliatti"
+ADMIN_HOME_CITY = "Polistena"
+ADMIN_HOME_PROVINCE = "RC"
+ADMIN_HOME_POSTAL_CODE = "89024"
+DEFAULT_LIST_NAME = "Lista spesa"
+
 
 @dataclass(frozen=True)
 class AdminSeed:
@@ -27,6 +33,7 @@ class AdminSeedResult:
     created_auth_user: bool
     updated_auth_user: bool
     profile_upserted: bool
+    default_list_created: bool
 
 
 @dataclass(frozen=True)
@@ -35,6 +42,13 @@ class AdminSeedHealth:
     user_id: str | None
     profile_role: str | None
     login_ok: bool
+
+
+@dataclass(frozen=True)
+class SeededAuthUser:
+    user_id: str
+    created: bool
+    updated: bool
 
 
 def load_admin_seed_from_env() -> AdminSeed:
@@ -53,10 +67,21 @@ def load_admin_seed_from_env() -> AdminSeed:
 
 
 def seed_admin_user(supabase_client, seed: AdminSeed) -> AdminSeedResult:
+    auth_user = _ensure_admin_auth_user(supabase_client, seed)
+    _upsert_admin_profile(supabase_client, seed, auth_user.user_id)
+    default_list_created = ensure_default_empty_list_for_user(supabase_client, auth_user.user_id)
+    return AdminSeedResult(
+        user_id=auth_user.user_id,
+        created_auth_user=auth_user.created,
+        updated_auth_user=auth_user.updated,
+        profile_upserted=True,
+        default_list_created=default_list_created,
+    )
+
+
+def _ensure_admin_auth_user(supabase_client, seed: AdminSeed) -> SeededAuthUser:
     existing = find_user_by_email(supabase_client.auth.admin, seed.email)
-    created = existing is None
-    updated = False
-    if created:
+    if existing is None:
         user = supabase_client.auth.admin.create_user(
             {
                 "email": seed.email,
@@ -65,33 +90,75 @@ def seed_admin_user(supabase_client, seed: AdminSeed) -> AdminSeedResult:
                 "app_metadata": {"role": seed.jwt_role},
             }
         ).user
-        user_id = user.id
-        app_metadata = {"role": seed.jwt_role}
-    else:
-        user_id = existing.id
-        app_metadata = getattr(existing, "app_metadata", {}) or {}
-        if app_metadata.get("role") != seed.jwt_role:
-            supabase_client.auth.admin.update_user_by_id(
-                user_id,
-                {"app_metadata": {"role": seed.jwt_role}},
-            )
-            updated = True
-            app_metadata = {"role": seed.jwt_role}
+        return SeededAuthUser(user_id=user.id, created=True, updated=False)
+    app_metadata = getattr(existing, "app_metadata", {}) or {}
+    if app_metadata.get("role") == seed.jwt_role:
+        return SeededAuthUser(user_id=existing.id, created=False, updated=False)
+    supabase_client.auth.admin.update_user_by_id(
+        existing.id,
+        {"app_metadata": {"role": seed.jwt_role}},
+    )
+    return SeededAuthUser(user_id=existing.id, created=False, updated=True)
+
+
+def _upsert_admin_profile(supabase_client, seed: AdminSeed, user_id: str) -> None:
     supabase_client.table("user_profiles").upsert(
-        {
-            "id": user_id,
-            "display_name": _display_name_from_email(seed.email),
-            "role": seed.profile_role,
-            "managed_supermarket_id": None,
-        },
+        _admin_profile_payload(seed, user_id),
         on_conflict="id",
     ).execute()
-    return AdminSeedResult(
-        user_id=user_id,
-        created_auth_user=created,
-        updated_auth_user=updated,
-        profile_upserted=True,
+
+
+def _admin_profile_payload(seed: AdminSeed, user_id: str) -> dict:
+    return {
+        "id": user_id,
+        "display_name": _display_name_from_email(seed.email),
+        "home_address": ADMIN_HOME_ADDRESS,
+        "home_city": ADMIN_HOME_CITY,
+        "home_province": ADMIN_HOME_PROVINCE,
+        "home_postal_code": ADMIN_HOME_POSTAL_CODE,
+        "role": seed.profile_role,
+        "managed_supermarket_id": None,
+    }
+
+
+def ensure_default_empty_list_for_user(supabase_client, user_id: str) -> bool:
+    list_id = _find_active_list_id_for_user(supabase_client, user_id)
+    if list_id is not None:
+        _ensure_owner_membership(supabase_client, list_id, user_id)
+        return False
+    list_id = _create_default_empty_list(supabase_client, user_id)
+    _ensure_owner_membership(supabase_client, list_id, user_id)
+    return True
+
+
+def _find_active_list_id_for_user(supabase_client, user_id: str) -> str | None:
+    result = (
+        supabase_client.table("shopping_lists")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
     )
+    rows = result.data or []
+    return None if not rows else rows[0]["id"]
+
+
+def _create_default_empty_list(supabase_client, user_id: str) -> str:
+    result = supabase_client.table("shopping_lists").insert(
+        {"user_id": user_id, "name": DEFAULT_LIST_NAME, "items": [], "is_active": True}
+    ).execute()
+    rows = result.data or []
+    if not rows:
+        raise RuntimeError("Default shopping list creation returned no row.")
+    return rows[0]["id"]
+
+
+def _ensure_owner_membership(supabase_client, list_id: str, user_id: str) -> None:
+    supabase_client.table("list_members").upsert(
+        {"list_id": list_id, "user_id": user_id, "role": "owner"},
+        on_conflict="list_id,user_id",
+    ).execute()
 
 
 def check_admin_seed_health(supabase_client, seed: AdminSeed) -> AdminSeedHealth:

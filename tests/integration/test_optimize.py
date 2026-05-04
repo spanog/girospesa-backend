@@ -21,6 +21,7 @@ from fastapi import FastAPI
 
 from api.routers.optimize import router as optimize_router
 from core.auth import get_current_user_id
+from services.product_format import build_format_bundle
 
 app = FastAPI()
 app.include_router(optimize_router, prefix="/optimize")
@@ -32,15 +33,20 @@ app.include_router(optimize_router, prefix="/optimize")
 _FUTURE_DATE = "2099-12-31"
 
 
-def _make_list_item(name: str) -> dict:
+def _make_list_item(
+    name: str,
+    *,
+    pinned_product_id: str | None = None,
+    pinned_offer_id: str | None = None,
+) -> dict:
     return {
         "id": str(uuid.uuid4()),
         "name": name,
         "checked": False,
         "added_by": None,
         "added_at": None,
-        "pinned_product_id": None,
-        "pinned_offer_id": None,
+        "pinned_product_id": pinned_product_id,
+        "pinned_offer_id": pinned_offer_id,
         "found_deals": [],
     }
 
@@ -87,9 +93,20 @@ def seeded_supermarket(supabase_client, clean_db):
 @pytest.fixture()
 def seeded_product(supabase_client, seeded_supermarket):
     """Insert a canonical product; return its row."""
+    format_bundle = build_format_bundle({
+        "tipo": "confezione_singola",
+        "peso_volume": 1,
+        "unita_misura": "L",
+    })
     row = (
         supabase_client.table("products")
-        .insert({"name": "Latte intero", "brand": "Granarolo", "format": "1L"})
+        .insert({
+            "name": "Latte intero",
+            "brand": "Granarolo",
+            "format": format_bundle.format_compact,
+            "format_key": format_bundle.format_key,
+            "format_label": format_bundle.format_label,
+        })
         .execute()
     ).data[0]
     return row
@@ -146,6 +163,53 @@ def shopping_list_no_match(supabase_client, auth_user, seeded_offer):
     row = (
         supabase_client.table("shopping_lists")
         .insert({"user_id": auth_user, "name": "No-match list", "items": items})
+        .execute()
+    ).data[0]
+    return row
+
+
+@pytest.fixture()
+def shopping_list_pinned_offer_and_no_match(
+    supabase_client, auth_user, seeded_product, seeded_offer
+):
+    """Create a list with one pinned offer item and one manual no-match item."""
+    items = [
+        _make_list_item(
+            "Latte scelto da offerta",
+            pinned_product_id=seeded_product["id"],
+            pinned_offer_id=seeded_offer["id"],
+        ),
+        _make_list_item("Articolo inesistente XYZ 999"),
+    ]
+    row = (
+        supabase_client.table("shopping_lists")
+        .insert({"user_id": auth_user, "name": "Mixed list", "items": items})
+        .execute()
+    ).data[0]
+    return row
+
+
+@pytest.fixture()
+def shopping_list_pinned_open_ended_offer(
+    supabase_client, auth_user, seeded_product, seeded_offer
+):
+    """Create a pinned offer list item whose offer has no valid_to date."""
+    (
+        supabase_client.table("offers")
+        .update({"valid_to": None})
+        .eq("id", seeded_offer["id"])
+        .execute()
+    )
+    items = [
+        _make_list_item(
+            "Latte offerta senza scadenza",
+            pinned_product_id=seeded_product["id"],
+            pinned_offer_id=seeded_offer["id"],
+        )
+    ]
+    row = (
+        supabase_client.table("shopping_lists")
+        .insert({"user_id": auth_user, "name": "Open-ended offer list", "items": items})
         .execute()
     ).data[0]
     return row
@@ -234,6 +298,49 @@ class TestOptimizeIntegration:
         assert body["store_groups"] == []
         assert len(body["unmatched_items"]) == 1
         assert "Articolo inesistente XYZ 999" in body["unmatched_items"]
+
+    async def test_optimize_keeps_pinned_offer_when_manual_item_has_no_match(
+        self, supabase_client, shopping_list_pinned_offer_and_no_match, seeded_offer
+    ):
+        """Pinned offer item stays covered while manual no-match item is unmatched."""
+        sb = _supabase_with_real_db(supabase_client)
+
+        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+            with patch("api.routers.optimize.get_supabase", return_value=sb):
+                resp = await client.post(
+                    "/optimize",
+                    json={"list_id": shopping_list_pinned_offer_and_no_match["id"]},
+                )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["coverage_percent"] == 50
+        assert body["unmatched_items"] == ["Articolo inesistente XYZ 999"]
+        assert len(body["store_groups"]) == 1
+        assert len(body["store_groups"][0]["products"]) == 1
+
+        matched = body["store_groups"][0]["products"][0]
+        assert matched["offer_id"] == seeded_offer["id"]
+        assert matched["match_score"] == pytest.approx(1.0)
+
+    async def test_optimize_keeps_pinned_offer_without_valid_to(
+        self, supabase_client, shopping_list_pinned_open_ended_offer, seeded_offer
+    ):
+        """Pinned active offer with valid_to NULL remains optimizable."""
+        sb = _supabase_with_real_db(supabase_client)
+
+        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+            with patch("api.routers.optimize.get_supabase", return_value=sb):
+                resp = await client.post(
+                    "/optimize",
+                    json={"list_id": shopping_list_pinned_open_ended_offer["id"]},
+                )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["coverage_percent"] == 100
+        assert body["unmatched_items"] == []
+        assert body["store_groups"][0]["products"][0]["offer_id"] == seeded_offer["id"]
 
     async def test_optimize_minimize_stores_mode(
         self, supabase_client, shopping_list_with_match

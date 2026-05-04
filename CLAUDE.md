@@ -35,6 +35,16 @@
 
 - Match pinned client API exactly. Example: PostgREST `.order()` expects `nullsfirst`, not `nulls_first`.
 
+## Admin Seed
+
+- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, and one active empty owner shopping list.
+- New auth users must get one active empty owner shopping list from the DB signup trigger; keep this in sync with webapp Supabase migrations.
+
+## Optimizer
+
+- `/optimize` must resolve `pinned_offer_id` before fuzzy matching. A list item added from an offer is an exact offer match (`match_score=1.0`) when the offer is active and in range.
+- Active offer filtering must stay null-safe and match public visibility windows: `valid_from IS NULL OR valid_from <= today`, `valid_to IS NULL OR valid_to >= today`.
+
 ## Ignore Rules
 
 - Track `.env.example` and `.env.test.example`.

@@ -39,6 +39,17 @@ def test_sql_seed_no_longer_owns_admin_user_bootstrap():
     assert '"role":"admin"' not in seed
 
 
+def test_auth_user_trigger_creates_default_empty_owner_list():
+    migrations = "\n".join(
+        path.read_text()
+        for path in sorted((BACKEND_ROOT.parent / "lista-spesa-furba-webapp/supabase/migrations").glob("*.sql"))
+    )
+
+    assert "INSERT INTO shopping_lists (user_id, name, items, is_active)" in migrations
+    assert "INSERT INTO list_members (list_id, user_id, role)" in migrations
+    assert "ON CONFLICT (list_id, user_id) DO NOTHING" in migrations
+
+
 def test_pyproject_exposes_admin_seed_tasks():
     pyproject = _read("pyproject.toml")
     requirements = _read("requirements.txt")

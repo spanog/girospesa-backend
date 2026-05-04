@@ -17,6 +17,7 @@ sys.modules["core.database"] = _db_mod
 
 _auth_mod = types.ModuleType("core.auth")
 _auth_mod.require_admin = MagicMock()  # type: ignore[attr-defined]
+_auth_mod.require_admin_or_manager = MagicMock()  # type: ignore[attr-defined]
 sys.modules["core.auth"] = _auth_mod
 
 _config_mod = types.ModuleType("core.config")

@@ -49,6 +49,17 @@ from api.routers.push import SubscribeBody, UnsubscribeBody
 from services.push_notify import PushEndpointGoneError, PushSubscription, notify_extraction_complete, send_push_notification
 
 
+@pytest.fixture(autouse=True)
+def _use_stubbed_webpush(monkeypatch: pytest.MonkeyPatch):
+    import services.push_notify as push_notify
+
+    mock_webpush = sys.modules["pywebpush"].webpush
+    mock_webpush.reset_mock()
+    monkeypatch.setattr(push_notify, "webpush", mock_webpush)
+    monkeypatch.setattr(push_notify, "WebPushException", sys.modules["pywebpush"].WebPushException)
+    monkeypatch.setattr(push_notify, "settings", _settings_stub)
+
+
 # ── SubscribeBody ─────────────────────────────────────────────────────────────
 
 class TestSubscribeBody:
