@@ -107,8 +107,19 @@ async def get_active_list(user_id: Annotated[str, Depends(get_current_user_id)])
         row["items"] = _enrich_items_with_categories(sb, row.get("items") or [])
         return row
 
-    # Auto-create
-    new_list_id = sb.rpc("create_list", {"p_name": "Lista spesa"}).execute().data
+    # Auto-create — use explicit user_id; service-role client has no auth.uid()
+    new_list = (
+        sb.table("shopping_lists")
+        .insert({"user_id": user_id, "name": "Lista spesa", "is_active": True, "items": []})
+        .execute()
+        .data[0]
+    )
+    new_list_id = new_list["id"]
+    sb.table("list_members").insert({
+        "list_id": new_list_id,
+        "user_id": user_id,
+        "role": "owner",
+    }).execute()
     row = sb.table("shopping_lists").select("*").eq("id", new_list_id).single().execute().data
     row["items"] = _enrich_items_with_categories(sb, row.get("items") or [])
     return row
@@ -234,13 +245,25 @@ async def list_members(
 ) -> list[dict]:
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
-    resp = (
+    members = (
         sb.table("list_members")
-        .select("*, user_profiles(display_name, avatar_url)")
+        .select("*")
         .eq("list_id", list_id)
         .execute()
+        .data
     )
-    return resp.data
+    member_ids = [m["user_id"] for m in members]
+    profiles = (
+        sb.table("user_profiles")
+        .select("id, display_name, avatar_url")
+        .in_("id", member_ids)
+        .execute()
+        .data
+    ) if member_ids else []
+    profiles_by_id = {p["id"]: p for p in profiles}
+    for m in members:
+        m["user_profiles"] = profiles_by_id.get(m["user_id"])
+    return members
 
 
 @router.get("/{list_id}/deal-freshness")
