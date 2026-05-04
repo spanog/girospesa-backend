@@ -8,7 +8,7 @@ import psycopg2
 import psycopg2.extras
 
 
-DB_DSN = os.getenv("DB_DSN", "postgresql://postgres:postgres@127.0.0.1:54322/postgres")
+DB_DSN = os.environ["DB_DSN"]
 
 
 def _fetch_all(query: str) -> list[dict]:

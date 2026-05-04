@@ -25,6 +25,7 @@ from fastapi import FastAPI
 
 from api.routers.favorites import router as favorites_router
 from core.auth import get_current_user_id
+from services.product_format import build_format_bundle
 
 app = FastAPI()
 app.include_router(favorites_router, prefix="/favorites")
@@ -68,9 +69,18 @@ def supermarket(supabase_client, clean_db):
 
 @pytest.fixture()
 def product(supabase_client, supermarket):
+    bundle = build_format_bundle(
+        {"tipo": "confezione_singola", "peso_volume": 500, "unita_misura": "g"}
+    )
     row = (
         supabase_client.table("products")
-        .insert({"name": "Pasta Barilla", "brand": "Barilla", "format": "500g"})
+        .insert({
+            "name": "Pasta Barilla",
+            "brand": "Barilla",
+            "format": bundle.format_compact,
+            "format_key": bundle.format_key,
+            "format_label": bundle.format_label,
+        })
         .execute()
     ).data[0]
     return row
@@ -178,8 +188,7 @@ class TestFavoritesLifecycle:
         items = resp.json()
         assert len(items) == 1
         assert items[0]["product_id"] == product["id"]
-        assert items[0]["has_active_offer"] is False
-        assert items[0]["active_offer"] is None
+        assert items[0]["best_offer"] is None
 
     async def test_favorite_stable_on_flyer_deletion(
         self, supabase_client, auth_user, product, supermarket, flyer
@@ -236,9 +245,8 @@ class TestFavoritesLifecycle:
         items = resp.json()
         assert len(items) == 1
         assert items[0]["product_id"] == product["id"]
-        assert items[0]["has_active_offer"] is True
-        assert items[0]["active_offer"]["id"] == new_offer["id"]
-        assert items[0]["active_offer"]["price_offer"] == pytest.approx(0.89)
+        assert items[0]["best_offer"]["offer_id"] == new_offer["id"]
+        assert items[0]["best_offer"]["price_offer"] == pytest.approx(0.89)
 
         # Verify the favorites row itself was never touched
         fav_row = (
@@ -254,7 +262,7 @@ class TestFavoritesLifecycle:
         self, supabase_client, auth_user, product, supermarket
     ):
         """When no offer with is_active=true exists for the favorited product,
-        GET /favorites returns has_active_offer=False and active_offer=None."""
+        GET /favorites returns best_offer=None."""
         _insert_offer(supabase_client, product, supermarket, _PAST_DATE)
         _insert_favorite(supabase_client, auth_user, product["id"])
 
@@ -265,8 +273,7 @@ class TestFavoritesLifecycle:
         assert resp.status_code == 200
         items = resp.json()
         assert len(items) == 1
-        assert items[0]["has_active_offer"] is False
-        assert items[0]["active_offer"] is None
+        assert items[0]["best_offer"] is None
 
     async def test_post_favorites_requires_product_id(self, supabase_client, auth_user):
         """POST /favorites without product_id must return 422 (validation error)."""

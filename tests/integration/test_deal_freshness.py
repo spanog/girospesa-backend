@@ -3,11 +3,7 @@
 Seeds products and offers with valid_to in past/future, then verifies that
 the endpoint returns the correct DealFreshnessStatus for each scenario.
 
-Requires `supabase start` (local Supabase stack).
-
-Run:
-    supabase start
-    pytest tests/integration/test_deal_freshness.py -v
+Runs against the isolated integration Docker stack.
 """
 
 from __future__ import annotations
@@ -21,6 +17,7 @@ from fastapi import FastAPI
 
 from api.routers.lists import router as lists_router
 from core.auth import get_current_user_id
+from services.product_format import build_format_bundle
 
 app = FastAPI()
 app.include_router(lists_router, prefix="/lists")
@@ -89,9 +86,18 @@ def supermarket(supabase_client, clean_db):
 
 @pytest.fixture()
 def product(supabase_client, supermarket):
+    bundle = build_format_bundle(
+        {"tipo": "confezione_singola", "peso_volume": 1, "unita_misura": "L"}
+    )
     row = (
         supabase_client.table("products")
-        .insert({"name": "Latte intero", "brand": "Granarolo", "format": "1L"})
+        .insert({
+            "name": "Latte intero",
+            "brand": "Granarolo",
+            "format": bundle.format_compact,
+            "format_key": bundle.format_key,
+            "format_label": bundle.format_label,
+        })
         .execute()
     ).data[0]
     return row

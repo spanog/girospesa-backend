@@ -19,6 +19,8 @@ import uuid
 
 import pytest
 
+from services.product_format import build_format_bundle
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -55,13 +57,18 @@ def supermarket_row(supabase_client):
 
 @pytest.fixture()
 def product_row(supabase_client):
+    bundle = build_format_bundle(
+        {"tipo": "confezione_singola", "peso_volume": 500, "unita_misura": "g"}
+    )
     row = (
         supabase_client.table("products")
         .insert(
             {
                 "name": f"Prodotto GDPR {uuid.uuid4().hex[:6]}",
                 "brand": "TestBrand",
-                "format": "500g",
+                "format": bundle.format_compact,
+                "format_key": bundle.format_key,
+                "format_label": bundle.format_label,
             }
         )
         .execute()

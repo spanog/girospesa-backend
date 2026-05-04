@@ -427,7 +427,7 @@ Valori locali canonici:
 - `SUPABASE_SERVICE_ROLE_KEY` e `SUPABASE_JWT_SECRET` si copiano da `supabase status -o env`
 - `ADMIN_EMAIL` e `ADMIN_PASSWORD` servono per seedare utente admin via API service-role
 - `.env` backend deve contenere solo variabili lette da FastAPI; credenziali Docker/Supabase CLI come `POSTGRES_PASSWORD`, `ANON_KEY`, `JWT_SECRET` e `SERVICE_ROLE_KEY` non vanno copiate qui
-- `.env.test` e' locale-only ed e' ignorato da Git; il template tracciato resta `.env.test.example`
+- `.env.test` e' locale-only ed e' ignorato da Git; i test integration sovrascrivono questi valori con lo stack Docker isolato su porte `55421`/`55422`
 
 ### 3. Avviare lo stack Supabase locale
 
@@ -605,17 +605,25 @@ pytest tests/unit -v
 pytest tests/ -v --ignore=tests/integration   # tutto tranne integration
 ```
 
-### Test di integrazione (richiede `supabase start`)
+### Test di integrazione (stack Docker isolato)
 
 ```bash
-# 1. Avvia lo stack locale
-supabase start
-
-# 2. Prepara il file locale dei test
+# 1. Prepara il file locale dei test
 cp .env.test.example .env.test
 
-# 3. Esegui i test
-pytest tests/integration -v
+# 2. Esegui i test: pytest avvia e distrugge solo i container integration
+.venv/bin/python -m pytest tests/integration -v
+```
+
+Lo stack integration usa `docker-compose.integration.yml` con progetto Docker `lista-spesa-furba-itest`, volumi dedicati e porte `55421` (API/Kong) + `55422` (PostgreSQL). Non usa `supabase start`, non legge `supabase status` e non cancella dati dello stack locale.
+
+Comandi manuali utili:
+
+```bash
+.venv/bin/python -m scripts.integration_stack up
+.venv/bin/python -m scripts.integration_stack status
+.venv/bin/python -m scripts.integration_stack env
+.venv/bin/python -m scripts.integration_stack down
 ```
 
 FastAPI non deve essere avviato separatamente: i test HTTP usano l'app in-process via HTTPX/ASGI.

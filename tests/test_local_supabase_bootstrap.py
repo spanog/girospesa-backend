@@ -17,6 +17,24 @@ def test_compose_persists_database_and_storage_volumes():
     assert "storage_data:/var/lib/storage" in compose
 
 
+def test_integration_compose_uses_isolated_project_and_volumes():
+    compose = _read("docker-compose.integration.yml")
+
+    assert "name: lista-spesa-furba-itest" in compose
+    assert "itest_pgdata:/var/lib/postgresql/data" in compose
+    assert "itest_storage_data:/var/lib/storage" in compose
+
+
+def test_integration_compose_avoids_dev_ports():
+    compose = _read("docker-compose.integration.yml")
+
+    assert "54321" not in compose
+    assert "54322" not in compose
+    assert "54323" not in compose
+    assert "55421:8000" in compose
+    assert "55422:5432" in compose
+
+
 def test_compose_mounts_local_bootstrap_inputs():
     compose = _read("docker-compose.yml")
 
@@ -25,11 +43,40 @@ def test_compose_mounts_local_bootstrap_inputs():
     assert "./supabase/seed.sql:/supabase-backend/seed.sql:ro" in compose
 
 
+def test_integration_compose_mounts_bootstrap_inputs():
+    compose = _read("docker-compose.integration.yml")
+
+    assert "./supabase/init/001-bootstrap-local-db.sh:/docker-entrypoint-initdb.d/zzz-bootstrap-local-db.sh:ro" in compose
+    assert "../lista-spesa-furba-webapp/supabase/migrations:/supabase-webapp-migrations:ro" in compose
+    assert "./supabase/seed.sql:/supabase-backend/seed.sql:ro" in compose
+
+
+def test_integration_fixture_does_not_shell_out_to_supabase_cli():
+    conftest = _read("tests/conftest.py")
+    integration_conftest = _read("tests/integration/conftest.py")
+
+    assert "supabase status" not in conftest
+    assert "supabase status" not in integration_conftest
+    assert "ensure_integration_stack" in integration_conftest
+
+
 def test_bootstrap_script_applies_schema_then_seed():
     bootstrap = _read("supabase/init/001-bootstrap-local-db.sh")
 
     assert "/supabase-webapp-migrations/*.sql" in bootstrap
     assert "/supabase-backend/seed.sql" in bootstrap
+
+
+def test_bootstrap_adds_storage_public_compat_column():
+    bootstrap = _read("supabase/init/001-bootstrap-local-db.sh")
+
+    assert "ADD COLUMN IF NOT EXISTS public boolean" in bootstrap
+
+
+def test_bootstrap_reapplies_offer_function_search_path():
+    bootstrap = _read("supabase/init/001-bootstrap-local-db.sh")
+
+    assert "ALTER FUNCTION public.offers_compute_fields() SET search_path = public" in bootstrap
 
 
 def test_sql_seed_no_longer_owns_admin_user_bootstrap():

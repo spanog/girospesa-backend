@@ -25,7 +25,7 @@ from api.routers._offer_utils import (
 
 router = APIRouter()
 
-ALLOWED_CONTENT_TYPES = {"application/pdf"}
+ALLOWED_CONTENT_TYPES = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 

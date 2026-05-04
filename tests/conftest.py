@@ -8,7 +8,6 @@ esplicitamente `supabase_client` o `async_client`.
 import os
 import sys
 import inspect
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -24,36 +23,11 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(resolve_test_env_file(BACKEND_ROOT), override=False)
 
 
-_LOCAL_ENV_CACHE: dict[str, str] | None = None
-
-
 def _resolve_local_supabase_env(name: str) -> str:
     value = os.environ.get(name, "")
     if value and not value.startswith("<local-"):
         return value
-    global _LOCAL_ENV_CACHE
-    if _LOCAL_ENV_CACHE is None:
-        output = subprocess.check_output(
-            ["supabase", "status", "-o", "env"],
-            text=True,
-        )
-        _LOCAL_ENV_CACHE = {}
-        for line in output.splitlines():
-            if "=" not in line:
-                continue
-            key, raw_value = line.split("=", 1)
-            _LOCAL_ENV_CACHE[key] = raw_value.strip().strip('"')
-    aliases = {
-        "SUPABASE_URL": "API_URL",
-        "SUPABASE_ANON_KEY": "ANON_KEY",
-        "SUPABASE_SERVICE_ROLE_KEY": "SERVICE_ROLE_KEY",
-        "SUPABASE_JWT_SECRET": "JWT_SECRET",
-    }
-    resolved = _LOCAL_ENV_CACHE.get(aliases[name], "")
-    if not resolved:
-        raise RuntimeError(f"Missing local Supabase value for {name}.")
-    os.environ[name] = resolved
-    return resolved
+    raise RuntimeError(f"Missing test Supabase value for {name}.")
 
 
 if "app" not in inspect.signature(httpx.AsyncClient.__init__).parameters:
@@ -68,12 +42,12 @@ if "app" not in inspect.signature(httpx.AsyncClient.__init__).parameters:
     httpx.AsyncClient = CompatAsyncClient
 
 # ---------------------------------------------------------------------------
-# Guard: verifica Supabase locale prima di qualsiasi test di integrazione
+# Guard: verifica Supabase test prima di qualsiasi test di integrazione
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session", autouse=False)
 def ensure_supabase_local():
-    """Verifica che lo stack Supabase locale (`supabase start`) sia raggiungibile.
+    """Verifica che lo stack Supabase configurato per i test sia raggiungibile.
 
     Non è autouse=True per non bloccare i test unitari che non ne hanno bisogno.
     I test di integrazione devono richiedere questa fixture esplicitamente o
@@ -86,8 +60,8 @@ def ensure_supabase_local():
         r.raise_for_status()
     except Exception as exc:
         pytest.exit(
-            f"Supabase locale non raggiungibile: {exc}\n"
-            "→ Esegui: cd lista-spesa-furba-backend && supabase start",
+            f"Supabase test non raggiungibile: {exc}\n"
+            "→ Esegui: .venv/bin/python -m scripts.integration_stack up",
             returncode=1,
         )
 

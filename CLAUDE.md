@@ -6,7 +6,8 @@
 - Start Supabase local stack: `supabase start`
 - Run app locally: `.venv/bin/python -m uvicorn main:app --reload --port 8000`
 - Run unit-style tests: `.venv/bin/python -m pytest tests -v --ignore=tests/integration --ignore=tests/performance`
-- Run integration tests: `.venv/bin/python -m pytest tests/integration -v`
+- Run integration tests in isolated Docker stack: `.venv/bin/python -m pytest tests/integration -v`
+- Manage integration stack manually: `.venv/bin/python -m scripts.integration_stack up|down|status|env`
 - Run performance tests: `.venv/bin/python -m pytest tests/performance -v -s`
 
 ## Git
