@@ -4,33 +4,54 @@ from __future__ import annotations
 
 import argparse
 import os
+import string
 import subprocess
 from pathlib import Path
+
+from jose import jwt as _jwt
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = BACKEND_ROOT / "docker-compose.integration.yml"
+KONG_TEMPLATE = BACKEND_ROOT / "supabase" / "kong.integration.yml.tmpl"
+KONG_CONFIG = BACKEND_ROOT / "supabase" / "kong.integration.yml"
 PROJECT_NAME = "lista-spesa-furba-itest"
 JWT_SECRET = "integration-test-jwt-secret-with-at-least-32-chars"
 SUPABASE_URL = "http://127.0.0.1:55421"
 DB_DSN = "postgresql://postgres:postgres@127.0.0.1:55422/postgres"
-ANON_KEY = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxpc3RhLXNwZXNhLWZ1cmJhLWl0ZXN0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTQwMDAwMDAsImV4cCI6MjA1OTU3NjAwMH0."
-    "niOpzk45dAkzvpGeOCVJ3cJzyRNPcFxLXokL9FERjVY"
-)
-SERVICE_ROLE_KEY = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxpc3RhLXNwZXNhLWZ1cmJhLWl0ZXN0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxNDAwMDAwMCwiZXhwIjoyMDU5NTc2MDAwfQ."
-    "iVUfCaRH6Wmq5WBZZp0Cy4PkOhL-qCB8OeoAYwDh0jg"
-)
+
+_JWT_BASE_PAYLOAD = {
+    "iss": "supabase",
+    "ref": "lista-spesa-furba-itest",
+    "iat": 1714000000,
+    "exp": 2059576000,
+}
+
+
+def _make_jwt(role: str) -> str:
+    return _jwt.encode({**_JWT_BASE_PAYLOAD, "role": role}, JWT_SECRET, algorithm="HS256")
+
+
+def _anon_key() -> str:
+    return _make_jwt("anon")
+
+
+def _service_role_key() -> str:
+    return _make_jwt("service_role")
+
+
+def _generate_kong_config() -> None:
+    template = string.Template(KONG_TEMPLATE.read_text())
+    KONG_CONFIG.write_text(
+        template.substitute(ANON_KEY=_anon_key(), SERVICE_ROLE_KEY=_service_role_key())
+    )
 
 
 def integration_env() -> dict[str, str]:
     return {
         "SUPABASE_URL": SUPABASE_URL,
-        "SUPABASE_ANON_KEY": ANON_KEY,
-        "SUPABASE_SERVICE_ROLE_KEY": SERVICE_ROLE_KEY,
+        "SUPABASE_ANON_KEY": _anon_key(),
+        "SUPABASE_SERVICE_ROLE_KEY": _service_role_key(),
         "SUPABASE_JWT_SECRET": JWT_SECRET,
         "DB_DSN": DB_DSN,
         "ADMIN_EMAIL": "test-admin@local.test",
@@ -81,6 +102,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "up":
+        _generate_kong_config()
         run_compose("up", "-d", "--wait")
     elif args.command == "down":
         run_compose("down", "-v", "--remove-orphans")
