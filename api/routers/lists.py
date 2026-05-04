@@ -44,6 +44,10 @@ class InviteBody(BaseModel):
     email: str | None = None
 
 
+class UpdateItemQuantityBody(BaseModel):
+    quantity: float
+
+
 def _product_categories(sb: object, product_ids: set[str]) -> dict[str, dict]:
     if not product_ids:
         return {}
@@ -228,6 +232,21 @@ async def toggle_item(
     if toggled is None:
         raise HTTPException(status_code=404, detail="Item not found")
     return toggled
+
+
+@router.patch("/{list_id}/items/{item_id}")
+async def patch_item_quantity(
+    list_id: str,
+    item_id: str,
+    body: UpdateItemQuantityBody,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
+    current = sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
+    updated_items = _patch_quantity_in_items(current.data["items"], item_id, body.quantity)
+    sb.table("shopping_lists").update({"items": updated_items}).eq("id", list_id).execute()
+    return next(i for i in updated_items if i["id"] == item_id)
 
 
 @router.post("/{list_id}/invite")

@@ -50,3 +50,102 @@ def test_raises_422_when_quantity_negative():
     with pytest.raises(HTTPException) as exc_info:
         _patch_quantity_in_items(items, "item-1", -1.0)
     assert exc_info.value.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Endpoint tests — PATCH /lists/{list_id}/items/{item_id}
+# ---------------------------------------------------------------------------
+
+import sys
+import os
+import types
+from unittest.mock import MagicMock, patch
+
+# Stub infrastructure (same pattern as test_favorites_router.py)
+for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders"):
+    if _mod not in sys.modules:
+        sys.modules[_mod] = MagicMock()
+
+_config_mod = types.ModuleType("core.config")
+_config_mod.settings = MagicMock()
+sys.modules["core.config"] = _config_mod
+sys.modules["core.database"] = MagicMock()
+
+_auth_mod = types.ModuleType("core.auth")
+_auth_mod.get_current_user_id = MagicMock()
+sys.modules["core.auth"] = _auth_mod
+
+import httpx
+from fastapi import FastAPI
+import api.routers.lists as _lists_module
+from api.routers.lists import router as _lists_router
+
+_DEP_GET_USER_ID = _lists_module.get_current_user_id
+
+_test_app = FastAPI()
+_test_app.include_router(_lists_router, prefix="/lists")
+
+_LIST_ID = "list-abc"
+_ITEM_ID = "item-1"
+_USER_ID = "user-xyz"
+
+
+def _deps(user_id: str = _USER_ID) -> dict:
+    return {_DEP_GET_USER_ID: lambda: user_id}
+
+
+async def _patch_req(url: str, json: dict, dep_overrides: dict | None = None) -> httpx.Response:
+    _test_app.dependency_overrides = dep_overrides or {}
+    transport = httpx.ASGITransport(app=_test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.patch(url, json=json)
+
+
+async def test_patch_quantity_returns_updated_item():
+    initial_items = [
+        {"id": _ITEM_ID, "name": "Latte", "quantity": 1.0, "checked": False, "purchased": False}
+    ]
+    sb_mock = MagicMock()
+    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+        "items": initial_items
+    }
+    sb_mock.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None):
+        resp = await _patch_req(
+            f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
+            json={"quantity": 3.0},
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["quantity"] == 3.0
+    assert resp.json()["id"] == _ITEM_ID
+
+
+async def test_patch_quantity_422_on_zero():
+    sb_mock = MagicMock()
+    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+        "items": [{"id": _ITEM_ID, "name": "Latte", "quantity": 1.0, "checked": False, "purchased": False}]
+    }
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None):
+        resp = await _patch_req(
+            f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
+            json={"quantity": 0},
+            dep_overrides=_deps(),
+        )
+    assert resp.status_code == 422
+
+
+async def test_patch_quantity_403_non_member():
+    from fastapi import HTTPException
+    with patch.object(_lists_module, "get_supabase", return_value=MagicMock()), \
+         patch.object(_lists_module, "_verify_member", side_effect=HTTPException(status_code=403, detail="Not a member")):
+        resp = await _patch_req(
+            f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
+            json={"quantity": 2.0},
+            dep_overrides=_deps(),
+        )
+    assert resp.status_code == 403
