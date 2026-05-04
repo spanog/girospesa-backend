@@ -89,6 +89,24 @@ def _enrich_items_with_categories(sb: object, items: list[dict]) -> list[dict]:
     return [_category_for_item(item, products, offers) for item in items]
 
 
+def _patch_quantity_in_items(
+    items: list[dict], item_id: str, quantity: float
+) -> list[dict]:
+    if quantity < 1:
+        raise HTTPException(status_code=422, detail="quantity must be >= 1")
+    updated = []
+    found = False
+    for item in items:
+        if item["id"] == item_id:
+            updated.append({**item, "quantity": quantity})
+            found = True
+        else:
+            updated.append(item)
+    if not found:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return updated
+
+
 @router.get("/active")
 async def get_active_list(user_id: Annotated[str, Depends(get_current_user_id)]) -> dict:
     """Return the user's active shopping list (most recent). Creates one if none exists."""
