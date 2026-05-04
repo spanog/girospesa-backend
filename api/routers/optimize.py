@@ -60,6 +60,7 @@ class MatchedProduct(BaseModel):
     unit_price_value: float | None = None
     unit_price_unit: str | None = None
     unit_price_label: str | None = None
+    quantity: float = 1.0
     match_score: float
     alternatives: list[ProductAlternative]
 
@@ -349,6 +350,10 @@ async def optimize(
                 for alt in coverage[item_id]
             ]
 
+            item_quantity = float(
+                next((i.get("quantity", 1) for i in unchecked if i["id"] == item_id), 1)
+            )
+
             store_groups[best_store_id]["products"].append(
                 MatchedProduct(
                     list_item_id=item_id,
@@ -371,12 +376,13 @@ async def optimize(
                         offer.get("unit_price_value"),
                         offer.get("unit_price_unit"),
                     ),
+                    quantity=item_quantity,
                     match_score=match["score"],
                     alternatives=alternatives,
                 )
             )
-            store_groups[best_store_id]["subtotal"] += float(offer["price_offer"])
-            store_groups[best_store_id]["savings"] += match["savings"]
+            store_groups[best_store_id]["subtotal"] += float(offer["price_offer"]) * item_quantity
+            store_groups[best_store_id]["savings"] += match["savings"] * item_quantity
             assigned.add(item_id)
             remaining.remove(item_id)
 
