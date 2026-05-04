@@ -18,6 +18,7 @@ from api.routers import (
     flyers,
     invite,
     lists,
+    offers,
     optimize,
     products,
     purchases,
@@ -74,6 +75,7 @@ app.include_router(push.router, prefix="/push", tags=["push"])
 app.include_router(flyer_requests.router, prefix="/flyer-requests", tags=["flyer-requests"])
 app.include_router(purchases.router, prefix="/purchases", tags=["purchases"])
 app.include_router(admin_products.router, prefix="/admin/products", tags=["admin-products"])
+app.include_router(offers.router, prefix="/offers", tags=["offers"])
 
 
 @app.get("/health")

@@ -212,6 +212,30 @@ class TestListProducts:
         )
 
     @pytest.mark.asyncio
+    async def test_expiring_soon_filter_applies_today_to_cutoff_window(self):
+        sb = MagicMock()
+        execute_result = MagicMock(data=[_LIST_ROW], count=1)
+        select_mock = sb.table.return_value.select.return_value
+        eq_mock = select_mock.eq.return_value
+        order_mock = eq_mock.order.return_value
+        order_mock.gte.return_value.lte.return_value.range.return_value.execute.return_value = (
+            execute_result
+        )
+        eq_mock.execute.return_value = MagicMock(data=[{"supermarket_id": "sm-1"}])
+        eq_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
+            data=[],
+            count=1,
+        )
+
+        with patch("api.routers.products.get_supabase", return_value=sb):
+            resp = await _get("/products?expiring_soon=true")
+
+        assert resp.status_code == 200
+        order_mock.gte.assert_called_once()
+        order_mock.gte.return_value.lte.assert_called_once()
+        order_mock.gte.return_value.lte.return_value.range.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_distance_filtering_restricts_to_nearby_supermarkets(self):
         """When lat/lng provided, only supermarkets within max_distance_km are included."""
         offers_chain = MagicMock()
