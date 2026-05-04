@@ -220,7 +220,13 @@ class TestNotifyExtractionComplete:
         assert call_kwargs["title"] == "Estrazione completata"
         assert "15" in call_kwargs["body"]
         assert "Coop" in call_kwargs["body"]
-        assert call_kwargs["data"]["url"] == "/admin/volantini/flyer-42"
+        assert call_kwargs["data"] == {
+            "kind": "extraction_complete",
+            "flyer_id": "flyer-42",
+            "status": "done",
+            "products_count": 15,
+            "url": "/admin/volantini/flyer-42",
+        }
 
     def test_sends_error_push(self):
         sb = _make_sb_with_subscriptions([_SAMPLE_SUB])
@@ -237,6 +243,13 @@ class TestNotifyExtractionComplete:
         call_kwargs = mock_send.call_args.kwargs
         assert call_kwargs["title"] == "Estrazione fallita"
         assert "Esselunga" in call_kwargs["body"]
+        assert call_kwargs["data"] == {
+            "kind": "extraction_failed",
+            "flyer_id": "flyer-42",
+            "status": "error",
+            "products_count": 0,
+            "url": "/admin/volantini/flyer-42",
+        }
 
     def test_no_subscriptions_noop(self):
         sb = _make_sb_with_subscriptions([])

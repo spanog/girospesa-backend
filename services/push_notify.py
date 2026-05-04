@@ -102,9 +102,21 @@ def notify_extraction_complete(
     if success:
         title = "Estrazione completata"
         body = f"{products_count} prodotti estratti da {supermarket_name}"
+        kind = "extraction_complete"
+        status = "done"
     else:
         title = "Estrazione fallita"
         body = f"{supermarket_name}: {error_message}" if error_message else supermarket_name
+        kind = "extraction_failed"
+        status = "error"
+
+    data = {
+        "kind": kind,
+        "flyer_id": flyer_id,
+        "status": status,
+        "products_count": products_count,
+        "url": f"/admin/volantini/{flyer_id}",
+    }
 
     stale_endpoints: list[str] = []
     for sub in subscriptions:
@@ -118,7 +130,7 @@ def notify_extraction_complete(
                 title=title,
                 body=body,
                 icon="/favicon.ico",
-                data={"url": f"/admin/volantini/{flyer_id}"},
+                data=data,
             )
         except PushEndpointGoneError:
             stale_endpoints.append(sub["endpoint"])

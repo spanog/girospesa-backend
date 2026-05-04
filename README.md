@@ -209,6 +209,8 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python 
 | `POST` | `/push/unsubscribe` | ✅ | Cancella subscription |
 | `POST` | `/push/notify-favorites` | Webhook secret | Webhook Supabase: nuova offerta → notifica agli utenti che hanno quel prodotto tra i preferiti |
 
+Le notifiche Web Push di completamento/fallimento estrazione includono nel campo `data` anche `kind`, `flyer_id`, `status`, `products_count` e `url`. Il frontend usa questi campi per aggiornare subito la cache della gestione volantini e poi confermare lo stato tramite refetch HTTP.
+
 ### Acquisti (`/purchases`)
 
 | Metodo | Path | Auth | Descrizione |
