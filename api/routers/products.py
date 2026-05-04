@@ -84,6 +84,11 @@ def _apply_offer_filters(query, *, q, category, subcategory, supermarket_id, nea
     return query
 
 
+def _apply_expiring_soon_filter(query, *, today: date) -> object:
+    cutoff = today + timedelta(days=3)
+    return query.gte("valid_to", today.isoformat()).lte("valid_to", cutoff.isoformat())
+
+
 _SORT_OPTIONS: dict[str, tuple[str, bool]] = {
     "discount": ("discount_pct", True),
     "expiry": ("valid_to", False),
@@ -101,6 +106,7 @@ async def list_products(
     lng: float | None = Query(None, description="User longitude for distance filtering"),
     max_distance_km: float = Query(10.0, gt=0, le=100, description="Max supermarket distance in km"),
     sort: str | None = Query(None, description="Sort mode: discount | expiry"),
+    expiring_soon: bool = Query(False, description="Only offers expiring within 3 days"),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
 ) -> dict:
@@ -123,6 +129,7 @@ async def list_products(
             return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0, "expiring_soon_count": 0}
 
     filter_kwargs = dict(q=q, category=category, subcategory=subcategory, supermarket_id=supermarket_id, nearby_ids=nearby_ids)
+    today = date.today()
 
     sort_col, sort_desc = _SORT_OPTIONS.get(sort or "default", _SORT_OPTIONS["default"])
     nullsfirst = not sort_desc  # PostgREST Python client uses `nullsfirst`.
@@ -134,7 +141,10 @@ async def list_products(
         .order(sort_col, desc=sort_desc, nullsfirst=nullsfirst)
     )
     base_query = apply_current_offer_window(base_query)
-    query = _apply_offer_filters(base_query, **filter_kwargs).range(offset, offset + limit - 1)
+    filtered_query = _apply_offer_filters(base_query, **filter_kwargs)
+    if expiring_soon:
+        filtered_query = _apply_expiring_soon_filter(filtered_query, today=today)
+    query = filtered_query.range(offset, offset + limit - 1)
     response = query.execute()
 
     items = [_flatten_offer(offer) for offer in (response.data or [])]
@@ -156,18 +166,14 @@ async def list_products(
         sc_resp = sc_query.execute()
         supermarket_count = len({row["supermarket_id"] for row in (sc_resp.data or [])})
 
-        today = date.today()
-        cutoff = today + timedelta(days=3)
         es_query = (
             sb.table("offers")
             .select("id, products!inner(id)", count="exact")
             .eq("is_confirmed", True)
-            .gte("valid_to", today.isoformat())
-            .lte("valid_to", cutoff.isoformat())
         )
         es_query = apply_current_offer_window(es_query, today=today)
-        if nearby_ids is not None:
-            es_query = es_query.in_("supermarket_id", nearby_ids)
+        es_query = _apply_offer_filters(es_query, **filter_kwargs)
+        es_query = _apply_expiring_soon_filter(es_query, today=today)
         es_resp = es_query.execute()
         expiring_soon_count = es_resp.count or 0
 

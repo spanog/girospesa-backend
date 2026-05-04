@@ -14,15 +14,19 @@ from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
 from services.offer_visibility import apply_current_offer_window
 from services.product_format import ProductFormat, build_format_bundle
+from api.routers._offer_utils import (
+    _OFFER_PRODUCT_SELECT,
+    _flatten_draft_offer,
+    build_product_row,
+    upsert_product,
+    build_offer_row,
+    insert_and_fetch_offer,
+)
 
 router = APIRouter()
 
 ALLOWED_CONTENT_TYPES = {"application/pdf"}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
-
-_OFFER_PRODUCT_SELECT = (
-    "*, products(id, name, brand, category, subcategory, format, format_label, image_url)"
-)
 
 
 class DraftOfferUpdate(BaseModel):
@@ -53,25 +57,6 @@ class DraftOfferCreate(BaseModel):
     offer_notes: str | None = None
     valid_from: str | None = None
     valid_to: str | None = None
-
-
-def _flatten_draft_offer(offer: dict) -> dict:
-    offer = dict(offer)
-    product = offer.pop("products") or {}
-    return {
-        **offer,
-        "name": product.get("name", ""),
-        "brand": product.get("brand"),
-        "category": product.get("category"),
-        "subcategory": product.get("subcategory"),
-        "format": product.get("format"),
-        "format_label": product.get("format_label") or "",
-        "image_url": product.get("image_url"),
-        "unit_price_label": offer.get("unit_price") or format_unit_price_label(
-            offer.get("unit_price_value"),
-            offer.get("unit_price_unit"),
-        ),
-    }
 
 
 def _confirmed_count_by_flyer(sb, flyer_ids: list[str]) -> dict[str, int]:
@@ -505,65 +490,16 @@ async def create_draft_offer(
     )
     if not flyer_result or not flyer_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
-
     flyer = flyer_result.data
     _assert_flyer_access(sb, profile, flyer)
 
-    product_row = {
-        "name": payload.name,
-        "brand": payload.brand,
-        "category": payload.category,
-        "subcategory": payload.subcategory,
-    }
-    format_bundle = build_format_bundle(payload.format.model_dump(mode="json"))
-    product_row["format"] = format_bundle.format_compact
-    product_row["format_key"] = format_bundle.format_key
-    product_row["format_label"] = format_bundle.format_label
-    upsert_result = sb.table("products").upsert(product_row, on_conflict="name,brand,format_key").execute()
-    if upsert_result.data:
-        product_id = upsert_result.data[0]["id"]
-    else:
-        query = sb.table("products").select("id").eq("name", payload.name)
-        query = query.is_("brand", "null") if payload.brand is None else query.eq("brand", payload.brand)
-        query = query.eq("format_key", product_row["format_key"])
-        existing = query.limit(1).execute()
-        if not existing.data:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upsert product")
-        product_id = existing.data[0]["id"]
-
+    product_id = upsert_product(sb, build_product_row(payload))
     normalized_unit = normalize_unit_price_measure(payload.unit_price_unit) if payload.unit_price_unit else None
-    unit_price_label = format_unit_price_label(payload.unit_price_value, normalized_unit) if payload.unit_price_value else None
-
-    offer_id = str(uuid.uuid4())
-    offer_row = {
-        "id": offer_id,
-        "product_id": product_id,
-        "flyer_id": flyer_id,
-        "supermarket_id": flyer["supermarket_id"],
-        "supermarket_name": flyer.get("supermarket_name"),
-        "price_offer": payload.price_offer,
-        "price_original": payload.price_original,
-        "unit_price_value": payload.unit_price_value,
-        "unit_price_unit": normalized_unit,
-        "unit_price": unit_price_label,
-        "offer_notes": payload.offer_notes,
-        "valid_from": payload.valid_from or flyer.get("valid_from"),
-        "valid_to": payload.valid_to or flyer.get("valid_to"),
-        "is_confirmed": False,
-    }
-
-    insert_result = sb.table("offers").insert(offer_row).execute()
-    if not insert_result.data:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create offer")
-
-    inserted = (
-        sb.table("offers")
-        .select(_OFFER_PRODUCT_SELECT)
-        .eq("id", offer_id)
-        .single()
-        .execute()
-    )
-    return _flatten_draft_offer(inserted.data)
+    offer_row = build_offer_row(payload, product_id, flyer["supermarket_id"], flyer.get("supermarket_name"), flyer_id, normalized_unit)
+    # Apply flyer date fallback (flyers.py-specific concern)
+    offer_row["valid_from"] = offer_row["valid_from"] or flyer.get("valid_from")
+    offer_row["valid_to"] = offer_row["valid_to"] or flyer.get("valid_to")
+    return insert_and_fetch_offer(sb, offer_row)
 
 
 @router.patch("/{flyer_id}/draft-offers/{offer_id}")

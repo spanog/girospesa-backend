@@ -11,7 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 
-from core.auth import require_admin
+from core.auth import require_admin, require_admin_or_manager
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
 from services.product_format import ProductFormat, build_format_bundle
@@ -84,6 +84,18 @@ def _product_has_offers(product_id: str) -> bool:
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+
+@router.get("/search")
+async def search_products_catalog(
+    _profile: Annotated[dict, Depends(require_admin_or_manager)],
+    q: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=50),
+) -> list[dict]:
+    """Fuzzy search product catalog by name+brand via pg_trgm word_similarity."""
+    sb = get_supabase()
+    resp = sb.rpc("search_products_catalog", {"query": q, "lim": limit}).execute()
+    return resp.data or []
 
 
 @router.get("")
