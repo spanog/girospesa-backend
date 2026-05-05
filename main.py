@@ -48,8 +48,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Lista Spesa Furba API",
-    description="Backend API for Lista Spesa Furba — grocery deal optimizer.",
+    title="GiroSpesa API",
+    description="Backend API for GiroSpesa — grocery deal optimizer.",
     version="1.0.0",
     lifespan=lifespan,
 )

@@ -1,1 +1,1 @@
-/Users/giacomo/progetti/lista-spesa-furba/lista-spesa-furba-webapp/supabase/migrations/20260424103000_enable_rls_on_flyers.sql
+alter table public.flyers enable row level security;

@@ -15,14 +15,14 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_FILE = BACKEND_ROOT / "docker-compose.integration.yml"
 KONG_TEMPLATE = BACKEND_ROOT / "supabase" / "kong.integration.yml.tmpl"
 KONG_CONFIG = BACKEND_ROOT / "supabase" / "kong.integration.yml"
-PROJECT_NAME = "lista-spesa-furba-itest"
+PROJECT_NAME = "girospesa-itest"
 JWT_SECRET = "integration-test-jwt-secret-with-at-least-32-chars"
 SUPABASE_URL = "http://127.0.0.1:55421"
 DB_DSN = "postgresql://postgres:postgres@127.0.0.1:55422/postgres"
 
 _JWT_BASE_PAYLOAD = {
     "iss": "supabase",
-    "ref": "lista-spesa-furba-itest",
+    "ref": "girospesa-itest",
     "iat": 1714000000,
     "exp": 2059576000,
 }
@@ -53,6 +53,7 @@ def integration_env() -> dict[str, str]:
         "SUPABASE_ANON_KEY": _anon_key(),
         "SUPABASE_SERVICE_ROLE_KEY": _service_role_key(),
         "SUPABASE_JWT_SECRET": JWT_SECRET,
+        "SUPABASE_DB_CONTAINER": f"{PROJECT_NAME}-db-1",
         "DB_DSN": DB_DSN,
         "ADMIN_EMAIL": "test-admin@local.test",
         "ADMIN_PASSWORD": "TestAdmin123!",
@@ -81,6 +82,8 @@ def compose_command(*args: str) -> list[str]:
 
 
 def run_compose(*args: str) -> None:
+    if args and args[0] == "up":
+        _generate_kong_config()
     env = os.environ.copy()
     env.update(integration_env())
     subprocess.run(

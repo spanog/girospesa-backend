@@ -1,1 +1,176 @@
-/Users/giacomo/progetti/lista-spesa-furba/lista-spesa-furba-webapp/supabase/migrations/004_create_shopping_lists.sql
+-- Migration: create_shopping_lists + list_members + list_invites
+
+-- gen_random_bytes richiede pgcrypto
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- shopping_lists
+CREATE TABLE shopping_lists (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  name       TEXT DEFAULT 'Lista spesa',
+  items      JSONB NOT NULL DEFAULT '[]',
+  is_active  BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_shopping_lists_user_id ON shopping_lists(user_id);
+
+CREATE TRIGGER shopping_lists_updated_at
+  BEFORE UPDATE ON shopping_lists
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- list_members
+CREATE TABLE list_members (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  list_id    UUID NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,
+  user_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  role       TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner','member')),
+  invited_by UUID REFERENCES auth.users(id),
+  joined_at  TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(list_id, user_id)
+);
+
+CREATE INDEX idx_list_members_list_id ON list_members(list_id);
+CREATE INDEX idx_list_members_user_id ON list_members(user_id);
+
+-- list_invites
+CREATE TABLE list_invites (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  list_id     UUID NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,
+  invited_by  UUID NOT NULL REFERENCES auth.users(id),
+  token       TEXT UNIQUE NOT NULL DEFAULT replace(gen_random_uuid()::text,'-','') || replace(gen_random_uuid()::text,'-',''),
+  email       TEXT,
+  status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','expired','revoked')),
+  expires_at  TIMESTAMPTZ NOT NULL DEFAULT now() + interval '7 days',
+  accepted_at TIMESTAMPTZ,
+  accepted_by UUID REFERENCES auth.users(id),
+  created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_list_invites_token   ON list_invites(token);
+CREATE INDEX idx_list_invites_list_id ON list_invites(list_id);
+
+-- RPC: atomically create list + owner membership
+CREATE OR REPLACE FUNCTION create_list(p_name TEXT)
+RETURNS UUID AS $$
+DECLARE
+  v_list_id UUID;
+BEGIN
+  INSERT INTO shopping_lists (user_id, name)
+  VALUES (auth.uid(), p_name)
+  RETURNING id INTO v_list_id;
+
+  INSERT INTO list_members (list_id, user_id, role)
+  VALUES (v_list_id, auth.uid(), 'owner');
+
+  RETURN v_list_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- RPC: atomic per-item patch to avoid concurrent overwrites
+CREATE OR REPLACE FUNCTION update_list_item(
+  p_list_id UUID,
+  p_item_id TEXT,
+  p_patch   JSONB
+)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE shopping_lists
+  SET items = (
+    SELECT jsonb_agg(
+      CASE WHEN item->>'id' = p_item_id
+        THEN item || p_patch
+        ELSE item
+      END
+    )
+    FROM jsonb_array_elements(items) AS item
+  ),
+  updated_at = now()
+  WHERE id = p_list_id
+    AND EXISTS (
+      SELECT 1 FROM list_members lm
+      WHERE lm.list_id = p_list_id AND lm.user_id = auth.uid()
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- RLS: shopping_lists
+ALTER TABLE shopping_lists ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "lists_select"
+  ON shopping_lists FOR SELECT
+  TO authenticated
+  USING (
+    user_id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM list_members lm
+      WHERE lm.list_id = id AND lm.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "lists_insert"
+  ON shopping_lists FOR INSERT
+  TO authenticated
+  WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "lists_update"
+  ON shopping_lists FOR UPDATE
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM list_members lm
+      WHERE lm.list_id = id AND lm.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "lists_delete"
+  ON shopping_lists FOR DELETE
+  TO authenticated
+  USING (user_id = auth.uid());
+
+-- RLS: list_members
+ALTER TABLE list_members ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "list_members_select"
+  ON list_members FOR SELECT
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM list_members lm2
+      WHERE lm2.list_id = list_members.list_id AND lm2.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "list_members_insert_owner"
+  ON list_members FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM list_members lm
+      WHERE lm.list_id = list_members.list_id
+        AND lm.user_id = auth.uid()
+        AND lm.role = 'owner'
+    )
+    OR (user_id = auth.uid() AND role = 'owner')
+  );
+
+CREATE POLICY "list_members_delete_owner"
+  ON list_members FOR DELETE
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM list_members lm
+      WHERE lm.list_id = list_members.list_id
+        AND lm.user_id = auth.uid()
+        AND lm.role = 'owner'
+    )
+  );
+
+-- RLS: list_invites (only service_role + authenticated owners)
+ALTER TABLE list_invites ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "list_invites_select"
+  ON list_invites FOR SELECT
+  TO authenticated
+  USING (invited_by = auth.uid());

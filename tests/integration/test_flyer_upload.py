@@ -7,7 +7,7 @@ Storage is mocked because the endpoint test only needs DB-side effects; it does
 not depend on direct local Storage container exposure.
 
 Run:
-    supabase start                # from lista-spesa-furba-backend/
+    supabase start                # from girospesa-backend/
     pytest tests/integration/test_flyer_upload.py -v
 """
 

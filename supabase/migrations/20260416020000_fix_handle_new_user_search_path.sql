@@ -1,1 +1,3 @@
-/Users/giacomo/progetti/lista-spesa-furba/lista-spesa-furba-webapp/supabase/migrations/20260416020000_fix_handle_new_user_search_path.sql
+-- Fix search_path for SECURITY DEFINER function handle_new_user
+-- Without this, the function can't find 'user_profiles' when called from auth.users trigger
+ALTER FUNCTION handle_new_user() SET search_path = public;

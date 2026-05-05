@@ -20,7 +20,7 @@ def test_compose_persists_database_and_storage_volumes():
 def test_integration_compose_uses_isolated_project_and_volumes():
     compose = _read("docker-compose.integration.yml")
 
-    assert "name: lista-spesa-furba-itest" in compose
+    assert "name: girospesa-itest" in compose
     assert "itest_pgdata:/var/lib/postgresql/data" in compose
     assert "itest_storage_data:/var/lib/storage" in compose
 
@@ -39,7 +39,7 @@ def test_compose_mounts_local_bootstrap_inputs():
     compose = _read("docker-compose.yml")
 
     assert "./supabase/init/001-bootstrap-local-db.sh:/docker-entrypoint-initdb.d/zzz-bootstrap-local-db.sh:ro" in compose
-    assert "../lista-spesa-furba-webapp/supabase/migrations:/supabase-webapp-migrations:ro" in compose
+    assert "../girospesa-webapp/supabase/migrations:/supabase-webapp-migrations:ro" in compose
     assert "./supabase/seed.sql:/supabase-backend/seed.sql:ro" in compose
 
 
@@ -47,7 +47,7 @@ def test_integration_compose_mounts_bootstrap_inputs():
     compose = _read("docker-compose.integration.yml")
 
     assert "./supabase/init/001-bootstrap-local-db.sh:/docker-entrypoint-initdb.d/zzz-bootstrap-local-db.sh:ro" in compose
-    assert "../lista-spesa-furba-webapp/supabase/migrations:/supabase-webapp-migrations:ro" in compose
+    assert "../girospesa-webapp/supabase/migrations:/supabase-webapp-migrations:ro" in compose
     assert "./supabase/seed.sql:/supabase-backend/seed.sql:ro" in compose
 
 
@@ -79,6 +79,22 @@ def test_bootstrap_reapplies_offer_function_search_path():
     assert "ALTER FUNCTION public.offers_compute_fields() SET search_path = public" in bootstrap
 
 
+def test_shared_backend_migration_copies_match_frontend_canonical_files():
+    migrations_dir = BACKEND_ROOT / "supabase/migrations"
+    expected_root = BACKEND_ROOT.parent / "girospesa-webapp/supabase/migrations"
+
+    mismatches = []
+    for frontend_path in expected_root.glob("*.sql"):
+        backend_path = migrations_dir / frontend_path.name
+        if not backend_path.exists() or backend_path.is_symlink():
+            mismatches.append(frontend_path.name)
+            continue
+        if backend_path.read_text() != frontend_path.read_text():
+            mismatches.append(frontend_path.name)
+
+    assert mismatches == []
+
+
 def test_sql_seed_no_longer_owns_admin_user_bootstrap():
     seed = _read("supabase/seed.sql")
 
@@ -89,7 +105,7 @@ def test_sql_seed_no_longer_owns_admin_user_bootstrap():
 def test_auth_user_trigger_creates_default_empty_owner_list():
     migrations = "\n".join(
         path.read_text()
-        for path in sorted((BACKEND_ROOT.parent / "lista-spesa-furba-webapp/supabase/migrations").glob("*.sql"))
+        for path in sorted((BACKEND_ROOT.parent / "girospesa-webapp/supabase/migrations").glob("*.sql"))
     )
 
     assert "INSERT INTO shopping_lists (user_id, name, items, is_active)" in migrations

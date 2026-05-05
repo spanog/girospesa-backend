@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 import pytest
+
+from services.product_format import build_format_bundle
 
 
 # ---------------------------------------------------------------------------
@@ -11,7 +14,14 @@ import pytest
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session", autouse=True)
-def _require_supabase(ensure_supabase_local):
+def _skip_unless_enabled():
+    """Performance benchmarks are opt-in; normal pytest runs stay deterministic."""
+    if os.environ.get("RUN_PERFORMANCE_TESTS") != "1":
+        pytest.skip("Set RUN_PERFORMANCE_TESTS=1 to run performance benchmarks.")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _require_supabase(_skip_unless_enabled, ensure_supabase_local):
     """All performance tests require a running local Supabase stack."""
     pass
 
@@ -53,6 +63,21 @@ def _batch_insert(supabase_client, table: str, rows: list[dict], batch_size: int
     return inserted
 
 
+def _product_row(name: str, brand: str, grams: int) -> dict:
+    bundle = build_format_bundle({
+        "tipo": "confezione_singola",
+        "peso_volume": grams,
+        "unita_misura": "g",
+    })
+    return {
+        "name": name,
+        "brand": brand,
+        "format": bundle.format_compact,
+        "format_key": bundle.format_key,
+        "format_label": bundle.format_label,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Session-scoped supermarkets (shared by all performance tests)
 # ---------------------------------------------------------------------------
@@ -78,11 +103,11 @@ def seeded_10k_dataset(supabase_client, perf_supermarkets):
     """Seed 10,000 products and 10,000 offers; return (products, offers, supermarkets)."""
     # --- Products ---
     products_payload = [
-        {
-            "name": f"{_PERF_PREFIX}Prodotto_{i:05d}",
-            "brand": f"Brand_{i % 10:02d}",
-            "format": f"{(i % 6 + 1) * 100}g",
-        }
+        _product_row(
+            name=f"{_PERF_PREFIX}Prodotto_{i:05d}",
+            brand=f"Brand_{i % 10:02d}",
+            grams=(i % 6 + 1) * 100,
+        )
         for i in range(10_000)
     ]
     products = _batch_insert(supabase_client, "products", products_payload)
@@ -117,11 +142,11 @@ def seeded_1k_optimizer_dataset(supabase_client, perf_supermarkets):
         "carote", "patate", "cipolle", "pomodori", "zucchine",
     ]
     products_payload = [
-        {
-            "name": f"{_PERF_PREFIX}{product_names[i % len(product_names)].capitalize()} Opt_{i:04d}",
-            "brand": f"BrandOpt_{i % 5:02d}",
-            "format": f"{(i % 4 + 1) * 250}g",
-        }
+        _product_row(
+            name=f"{_PERF_PREFIX}{product_names[i % len(product_names)].capitalize()} Opt_{i:04d}",
+            brand=f"BrandOpt_{i % 5:02d}",
+            grams=(i % 4 + 1) * 250,
+        )
         for i in range(1_000)
     ]
     products = _batch_insert(supabase_client, "products", products_payload)

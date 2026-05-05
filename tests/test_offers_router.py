@@ -24,6 +24,7 @@ _settings_obj.gemini_model = "gemma-4-31b-it"
 _config_mod.settings = _settings_obj  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
+sys.modules.pop("core.auth", None)
 
 from fastapi import FastAPI
 import httpx

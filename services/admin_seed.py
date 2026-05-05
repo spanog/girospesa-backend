@@ -275,6 +275,9 @@ def _run_local_psql(sql: str) -> subprocess.CompletedProcess[str]:
 
 
 def _resolve_db_container_name() -> str:
+    container_name = os.environ.get("SUPABASE_DB_CONTAINER", "").strip()
+    if container_name:
+        return container_name
     config_toml = (Path(__file__).resolve().parents[1] / "supabase" / "config.toml").read_text(
         encoding="utf-8"
     )

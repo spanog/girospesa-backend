@@ -1,6 +1,6 @@
-# Lista Spesa Furba — Backend
+# GiroSpesa — Backend
 
-FastAPI backend per Lista Spesa Furba. Contiene tutta la logica di business dell'applicazione: ottimizzazione lista della spesa, gestione liste condivise, geocoding indirizzi, push notification, analytics B2B e gestione del catalogo prodotti.
+FastAPI backend per GiroSpesa. Contiene tutta la logica di business dell'applicazione: ottimizzazione lista della spesa, gestione liste condivise, geocoding indirizzi, push notification, analytics B2B e gestione del catalogo prodotti.
 
 > **Estrazione AI volantini:** questo repo contiene runtime, review flow e CLI di valutazione. Il vecchio workspace di estrazione è stato assorbito in questo backend.
 
@@ -10,11 +10,11 @@ FastAPI backend per Lista Spesa Furba. Contiene tutta la logica di business dell
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                         Lista Spesa Furba                            │
+│                         GiroSpesa                            │
 │                                                                      │
 │  ┌────────────────────┐           ┌─────────────────────────────┐   │
 │  │  lista-spesa-      │  REST API │  lista-spesa-               │   │
-│  │  furba-webapp/     │ ────────▶ │  furba-backend/             │   │
+│  │  girospesa-webapp/     │ ────────▶ │  girospesa-backend/             │   │
 │  │  (Next.js)         │           │  (questo repo — FastAPI)    │   │
 │  │                    │           │                             │   │
 │  │  Frontend SPA      │ ◀──────── │  /products  /optimize       │   │
@@ -45,7 +45,7 @@ Il frontend si autentica tramite Supabase Auth (client-side), ottiene un JWT e l
 ## Struttura del progetto
 
 ```
-lista-spesa-furba-backend/
+girospesa-backend/
 ├── main.py                   # Entry point FastAPI: app, CORS, tutti i router
 ├── requirements.txt
 ├── docker-compose.yml        # Stack locale legacy/non ufficiale (tenuto solo come riferimento)
@@ -403,7 +403,7 @@ Workflow ufficiale:
 
 - Docker solo per servizi Supabase locali
 - FastAPI come processo host separato
-- Next.js come processo host separato nel repo `lista-spesa-furba-webapp/`
+- Next.js come processo host separato nel repo `girospesa-webapp/`
 - Volumi Docker nominati su PostgreSQL e Storage: restart normali preservano dati locali
 
 ### 1. Prerequisiti
@@ -453,7 +453,7 @@ Servizi disponibili dopo l'avvio:
 
 Bootstrap admin condiviso per locale/test/prod:
 
-- Schema canonico: `../lista-spesa-furba-webapp/supabase/migrations/*.sql`
+- Schema canonico: `../girospesa-webapp/supabase/migrations/*.sql`
 - SQL seed locale: `supabase/seed.sql` non crea piu' admin auth
 - Script Python canonico: `.venv/bin/python -m scripts.seed_admin`
 - Alias task locale: `.venv/bin/task dev-setup`
@@ -526,11 +526,11 @@ python -m uvicorn main:app --reload --port 8000
 
 ```bash
 # Terminale 1
-cd lista-spesa-furba-backend
+cd girospesa-backend
 supabase start
 
 # Terminale 2
-cd lista-spesa-furba-backend
+cd girospesa-backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
@@ -538,7 +538,7 @@ python -m scripts.seed_admin
 python -m uvicorn main:app --reload --port 8000
 
 # Terminale 3
-cd ../lista-spesa-furba-webapp
+cd ../girospesa-webapp
 npm install
 npm run dev
 ```
@@ -551,14 +551,14 @@ Credenziali admin locale configurate:
 Queste credenziali diventano valide solo dopo il seed manuale:
 
 ```bash
-cd lista-spesa-furba-backend
+cd girospesa-backend
 .venv/bin/task dev-setup
 ```
 
 Check rapido seed:
 
 ```bash
-cd lista-spesa-furba-backend
+cd girospesa-backend
 .venv/bin/python -m scripts.seed_admin --check
 ```
 
@@ -570,7 +570,7 @@ npx taskipy dev
 
 ### 5. Avviare il frontend separato
 
-Dal repo fratello `../lista-spesa-furba-webapp/`:
+Dal repo fratello `../girospesa-webapp/`:
 
 ```bash
 npm install
@@ -616,7 +616,7 @@ cp .env.test.example .env.test
 .venv/bin/python -m pytest tests/integration -v
 ```
 
-Lo stack integration usa `docker-compose.integration.yml` con progetto Docker `lista-spesa-furba-itest`, volumi dedicati e porte `55421` (API/Kong) + `55422` (PostgreSQL). Non usa `supabase start`, non legge `supabase status` e non cancella dati dello stack locale.
+Lo stack integration usa `docker-compose.integration.yml` con progetto Docker `girospesa-itest`, volumi dedicati e porte `55421` (API/Kong) + `55422` (PostgreSQL). Non usa `supabase start`, non legge `supabase status` e non cancella dati dello stack locale.
 
 Comandi manuali utili:
 
@@ -631,13 +631,14 @@ FastAPI non deve essere avviato separatamente: i test HTTP usano l'app in-proces
 
 I test di integrazione coprono: geocoding, ottimizzazione, upload volantino, lifecycle preferiti, inviti lista, eliminazione account (GDPR).
 
-### Test di performance (richiede `supabase start`)
+### Test di performance (opt-in)
 
 ```bash
-supabase start
 cp .env.test.example .env.test
-pytest tests/performance -v -s
+RUN_PERFORMANCE_TESTS=1 .venv/bin/python -m pytest tests/performance -v -s
 ```
+
+Performance benchmarks use the same isolated integration stack as integration tests. Normal `pytest tests` runs skip them to avoid machine-dependent timing failures.
 
 ## Git hygiene per primo push
 
@@ -654,7 +655,7 @@ pytest tests/performance -v -s
 ### Core Web Vitals (frontend — Playwright)
 
 ```bash
-# Dal repo frontend (lista-spesa-furba-webapp/)
+# Dal repo frontend (girospesa-webapp/)
 npm run test:e2e -- performance-cwv
 ```
 
@@ -684,7 +685,7 @@ ADMIN_NOTIFICATION_EMAIL=
 # ── Web Push / webhook opzionali --------------------------------------------
 VAPID_PRIVATE_KEY=
 VAPID_PUBLIC_KEY=
-VAPID_MAILTO=mailto:admin@listaspesafurba.it
+VAPID_MAILTO=mailto:admin@girospesa.it
 WEBHOOK_SECRET=
 
 # ── Copia da `supabase status -o env` ---------------------------------------

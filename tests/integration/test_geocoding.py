@@ -12,12 +12,18 @@ Run:
 from __future__ import annotations
 
 import uuid
+import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
+sys.modules.pop("api.routers.users", None)
+sys.modules.pop("services.geocoding", None)
+
+import services.geocoding as geocoding_service
+import api.routers.users as users_module
 from api.routers.users import router as users_router
 from core.auth import get_current_user_id
 from services.geocoding import geocode_address
@@ -62,20 +68,20 @@ class TestGeocodeAddressService:
     """Unit-style tests for geocode_address() with mocked Nominatim geocoder."""
 
     def test_returns_lat_lng_tuple_on_success(self):
-        with patch("services.geocoding.settings.geocoding_provider", "nominatim"):
-            with patch("services.geocoding._get_geocoder") as get_geocoder:
+        with patch.object(geocoding_service.settings, "geocoding_provider", "nominatim"):
+            with patch.object(geocoding_service, "_get_geocoder") as get_geocoder:
                 get_geocoder.return_value = MagicMock(geocode=MagicMock(return_value=_mock_location()))
                 result = geocode_address("Via Roma 1, 20100 Milano MI")
         assert result == pytest.approx((_MILAN_LAT, _MILAN_LNG))
 
     def test_returns_none_when_provider_disabled(self):
-        with patch("services.geocoding.settings.geocoding_provider", "disabled"):
+        with patch.object(geocoding_service.settings, "geocoding_provider", "disabled"):
             result = geocode_address("Via Roma 1, 20100 Milano MI")
         assert result is None
 
     def test_coordinates_are_floats(self):
-        with patch("services.geocoding.settings.geocoding_provider", "nominatim"):
-            with patch("services.geocoding._get_geocoder") as get_geocoder:
+        with patch.object(geocoding_service.settings, "geocoding_provider", "nominatim"):
+            with patch.object(geocoding_service, "_get_geocoder") as get_geocoder:
                 get_geocoder.return_value = MagicMock(geocode=MagicMock(return_value=_mock_location(45, 9)))
                 result = geocode_address("Via Roma 1, Milano")
         assert result is not None
@@ -84,15 +90,15 @@ class TestGeocodeAddressService:
         assert isinstance(lng, float)
 
     def test_returns_none_when_address_not_found(self):
-        with patch("services.geocoding.settings.geocoding_provider", "nominatim"):
-            with patch("services.geocoding._get_geocoder") as get_geocoder:
+        with patch.object(geocoding_service.settings, "geocoding_provider", "nominatim"):
+            with patch.object(geocoding_service, "_get_geocoder") as get_geocoder:
                 get_geocoder.return_value = MagicMock(geocode=MagicMock(return_value=None))
                 result = geocode_address("indirizzo inesistente xyz 999")
         assert result is None
 
     def test_different_coordinates_are_returned_correctly(self):
-        with patch("services.geocoding.settings.geocoding_provider", "nominatim"):
-            with patch("services.geocoding._get_geocoder") as get_geocoder:
+        with patch.object(geocoding_service.settings, "geocoding_provider", "nominatim"):
+            with patch.object(geocoding_service, "_get_geocoder") as get_geocoder:
                 get_geocoder.return_value = MagicMock(
                     geocode=MagicMock(return_value=_mock_location(41.9028, 12.4964))
                 )
@@ -116,15 +122,16 @@ class TestGeocodeEndpoint:
 
     async def test_geocode_populates_home_lat_lng(self, supabase_client, auth_user):
         """Happy path: geocoding succeeds → home_lat/home_lng written to DB."""
-        with patch("services.geocoding.settings.geocoding_provider", "nominatim"):
-            with patch("services.geocoding._get_geocoder") as get_geocoder:
+        with patch.object(geocoding_service.settings, "geocoding_provider", "nominatim"):
+            with patch.object(geocoding_service, "_get_geocoder") as get_geocoder:
                 get_geocoder.return_value = MagicMock(geocode=MagicMock(return_value=_mock_location()))
-                with patch("api.routers.users.get_supabase", return_value=supabase_client):
-                    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
-                        resp = await client.post(
-                            "/users/geocode",
-                            json={"address": "Via Roma 1, 20100 Milano MI"},
-                        )
+                with patch.object(users_module, "geocode_address", geocode_address):
+                    with patch("api.routers.users.get_supabase", return_value=supabase_client):
+                        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+                            resp = await client.post(
+                                "/users/geocode",
+                                json={"address": "Via Roma 1, 20100 Milano MI"},
+                            )
 
         assert resp.status_code == 200
         body = resp.json()
@@ -145,14 +152,15 @@ class TestGeocodeEndpoint:
 
     async def test_geocode_returns_null_when_address_not_found(self):
         """When geocoder returns no result, endpoint returns {lat: null, lng: null}."""
-        with patch("services.geocoding.settings.geocoding_provider", "nominatim"):
-            with patch("services.geocoding._get_geocoder") as get_geocoder:
+        with patch.object(geocoding_service.settings, "geocoding_provider", "nominatim"):
+            with patch.object(geocoding_service, "_get_geocoder") as get_geocoder:
                 get_geocoder.return_value = MagicMock(geocode=MagicMock(return_value=None))
-                async with httpx.AsyncClient(app=app, base_url="http://test") as client:
-                    resp = await client.post(
-                        "/users/geocode",
-                        json={"address": "indirizzo inesistente xyz 999"},
-                    )
+                with patch.object(users_module, "geocode_address", geocode_address):
+                    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+                        resp = await client.post(
+                            "/users/geocode",
+                            json={"address": "indirizzo inesistente xyz 999"},
+                        )
 
         assert resp.status_code == 200
         body = resp.json()

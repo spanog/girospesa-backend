@@ -2,7 +2,7 @@
 # https://supabase.com/docs/guides/local-development/cli/config
 # A string used to distinguish different Supabase projects on the same host. Defaults to the
 # working directory name when running `supabase init`.
-project_id = "lista-spesa-furba-backend"
+project_id = "girospesa-backend"
 
 [api]
 enabled = true
@@ -239,7 +239,7 @@ otp_expiry = 3600
 # content_path = "./supabase/templates/invite.html"
 
 [auth.email.template.recovery]
-subject = "Reimposta la tua password — Lista Spesa Furba"
+subject = "Reimposta la tua password — GiroSpesa"
 content_path = "./supabase/templates/recovery.html"
 
 # Uncomment to customize notification email template

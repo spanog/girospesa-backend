@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     vapid_private_key: str = ""
     vapid_public_key: str = ""
-    vapid_mailto: str = "mailto:admin@listaspesafurba.it"
+    vapid_mailto: str = "mailto:admin@girospesa.it"
 
     # Shared secret for the Supabase Database Webhook → /push/notify-favorites
     webhook_secret: str = ""

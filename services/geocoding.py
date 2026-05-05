@@ -22,7 +22,7 @@ def _get_geocoder() -> Optional[Nominatim]:
     if settings.geocoding_provider != "nominatim":
         return None
     if _geocoder is None:
-        _geocoder = Nominatim(user_agent="lista-spesa-furba/1.0")
+        _geocoder = Nominatim(user_agent="girospesa/1.0")
     return _geocoder
 
 
