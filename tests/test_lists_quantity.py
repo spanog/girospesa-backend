@@ -101,6 +101,17 @@ async def _patch_req(url: str, json: dict, dep_overrides: dict | None = None) ->
         return await client.patch(url, json=json)
 
 
+async def _post_req(
+    url: str,
+    json: dict,
+    dep_overrides: dict | None = None,
+) -> httpx.Response:
+    _test_app.dependency_overrides = dep_overrides or {}
+    transport = httpx.ASGITransport(app=_test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.post(url, json=json)
+
+
 async def test_patch_quantity_returns_updated_item():
     initial_items = [
         {"id": _ITEM_ID, "name": "Latte", "quantity": 1.0, "checked": False, "purchased": False}
@@ -148,4 +159,44 @@ async def test_patch_quantity_403_non_member():
             json={"quantity": 2.0},
             dep_overrides=_deps(),
         )
+    assert resp.status_code == 403
+
+
+async def test_reset_list_clears_items_and_returns_updated_list():
+    updated_list = {
+        "id": _LIST_ID,
+        "user_id": _USER_ID,
+        "name": "Lista spesa",
+        "items": [],
+        "is_active": True,
+    }
+    sb_mock = MagicMock()
+    update_query = sb_mock.table.return_value.update.return_value
+    update_query.eq.return_value.single.return_value.execute.return_value.data = (
+        updated_list
+    )
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None):
+        resp = await _post_req(
+            f"/lists/{_LIST_ID}/reset",
+            json={},
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+    sb_mock.table.return_value.update.assert_called_with({"items": []})
+
+
+async def test_reset_list_403_non_member():
+    from fastapi import HTTPException
+    with patch.object(_lists_module, "get_supabase", return_value=MagicMock()), \
+         patch.object(_lists_module, "_verify_member", side_effect=HTTPException(status_code=403, detail="Not a member")):
+        resp = await _post_req(
+            f"/lists/{_LIST_ID}/reset",
+            json={},
+            dep_overrides=_deps(),
+        )
+
     assert resp.status_code == 403

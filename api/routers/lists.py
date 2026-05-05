@@ -147,6 +147,24 @@ async def get_active_list(user_id: Annotated[str, Depends(get_current_user_id)])
     return row
 
 
+@router.post("/{list_id}/reset")
+async def reset_list(
+    list_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
+    row = (
+        sb.table("shopping_lists")
+        .update({"items": []})
+        .eq("id", list_id)
+        .single()
+        .execute()
+        .data
+    )
+    return row
+
+
 @router.post("/{list_id}/items", status_code=status.HTTP_201_CREATED)
 async def add_item(
     list_id: str,

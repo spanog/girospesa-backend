@@ -47,6 +47,10 @@
 - `/optimize` must resolve `pinned_offer_id` before fuzzy matching. A list item added from an offer is an exact offer match (`match_score=1.0`) when the offer is active and in range.
 - Active offer filtering must stay null-safe and match public visibility windows: `valid_from IS NULL OR valid_from <= today`, `valid_to IS NULL OR valid_to >= today`.
 
+## Shopping Lists
+
+- `POST /lists/{id}/reset` clears the current list items after frontend confirmation and requires list membership.
+
 ## Ignore Rules
 
 - Track `.env.example` and `.env.test.example`.
