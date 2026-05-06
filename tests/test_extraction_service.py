@@ -339,13 +339,25 @@ class TestExtractionServiceSubcategoryPersisted:
         assert all("price_offer" not in row for row in batch_payload)
 
     def test_done_metadata_includes_stage_timings_and_format_sizes(self):
-        sb = _make_sb()
+        sb = _make_sb(
+            flyer_data={
+                "id": "flyer-1",
+                "file_url": "https://example.com/flyer.pdf",
+                "file_name": "flyer.pdf",
+                "supermarket_id": "sup-1",
+                "supermarket_name": "Test Super",
+                "valid_from": None,
+                "valid_to": "2026-05-01",
+                "user_id": "user-1",
+            }
+        )
         mock_provider = MagicMock()
         mock_provider.extract_products.return_value = (_EXTRACTED_PRODUCTS_V2, [])
+        mock_provider.chunk_size_pages = 3
 
         with (
             patch("services.extraction.service.requests.get") as mock_get,
-            patch("services.extraction.service.count_pdf_pages", return_value=1),
+            patch("services.extraction.service.count_pdf_pages", return_value=7),
         ):
             mock_get.return_value.content = b"%PDF-fake"
             mock_get.return_value.raise_for_status = MagicMock()
@@ -372,9 +384,17 @@ class TestExtractionServiceSubcategoryPersisted:
             "products_unique_count",
             "avg_format_bytes_compact",
             "avg_format_bytes_normalized",
+            "chunk_size_pages",
+            "chunks_total",
+            "chunks_completed",
+            "chunk_failures",
         }
         assert expected_keys.issubset(metadata.keys())
         assert metadata["avg_format_bytes_normalized"] >= metadata["avg_format_bytes_compact"]
+        assert metadata["chunk_size_pages"] == 3
+        assert metadata["chunks_total"] == 3
+        assert metadata["chunks_completed"] == 3
+        assert metadata["chunk_failures"] == 0
 
     def test_incomplete_extraction_format_does_not_fail_entire_flyer(self):
         sb = _make_sb()
@@ -411,6 +431,41 @@ class TestExtractionServiceSubcategoryPersisted:
         product_row = upsert_calls[0][0][0][0]
         assert product_row["format"] == {"tipo": "confezione_singola"}
         assert product_row["format_label"] == ""
+
+    def test_provider_chunk_failure_is_exposed_in_error_message(self):
+        sb = _make_sb(
+            flyer_data={
+                "id": "flyer-1",
+                "file_url": "https://example.com/flyer.pdf",
+                "file_name": "flyer.pdf",
+                "supermarket_id": "sup-1",
+                "supermarket_name": "Test Super",
+                "valid_from": None,
+                "valid_to": "2026-05-01",
+                "user_id": "user-1",
+            }
+        )
+        mock_provider = MagicMock()
+        mock_provider.chunk_size_pages = 3
+        mock_provider.extract_products.side_effect = ValueError(
+            "Chunk 2/3 (pages 4-6) failed after 3 attempts"
+        )
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=7),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+            svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
+            svc.run("flyer-1")
+
+        update_calls = sb.table.return_value.update.call_args_list
+        error_payloads = [c[0][0] for c in update_calls if c[0][0].get("status") == "error"]
+        assert error_payloads
+        assert "Chunk 2/3 (pages 4-6) failed after 3 attempts" in error_payloads[-1]["error_message"]
 
 
 class TestExtractionServicePushNotification:

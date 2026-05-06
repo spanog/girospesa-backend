@@ -182,6 +182,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python 
 - `format.varianti` è consentito solo in input estrazione LLM: il backend lo espande in prodotti/offerte distinti prima dell'upsert. Nessun prodotto persistito rappresenta un parent con varianti miste.
 - Matching fuzzy/optimizer usa `name`, `brand`, `format_label`; mai JSON raw.
 - Durante l'estrazione il backend deduplica prima in memoria su `(name, brand, format_key)`, fa batch upsert dei prodotti unici del volantino e registra timing per `provider`, `varianti`, `normalizzazione`, `dedupe`, `upsert prodotti`, `insert offerte`.
+- Per PDF multipagina il backend divide il file in chunk PDF rigidi da 3 pagine e invia un chunk per volta a Gemini. Se un chunk fallisce dopo i retry, l'intera estrazione fallisce senza persistere risultati parziali.
 
 ### Ottimizzazione (`/optimize`)
 

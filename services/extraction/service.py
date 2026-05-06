@@ -97,9 +97,19 @@ class ExtractionService:
         file_name = flyer.get("file_name", "")
         mime_type = mime_type_for_filename(file_name)
         pages_count = count_pdf_pages(content) if is_pdf(file_name) else 1
+        extracting_chunk_metadata = self._chunk_metadata(
+            mime_type,
+            pages_count,
+            chunks_completed=0,
+            chunk_failures=0,
+        )
 
         sb.table("flyers").update({  # type: ignore[union-attr]
-            "extraction_metadata": {"stage": "extracting", "pages_total": pages_count},
+            "extraction_metadata": {
+                "stage": "extracting",
+                "pages_total": pages_count,
+                **extracting_chunk_metadata,
+            },
         }).eq("id", flyer_id).execute()
 
         logger.info(
@@ -111,6 +121,12 @@ class ExtractionService:
         provider_started_at = time.perf_counter()
         all_products, retry_errors = self._provider.extract_products(content, mime_type)
         provider_seconds = time.perf_counter() - provider_started_at
+        success_chunk_metadata = self._chunk_metadata(
+            mime_type,
+            pages_count,
+            chunks_completed=None,
+            chunk_failures=0,
+        )
 
         sb.table("flyers").update({  # type: ignore[union-attr]
             "extraction_metadata": {
@@ -118,6 +134,7 @@ class ExtractionService:
                 "pages_total": pages_count,
                 "products_found": len(all_products),
                 "provider_seconds": round(provider_seconds, 3),
+                **success_chunk_metadata,
             },
         }).eq("id", flyer_id).execute()
 
@@ -170,6 +187,7 @@ class ExtractionService:
             "dedupe_seconds": round(dedupe_seconds, 3),
             "avg_format_bytes_compact": round(avg_compact_bytes, 2),
             "avg_format_bytes_normalized": round(avg_normalized_bytes, 2),
+            **success_chunk_metadata,
         }
         sb.table("flyers").update({  # type: ignore[union-attr]
             "extraction_metadata": saving_metadata,
@@ -201,6 +219,7 @@ class ExtractionService:
             "products_unique_count": len(normalized),
             "avg_format_bytes_compact": round(avg_compact_bytes, 2),
             "avg_format_bytes_normalized": round(avg_normalized_bytes, 2),
+            **success_chunk_metadata,
         }
         sb.table("flyers").update({  # type: ignore[union-attr]
             "status": "done",
@@ -394,6 +413,25 @@ class ExtractionService:
         if counted == 0:
             return (0.0, 0.0)
         return (compact_total / counted, normalized_total / counted)
+
+    def _chunk_metadata(
+        self,
+        mime_type: str,
+        pages_count: int,
+        *,
+        chunks_completed: int | None,
+        chunk_failures: int,
+    ) -> dict[str, int]:
+        chunk_size = getattr(self._provider, "chunk_size_pages", 1) if mime_type == "application/pdf" else 1
+        if not isinstance(chunk_size, int) or chunk_size < 1:
+            chunk_size = 1
+        chunks_total = max(1, (pages_count + chunk_size - 1) // chunk_size)
+        return {
+            "chunk_size_pages": chunk_size,
+            "chunks_total": chunks_total,
+            "chunks_completed": chunks_total if chunks_completed is None else chunks_completed,
+            "chunk_failures": chunk_failures,
+        }
 
     def _fetch_flyer(self, sb: object, flyer_id: str) -> dict:
         result = (
