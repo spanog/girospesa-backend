@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -21,6 +22,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _WEBHOOK_SECRET_HEADER = "x-webhook-secret"
+
+
+def _offer_is_currently_active(record: dict) -> bool:
+    today = date.today().isoformat()
+    valid_from = record.get("valid_from")
+    valid_to = record.get("valid_to")
+    if valid_from and valid_from > today:
+        return False
+    if valid_to and valid_to < today:
+        return False
+    return True
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -94,8 +106,25 @@ async def notify_favorites(request: Request) -> Response:
 
     if not product_id:
         return Response(status_code=204)
+    if not record.get("is_confirmed"):
+        return Response(status_code=204)
+    if not _offer_is_currently_active(record):
+        return Response(status_code=204)
 
     sb = get_supabase()
+    flyer_id: str | None = record.get("flyer_id")
+    if not flyer_id:
+        return Response(status_code=204)
+    flyer_resp = (
+        sb.table("flyers")
+        .select("is_public, status")
+        .eq("id", flyer_id)
+        .maybe_single()
+        .execute()
+    )
+    flyer = flyer_resp.data if flyer_resp else None
+    if not flyer or not flyer.get("is_public") or flyer.get("status") != "done":
+        return Response(status_code=204)
 
     # Resolve product name
     product_resp = sb.table("products").select("name").eq("id", product_id).maybe_single().execute()

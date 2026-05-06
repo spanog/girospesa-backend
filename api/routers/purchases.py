@@ -12,6 +12,18 @@ from core.database import get_supabase
 router = APIRouter()
 
 
+def _verify_member(sb: object, list_id: str, user_id: str) -> None:
+    result = (
+        sb.table("list_members")  # type: ignore[union-attr,attr-defined]
+        .select("id")
+        .eq("list_id", list_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=403, detail="Not a member of this list")
+
+
 class PurchaseItemBody(BaseModel):
     list_id: str
     offer_id: str | None = None
@@ -48,6 +60,7 @@ async def purchase_item(
 ) -> PurchaseRecord:
     """Mark a list item as purchased. Records offer details if available."""
     sb = get_supabase()
+    _verify_member(sb, body.list_id, user_id)
 
     list_row = (
         sb.table("shopping_lists")
@@ -152,6 +165,7 @@ async def undo_purchase(
 ) -> Response:
     """Undo a purchase: clears purchased flags and deletes the matching purchase_history row."""
     sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
 
     list_row = (
         sb.table("shopping_lists")

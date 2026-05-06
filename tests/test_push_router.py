@@ -43,9 +43,12 @@ sys.modules["core.database"] = MagicMock()
 sys.modules["core.auth"] = MagicMock()
 
 import pytest
+from fastapi import FastAPI
+import httpx
 from pydantic import ValidationError
 
-from api.routers.push import SubscribeBody, UnsubscribeBody
+import api.routers.push as _push_module
+from api.routers.push import SubscribeBody, UnsubscribeBody, router as _push_router
 from services.push_notify import PushEndpointGoneError, PushSubscription, notify_extraction_complete, send_push_notification
 
 
@@ -261,6 +264,27 @@ class TestNotifyExtractionComplete:
                 success=True,
                 supermarket_name="Coop",
             )
+        mock_send.assert_not_called()
+
+
+class TestNotifyFavoritesVisibility:
+    @pytest.mark.asyncio
+    async def test_draft_offer_insert_does_not_notify(self):
+        app = FastAPI()
+        app.include_router(_push_router, prefix="/push")
+        transport = httpx.ASGITransport(app=app)
+
+        sb = MagicMock()
+        with patch.object(_push_module, "get_supabase", return_value=sb), \
+             patch.object(_push_module, "send_push_notification") as mock_send:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post(
+                    "/push/notify-favorites",
+                    headers={"x-webhook-secret": "super-secret"},
+                    json={"record": {"product_id": "prod-1", "is_confirmed": False}},
+                )
+
+        assert resp.status_code == 204
         mock_send.assert_not_called()
 
     def test_stale_410_endpoint_deleted(self):

@@ -200,3 +200,32 @@ async def test_reset_list_403_non_member():
         )
 
     assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_add_item_403_non_member():
+    from fastapi import HTTPException
+
+    with patch.object(_lists_module, "get_supabase", return_value=MagicMock()), \
+         patch.object(_lists_module, "_verify_member", side_effect=HTTPException(status_code=403, detail="Not a member")):
+        resp = await _post_req(
+            f"/lists/{_LIST_ID}/items",
+            json={"name": "Latte"},
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_toggle_item_403_non_member():
+    from fastapi import HTTPException
+
+    _test_app.dependency_overrides = _deps()
+    transport = httpx.ASGITransport(app=_test_app)
+    with patch.object(_lists_module, "get_supabase", return_value=MagicMock()), \
+         patch.object(_lists_module, "_verify_member", side_effect=HTTPException(status_code=403, detail="Not a member")):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(f"/lists/{_LIST_ID}/items/{_ITEM_ID}/toggle")
+
+    assert resp.status_code == 403

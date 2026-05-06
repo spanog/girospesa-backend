@@ -8,7 +8,7 @@ from __future__ import annotations
 import difflib
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from core.auth import get_current_user_id
@@ -17,6 +17,18 @@ from services.extraction.normalizer import format_unit_price_label
 from services.offer_visibility import apply_current_offer_window
 
 router = APIRouter()
+
+
+def _verify_member(sb: object, list_id: str, user_id: str) -> None:
+    result = (
+        sb.table("list_members")  # type: ignore[union-attr,attr-defined]
+        .select("id")
+        .eq("list_id", list_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=403, detail="Not a member of this list")
 
 
 class OptimizeBody(BaseModel):
@@ -161,6 +173,7 @@ async def optimize(
     4. Greedy: pick store with most coverage (ties broken by savings or store count).
     """
     sb = get_supabase()
+    _verify_member(sb, body.list_id, user_id)
 
     # Fetch list items
     list_resp = (

@@ -47,10 +47,16 @@
 
 - `/optimize` must resolve `pinned_offer_id` before fuzzy matching. A list item added from an offer is an exact offer match (`match_score=1.0`) when the offer is active and in range.
 - Active offer filtering must stay null-safe and match public visibility windows: `valid_from IS NULL OR valid_from <= today`, `valid_to IS NULL OR valid_to >= today`.
+- `/optimize` must verify caller membership on `body.list_id` before loading any list items or returning shopping intent data.
 
 ## Shopping Lists
 
 - `POST /lists/{id}/reset` clears the current list items after frontend confirmation and requires list membership.
+- `POST /lists/{id}/items`, `POST /lists/{id}/items/{item_id}/toggle`, and purchase flows tied to `list_id` must verify list membership before any read/write using the service-role client.
+
+## Push Favorites Webhook
+
+- `POST /push/notify-favorites` must ignore offers that are draft/unconfirmed, outside current validity window, missing a flyer, or linked to a non-public / non-done flyer. Favorite notifications are only for publicly visible offers.
 
 ## Ignore Rules
 

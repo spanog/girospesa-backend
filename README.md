@@ -116,9 +116,9 @@ Il backend usa tre livelli di autenticazione:
 |--------|------|------|-------------|
 | `GET` | `/lists/active` | ✅ | Lista spesa attiva; auto-crea se non esiste; arricchisce gli item con `category` e `subcategory` |
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
-| `POST` | `/lists/{id}/items` | ✅ | Aggiunge item (manuale o da offerta) e salva snapshot `category`/`subcategory` quando collegato a prodotto/offerta |
-| `DELETE` | `/lists/{id}/items/{item_id}` | ✅ | Rimuove item |
-| `POST` | `/lists/{id}/items/{item_id}/toggle` | ✅ | Check/uncheck item; registra `checked_by`, `checked_at` |
+| `POST` | `/lists/{id}/items` | ✅ member | Aggiunge item (manuale o da offerta) e salva snapshot `category`/`subcategory` quando collegato a prodotto/offerta |
+| `DELETE` | `/lists/{id}/items/{item_id}` | ✅ member | Rimuove item |
+| `POST` | `/lists/{id}/items/{item_id}/toggle` | ✅ member | Check/uncheck item; registra `checked_by`, `checked_at` |
 | `POST` | `/lists/{id}/invite` | ✅ owner | Crea link invito (token 64 char, TTL 7 giorni) |
 | `GET` | `/lists/{id}/members` | ✅ member | Lista membri lista condivisa |
 | `DELETE` | `/lists/{id}/members/{user_id}` | ✅ owner | Rimuove membro |
@@ -188,7 +188,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python 
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `POST` | `/optimize` | ✅ | Ottimizza lista spesa → gruppi per supermercato con risparmio e alternative |
+| `POST` | `/optimize` | ✅ member | Ottimizza lista spesa → gruppi per supermercato con risparmio e alternative; accesso consentito solo ai membri della lista indicata |
 
 ### Supermercati (`/supermarkets`)
 
@@ -209,7 +209,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python 
 |--------|------|------|-------------|
 | `POST` | `/push/subscribe` | ✅ | Registra subscription Web Push del browser |
 | `POST` | `/push/unsubscribe` | ✅ | Cancella subscription |
-| `POST` | `/push/notify-favorites` | Webhook secret | Webhook Supabase: nuova offerta → notifica agli utenti che hanno quel prodotto tra i preferiti |
+| `POST` | `/push/notify-favorites` | Webhook secret | Webhook Supabase: nuova offerta pubblica, confermata e attiva → notifica agli utenti che hanno quel prodotto tra i preferiti |
 
 Le notifiche Web Push di completamento/fallimento estrazione includono nel campo `data` anche `kind`, `flyer_id`, `status`, `products_count` e `url`. Il frontend usa questi campi per aggiornare subito la cache della gestione volantini e poi confermare lo stato tramite refetch HTTP.
 

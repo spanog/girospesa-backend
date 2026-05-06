@@ -174,6 +174,7 @@ async def add_item(
     import uuid
 
     sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
     new_item = {
         "id": str(uuid.uuid4()),
         "name": body.name,
@@ -231,6 +232,7 @@ async def toggle_item(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict:
     sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
     current = sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
     items = current.data["items"]
     updated = []
