@@ -102,6 +102,15 @@ def test_extract_products_chunks_pdf_in_fixed_groups_of_three_pages() -> None:
     assert [call["contents"][0]["data"] for call in fake_client.models.calls] == [chunk.pdf_bytes for chunk in chunks]
     assert progress_events == [
         {
+            "chunks_completed": 0,
+            "chunks_total": 3,
+            "current_chunk_start": 1,
+            "current_chunk_end": 3,
+            "pages_processed": 0,
+            "progress_percent": 5,
+            "products_found": 0,
+        },
+        {
             "chunks_completed": 1,
             "chunks_total": 3,
             "current_chunk_start": 1,
@@ -110,10 +119,26 @@ def test_extract_products_chunks_pdf_in_fixed_groups_of_three_pages() -> None:
             "products_found": 1,
         },
         {
+            "chunks_completed": 1,
+            "chunks_total": 3,
+            "current_chunk_start": 4,
+            "current_chunk_end": 6,
+            "pages_processed": 3,
+            "products_found": 1,
+        },
+        {
             "chunks_completed": 2,
             "chunks_total": 3,
             "current_chunk_start": 4,
             "current_chunk_end": 6,
+            "pages_processed": 6,
+            "products_found": 2,
+        },
+        {
+            "chunks_completed": 2,
+            "chunks_total": 3,
+            "current_chunk_start": 7,
+            "current_chunk_end": 7,
             "pages_processed": 6,
             "products_found": 2,
         },

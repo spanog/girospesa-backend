@@ -17,6 +17,7 @@ On any failure: set flyer status='error', log ERROR event.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 import time
 from typing import Callable
@@ -94,6 +95,7 @@ class ExtractionService:
     ) -> None:
         flyer_id = flyer["id"]
         content = self._download_file(sb, flyer["file_url"])
+        extraction_started_at = self._utc_timestamp()
         file_name = flyer.get("file_name", "")
         mime_type = mime_type_for_filename(file_name)
         pages_count = count_pdf_pages(content) if is_pdf(file_name) else 1
@@ -108,6 +110,11 @@ class ExtractionService:
             "extraction_metadata": {
                 "stage": "extracting",
                 "pages_total": pages_count,
+                **self._initial_progress_metadata(
+                    mime_type,
+                    pages_count,
+                    extraction_started_at,
+                ),
                 **extracting_chunk_metadata,
             },
         }).eq("id", flyer_id).execute()
@@ -127,6 +134,7 @@ class ExtractionService:
                 flyer_id,
                 mime_type,
                 pages_count,
+                extraction_started_at,
                 progress,
             ),
         )
@@ -144,6 +152,7 @@ class ExtractionService:
                 "pages_total": pages_count,
                 "products_found": len(all_products),
                 "provider_seconds": round(provider_seconds, 3),
+                "extraction_started_at": extraction_started_at,
                 **success_chunk_metadata,
             },
         }).eq("id", flyer_id).execute()
@@ -197,6 +206,7 @@ class ExtractionService:
             "dedupe_seconds": round(dedupe_seconds, 3),
             "avg_format_bytes_compact": round(avg_compact_bytes, 2),
             "avg_format_bytes_normalized": round(avg_normalized_bytes, 2),
+            "extraction_started_at": extraction_started_at,
             **success_chunk_metadata,
         }
         sb.table("flyers").update({  # type: ignore[union-attr]
@@ -217,6 +227,8 @@ class ExtractionService:
         total_seconds = time.time() - t_start
         elapsed = int(total_seconds)
         summary_metadata = {
+            "extraction_started_at": extraction_started_at,
+            "extraction_finished_at": self._utc_timestamp(),
             "provider_seconds": round(provider_seconds, 3),
             "variant_expansion_seconds": round(variant_expansion_seconds, 3),
             "normalization_seconds": round(normalization_seconds, 3),
@@ -448,19 +460,44 @@ class ExtractionService:
             return 0
         return min(100, round((pages_processed / pages_count) * 100))
 
+    def _utc_timestamp(self) -> str:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _initial_progress_metadata(
+        self,
+        mime_type: str,
+        pages_count: int,
+        extraction_started_at: str,
+    ) -> dict:
+        chunk_size = getattr(self._provider, "chunk_size_pages", 1) if mime_type == "application/pdf" else 1
+        if not isinstance(chunk_size, int) or chunk_size < 1:
+            chunk_size = 1
+        return {
+            "extraction_started_at": extraction_started_at,
+            "current_chunk_start": 1,
+            "current_chunk_end": min(chunk_size, pages_count),
+            "pages_processed": 0,
+            "progress_percent": 5,
+        }
+
     def _update_chunk_progress(
         self,
         sb: object,
         flyer_id: str,
         mime_type: str,
         pages_count: int,
+        extraction_started_at: str,
         progress: dict,
     ) -> None:
         pages_processed = int(progress.get("pages_processed") or 0)
+        progress_percent = progress.get("progress_percent")
+        if not isinstance(progress_percent, int):
+            progress_percent = self._progress_percent(pages_processed, pages_count)
         metadata = {
             "stage": "extracting",
             "pages_total": pages_count,
-            "progress_percent": self._progress_percent(pages_processed, pages_count),
+            "extraction_started_at": extraction_started_at,
+            "progress_percent": progress_percent,
             **self._chunk_metadata(
                 mime_type,
                 pages_count,
@@ -473,6 +510,22 @@ class ExtractionService:
             "products_found": int(progress.get("products_found") or 0),
         }
         sb.table("flyers").update({"extraction_metadata": metadata}).eq("id", flyer_id).execute()  # type: ignore[union-attr]
+
+    def _error_metadata(self, sb: object, flyer_id: str) -> dict | None:
+        result = (
+            sb.table("flyers")  # type: ignore[union-attr]
+            .select("extraction_metadata")
+            .eq("id", flyer_id)
+            .maybe_single()
+            .execute()
+        )
+        current = result.data.get("extraction_metadata") if result and result.data else None
+        if not isinstance(current, dict):
+            return None
+        return {
+            **current,
+            "extraction_finished_at": self._utc_timestamp(),
+        }
 
     def _fetch_flyer(self, sb: object, flyer_id: str) -> dict:
         result = (
@@ -573,10 +626,14 @@ class ExtractionService:
             elapsed,
             exc,
         )
-        sb.table("flyers").update({  # type: ignore[union-attr]
+        error_update = {
             "status": "error",
             "error_message": str(exc)[:500],
-        }).eq("id", flyer_id).execute()
+        }
+        error_metadata = self._error_metadata(sb, flyer_id)
+        if error_metadata is not None:
+            error_update["extraction_metadata"] = error_metadata
+        sb.table("flyers").update(error_update).eq("id", flyer_id).execute()  # type: ignore[union-attr]
         log_event(
             sb,
             event_type=ERROR,

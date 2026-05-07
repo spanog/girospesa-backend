@@ -138,6 +138,18 @@ class GeminiProvider:
         retry_errors: list[str] = []
 
         for chunk_index, chunk in enumerate(chunks, start=1):
+            if progress_callback:
+                progress = {
+                    "chunks_completed": chunk_index - 1,
+                    "chunks_total": len(chunks),
+                    "current_chunk_start": chunk.start_page,
+                    "current_chunk_end": chunk.end_page,
+                    "pages_processed": chunk.start_page - 1,
+                    "products_found": len(products),
+                }
+                if chunk_index == 1:
+                    progress["progress_percent"] = 5
+                progress_callback(progress)
             chunk_products, chunk_errors = self._extract_pdf_chunk(
                 client=client,
                 gtypes=gtypes,

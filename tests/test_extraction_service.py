@@ -372,6 +372,8 @@ class TestExtractionServiceSubcategoryPersisted:
 
         metadata = done_payloads[-1]["extraction_metadata"]
         expected_keys = {
+            "extraction_started_at",
+            "extraction_finished_at",
             "provider_seconds",
             "variant_expansion_seconds",
             "normalization_seconds",
@@ -395,6 +397,8 @@ class TestExtractionServiceSubcategoryPersisted:
         assert metadata["chunks_total"] == 3
         assert metadata["chunks_completed"] == 3
         assert metadata["chunk_failures"] == 0
+        assert metadata["extraction_started_at"].endswith("Z")
+        assert metadata["extraction_finished_at"].endswith("Z")
 
     def test_chunk_progress_metadata_is_updated_after_each_provider_chunk(self):
         sb = _make_sb(
@@ -455,6 +459,13 @@ class TestExtractionServiceSubcategoryPersisted:
             if call[0][0].get("extraction_metadata", {}).get("stage") == "extracting"
         ]
         assert any(
+            metadata.get("pages_processed") == 0
+            and metadata.get("progress_percent") == 5
+            and metadata.get("current_chunk_start") == 1
+            and metadata.get("current_chunk_end") == 3
+            for metadata in metadata_updates
+        )
+        assert any(
             metadata.get("pages_processed") == 3
             and metadata.get("progress_percent") == 43
             and metadata.get("current_chunk_start") == 1
@@ -470,6 +481,88 @@ class TestExtractionServiceSubcategoryPersisted:
             and metadata.get("products_found") == 7
             for metadata in metadata_updates
         )
+
+    def test_initial_extraction_metadata_includes_started_progress(self):
+        sb = _make_sb(
+            flyer_data={
+                "id": "flyer-1",
+                "file_url": "https://example.com/flyer.pdf",
+                "file_name": "flyer.pdf",
+                "supermarket_id": "sup-1",
+                "supermarket_name": "Test Super",
+                "valid_from": None,
+                "valid_to": "2026-05-01",
+                "user_id": "user-1",
+            }
+        )
+        mock_provider = MagicMock()
+        mock_provider.chunk_size_pages = 3
+        mock_provider.extract_products.return_value = (_EXTRACTED_PRODUCTS_V2, [])
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=8),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+            svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
+            svc.run("flyer-1")
+
+        first_update = sb.table.return_value.update.call_args_list[0][0][0]
+        metadata = first_update["extraction_metadata"]
+        assert metadata["stage"] == "extracting"
+        assert metadata["pages_total"] == 8
+        assert metadata["extraction_started_at"].endswith("Z")
+        assert metadata["pages_processed"] == 0
+        assert metadata["progress_percent"] == 5
+        assert metadata["current_chunk_start"] == 1
+        assert metadata["current_chunk_end"] == 3
+
+    def test_error_metadata_keeps_started_at_and_sets_finished_at(self):
+        sb = _make_sb(
+            flyer_data={
+                "id": "flyer-1",
+                "file_url": "https://example.com/flyer.pdf",
+                "file_name": "flyer.pdf",
+                "supermarket_id": "sup-1",
+                "supermarket_name": "Test Super",
+                "valid_from": None,
+                "valid_to": "2026-05-01",
+                "user_id": "user-1",
+            }
+        )
+        current_metadata = {
+            "stage": "extracting",
+            "extraction_started_at": "2026-05-07T12:00:00Z",
+        }
+        sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+            data={"extraction_metadata": current_metadata}
+        )
+        mock_provider = MagicMock()
+        mock_provider.extract_products.side_effect = RuntimeError("Gemini timeout")
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=8),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+            svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
+            svc.run("flyer-1")
+
+        error_updates = [
+            call[0][0]
+            for call in sb.table.return_value.update.call_args_list
+            if call[0][0].get("status") == "error"
+        ]
+        assert error_updates
+        metadata = error_updates[-1]["extraction_metadata"]
+        assert metadata["extraction_started_at"] == "2026-05-07T12:00:00Z"
+        assert metadata["extraction_finished_at"].endswith("Z")
 
     def test_incomplete_extraction_format_does_not_fail_entire_flyer(self):
         sb = _make_sb()
