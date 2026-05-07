@@ -158,9 +158,9 @@ class TestListProducts:
 
         select_mock.eq.assert_any_call("is_confirmed", True)
         select_mock.eq.return_value.order.assert_called_once_with(
-            "discount_pct",
-            desc=True,
-            nullsfirst=False,
+            "name",
+            desc=False,
+            foreign_table="products",
         )
 
     @pytest.mark.asyncio
@@ -186,13 +186,14 @@ class TestListProducts:
         order_mock.range.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_expiry_sort_uses_postgrest_nullsfirst_keyword(self):
+    async def test_expiry_sort_orders_by_valid_to_then_product_name(self):
         sb = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
         select_mock = sb.table.return_value.select.return_value
         eq_mock = select_mock.eq.return_value
         order_mock = eq_mock.order.return_value
-        order_mock.range.return_value.execute.return_value = execute_result
+        second_order_mock = order_mock.order.return_value
+        second_order_mock.range.return_value.execute.return_value = execute_result
         eq_mock.execute.return_value = MagicMock(
             data=[]
         )
@@ -205,10 +206,15 @@ class TestListProducts:
             resp = await _get("/products?sort=expiry")
 
         assert resp.status_code == 200
-        sb.table.return_value.select.return_value.eq.return_value.order.assert_called_once_with(
+        eq_mock.order.assert_called_once_with(
             "valid_to",
             desc=False,
-            nullsfirst=True,
+            nullsfirst=False,
+        )
+        order_mock.order.assert_called_once_with(
+            "name",
+            desc=False,
+            foreign_table="products",
         )
 
     @pytest.mark.asyncio

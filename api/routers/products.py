@@ -89,11 +89,13 @@ def _apply_expiring_soon_filter(query, *, today: date) -> object:
     return query.gte("valid_to", today.isoformat()).lte("valid_to", cutoff.isoformat())
 
 
-_SORT_OPTIONS: dict[str, tuple[str, bool]] = {
-    "discount": ("discount_pct", True),
-    "expiry": ("valid_to", False),
-    "default": ("discount_pct", True),
-}
+def _apply_offer_sort(query, *, sort: str | None):
+    if sort == "expiry":
+        return (
+            query.order("valid_to", desc=False, nullsfirst=False)
+            .order("name", desc=False, foreign_table="products")
+        )
+    return query.order("name", desc=False, foreign_table="products")
 
 
 @router.get("")
@@ -105,7 +107,7 @@ async def list_products(
     lat: float | None = Query(None, description="User latitude for distance filtering"),
     lng: float | None = Query(None, description="User longitude for distance filtering"),
     max_distance_km: float = Query(10.0, gt=0, le=100, description="Max supermarket distance in km"),
-    sort: str | None = Query(None, description="Sort mode: discount | expiry"),
+    sort: str | None = Query(None, description="Sort mode: expiry"),
     expiring_soon: bool = Query(False, description="Only offers expiring within 3 days"),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
@@ -131,15 +133,12 @@ async def list_products(
     filter_kwargs = dict(q=q, category=category, subcategory=subcategory, supermarket_id=supermarket_id, nearby_ids=nearby_ids)
     today = date.today()
 
-    sort_col, sort_desc = _SORT_OPTIONS.get(sort or "default", _SORT_OPTIONS["default"])
-    nullsfirst = not sort_desc  # PostgREST Python client uses `nullsfirst`.
-
     base_query = (
         sb.table("offers")
         .select(_OFFER_PRODUCT_LIST_SELECT, count="exact")
         .eq("is_confirmed", True)
-        .order(sort_col, desc=sort_desc, nullsfirst=nullsfirst)
     )
+    base_query = _apply_offer_sort(base_query, sort=sort)
     base_query = apply_current_offer_window(base_query)
     filtered_query = _apply_offer_filters(base_query, **filter_kwargs)
     if expiring_soon:

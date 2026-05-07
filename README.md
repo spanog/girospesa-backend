@@ -128,11 +128,11 @@ Il backend usa tre livelli di autenticazione:
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `GET` | `/products` | ❌ | Offerte attive con full-text search (`q`), filtri `category`, `supermarket`, `expiring_soon=true` per offerte che scadono entro 3 giorni, paginazione |
+| `GET` | `/products` | ❌ | Offerte attive con full-text search (`q`), filtri `category`, `supermarket`, ordinamento default per nome prodotto, `sort=expiry` per scadenza crescente, `expiring_soon=true` per offerte che scadono entro 3 giorni, paginazione |
 | `GET` | `/products/{id}` | ❌ | Dettaglio singola offerta (prodotto + supermercato) |
 | `GET` | `/products/{id}/similar` | ❌ | Altre offerte attive per lo stesso prodotto canonico (ordinate per prezzo) |
 
-Nota implementativa: ordinamento `/products` usa query builder PostgREST Python con keyword `nullsfirst` per mantenere stabile ordinamento default e per scadenza. Il filtro `expiring_soon=true` usa stessa finestra temporale del contatore `expiring_soon_count`: `valid_to` compreso tra oggi e oggi + 3 giorni.
+Nota implementativa: ordinamento `/products` usa query builder PostgREST Python. Il default ordina per `products.name`; `sort=expiry` ordina per `offers.valid_to` crescente con `NULL` dopo le offerte datate, poi per `products.name`. Il filtro `expiring_soon=true` usa stessa finestra temporale del contatore `expiring_soon_count`: `valid_to` compreso tra oggi e oggi + 3 giorni.
 
 ### Preferiti (`/favorites`)
 

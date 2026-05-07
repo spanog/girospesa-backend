@@ -29,6 +29,7 @@
 - Before upserting, pipeline runs a fuzzy pre-check per `format_key` bucket: `_find_similar_product()` in `ExtractionService` uses `rapidfuzz.fuzz.partial_ratio` on names (≥0.85) and `fuzz.ratio` on diacritic-normalized brands (≥0.90). Thresholds configurable via `product_name_similarity_threshold` / `product_brand_similarity_threshold` in `core/config.py`. Matches reuse the existing `product_id` — no duplicate row is created. `format_key` is always an exact-match gate; never fuzzified.
 - Draft and confirmed offer payloads returned by flyer review endpoints must flatten `products.subcategory` alongside `category`.
 - Draft and confirmed offer payloads must expose both `format` and `format_label`.
+- `GET /products` ordina default per `products.name`; `sort=expiry` ordina per `offers.valid_to` crescente con offerte senza scadenza dopo, poi per `products.name`.
 - `flyers.extraction_metadata` should keep per-stage timing keys (`provider_seconds`, `variant_expansion_seconds`, `normalization_seconds`, `dedupe_seconds`, `product_upsert_seconds`, `offer_insert_seconds`, `total_seconds`) plus product-count and average-format-size telemetry.
 - Extraction completion/failure Web Push payloads must include structured `data`: `kind`, `flyer_id`, `status`, `products_count`, and `url`. Frontend admin cache sync depends on those fields.
 - Admin product delete on `/admin/products/{id}` is hard delete only when product has zero linked offers; endpoint must also delete linked favorites.
