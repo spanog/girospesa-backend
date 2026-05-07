@@ -12,6 +12,56 @@ from services.deal_freshness import classify_deal_freshness
 
 router = APIRouter()
 
+PRODUCT_SUBCATEGORIES = {
+    "alimentari-freschi": {
+        "Latticini e Formaggi",
+        "Macelleria e Polleria",
+        "Salumeria e Gastronomia",
+        "Ortofrutta",
+        "Pescheria",
+    },
+    "dispensa": {
+        "Primi Piatti e Preparati",
+        "Condimenti e Conserve",
+        "Conserve Ittiche e di Carne",
+        "Colazione e Prodotti da Forno",
+        "Caffè Tè e Tisane",
+        "Snack Salati e Dolciumi",
+    },
+    "surgelati": {
+        "Pesce e Frutti di Mare",
+        "Verdure e Preparati",
+        "Piatti Pronti e Pizze",
+        "Gelati",
+    },
+    "bevande": {
+        "Acqua e Bibite",
+        "Succhi e Bevande alla frutta",
+        "Alcolici e Birre",
+    },
+    "cura-persona-salute": {
+        "Igiene Orale",
+        "Igiene Corpo e Capelli",
+        "Igiene Intima e Salute",
+        "Infanzia",
+        "Integratori e Parafarmacia",
+    },
+    "cura-casa": {
+        "Detergenti Bucato e Stoviglie",
+        "Pulizia Superfici e Cura Ambienti",
+        "Carta e Monouso",
+        "Accessori e Manutenzione casa",
+    },
+    "prodotti-animali": {
+        "Alimentazione Cane e Gatto",
+        "Alimentazione Piccoli Animali",
+        "Igiene e Accessori Animali",
+    },
+    "altro": set(),
+}
+
+PRODUCT_CATEGORIES = set(PRODUCT_SUBCATEGORIES)
+
 
 def _verify_member(sb: object, list_id: str, user_id: str) -> None:
     """Raise 403 if user_id is not a member of list_id."""
@@ -47,6 +97,8 @@ class InviteBody(BaseModel):
 class UpdateListItemBody(BaseModel):
     quantity: float | None = None
     pinned_offer_id: str | None = None
+    category: str | None = None
+    subcategory: str | None = None
 
 
 def _product_categories(sb: object, product_ids: set[str]) -> dict[str, dict]:
@@ -106,6 +158,8 @@ def _patch_item_in_items(
     quantity = patch.get("quantity")
     if quantity is not None and quantity < 1:
         raise HTTPException(status_code=422, detail="quantity must be >= 1")
+    if patch.get("category") is None and "category" in patch:
+        patch = {**patch, "subcategory": None}
     updated = []
     found = False
     for item in items:
@@ -117,6 +171,45 @@ def _patch_item_in_items(
     if not found:
         raise HTTPException(status_code=404, detail="Item not found")
     return updated
+
+
+def _validated_category_patch(
+    body: UpdateListItemBody, current_item: dict
+) -> dict:
+    patch: dict = {}
+    fields = body.model_fields_set
+    if "category" in fields:
+        patch["category"] = body.category
+    if "subcategory" in fields:
+        patch["subcategory"] = body.subcategory
+    if not patch:
+        return patch
+    category = patch.get("category", current_item.get("category"))
+    subcategory = patch.get("subcategory", current_item.get("subcategory"))
+    _validate_category_values(category, subcategory)
+    if category is None:
+        patch["subcategory"] = None
+    if category == "altro":
+        patch["subcategory"] = None
+    return patch
+
+
+def _validate_category_values(category: str | None, subcategory: str | None) -> None:
+    if category is None:
+        if subcategory is not None:
+            raise HTTPException(status_code=422, detail="subcategory requires category")
+        return
+    if category not in PRODUCT_CATEGORIES:
+        raise HTTPException(status_code=422, detail="invalid category")
+    if subcategory and subcategory not in PRODUCT_SUBCATEGORIES[category]:
+        raise HTTPException(status_code=422, detail="invalid subcategory")
+
+
+def _find_item(items: list[dict], item_id: str) -> dict:
+    for item in items:
+        if item["id"] == item_id:
+            return item
+    raise HTTPException(status_code=404, detail="Item not found")
 
 
 def _deal_snapshot_from_offer(offer: dict) -> dict:
@@ -321,10 +414,13 @@ async def patch_item(
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
     current = sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
+    items = current.data["items"]
     patch = body.model_dump(exclude_none=True)
+    current_item = _find_item(items, item_id)
+    patch.update(_validated_category_patch(body, current_item))
     if body.pinned_offer_id:
         patch.update(_selected_offer_patch(sb, body.pinned_offer_id))
-    updated_items = _patch_item_in_items(current.data["items"], item_id, patch)
+    updated_items = _patch_item_in_items(items, item_id, patch)
     sb.table("shopping_lists").update({"items": updated_items}).eq("id", list_id).execute()
     return next(i for i in updated_items if i["id"] == item_id)
 

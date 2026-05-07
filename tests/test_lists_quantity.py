@@ -91,6 +91,23 @@ def test_patch_item_sets_selected_offer_snapshot():
     assert result[0]["found_deals"][0]["supermarket_name"] == "Lidl"
 
 
+def test_patch_item_clears_subcategory_when_category_is_null():
+    items = [
+        {
+            "id": "item-1",
+            "name": "Latte",
+            "quantity": 1.0,
+            "category": "alimentari-freschi",
+            "subcategory": "Latticini e Formaggi",
+        }
+    ]
+
+    result = _patch_item_in_items(items, "item-1", {"category": None})
+
+    assert result[0]["category"] is None
+    assert result[0]["subcategory"] is None
+
+
 # ---------------------------------------------------------------------------
 # Endpoint tests — PATCH /lists/{list_id}/items/{item_id}
 # ---------------------------------------------------------------------------
@@ -213,6 +230,75 @@ async def test_patch_selected_offer_returns_coherent_item():
     assert resp.json()["pinned_offer_id"] == "offer-1"
     assert resp.json()["pinned_product_id"] == "prod-1"
     assert resp.json()["found_deals"][0]["offer_id"] == "offer-1"
+
+
+async def test_patch_category_returns_updated_item():
+    initial_items = [
+        {
+            "id": _ITEM_ID,
+            "name": "Latte",
+            "quantity": 1.0,
+            "source": "manual",
+            "category": None,
+            "subcategory": None,
+        }
+    ]
+    sb_mock = MagicMock()
+    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+        "items": initial_items
+    }
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None):
+        resp = await _patch_req(
+            f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
+            json={
+                "category": "alimentari-freschi",
+                "subcategory": "Latticini e Formaggi",
+            },
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["category"] == "alimentari-freschi"
+    assert resp.json()["subcategory"] == "Latticini e Formaggi"
+
+
+async def test_patch_category_422_on_invalid_category():
+    sb_mock = MagicMock()
+    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+        "items": [{"id": _ITEM_ID, "name": "Latte", "quantity": 1.0}]
+    }
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None):
+        resp = await _patch_req(
+            f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
+            json={"category": "non-esiste"},
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 422
+
+
+async def test_patch_category_422_on_invalid_subcategory():
+    sb_mock = MagicMock()
+    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+        "items": [{"id": _ITEM_ID, "name": "Latte", "quantity": 1.0}]
+    }
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None):
+        resp = await _patch_req(
+            f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
+            json={
+                "category": "alimentari-freschi",
+                "subcategory": "Acqua e Bibite",
+            },
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 422
 
 
 async def test_patch_quantity_422_on_zero():
