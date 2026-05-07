@@ -115,7 +115,9 @@ def test_patch_item_clears_subcategory_when_category_is_null():
 import sys
 import os
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from fastapi import HTTPException
 
 # Stub infrastructure (same pattern as test_favorites_router.py)
 for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders"):
@@ -172,14 +174,19 @@ async def test_patch_quantity_returns_updated_item():
     initial_items = [
         {"id": _ITEM_ID, "name": "Latte", "quantity": 1.0, "checked": False, "purchased": False}
     ]
+    updated_items = [
+        {"id": _ITEM_ID, "name": "Latte", "quantity": 3.0, "checked": False, "purchased": False}
+    ]
     sb_mock = MagicMock()
-    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
-        "items": initial_items
-    }
-    sb_mock.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock()
+    table = sb_mock.table.return_value
+    table.select.return_value.eq.return_value.single.return_value.execute.side_effect = [
+        MagicMock(data={"items": initial_items}),
+        MagicMock(data={"items": updated_items}),
+    ]
 
     with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
-         patch.object(_lists_module, "_verify_member", return_value=None):
+         patch.object(_lists_module, "_verify_member", return_value=None), \
+         patch.object(_lists_module, "_rpc_update_list_item", new=AsyncMock()) as rpc_mock:
         resp = await _patch_req(
             f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
             json={"quantity": 3.0},
@@ -189,6 +196,7 @@ async def test_patch_quantity_returns_updated_item():
     assert resp.status_code == 200
     assert resp.json()["quantity"] == 3.0
     assert resp.json()["id"] == _ITEM_ID
+    rpc_mock.assert_awaited_once_with(_LIST_ID, _ITEM_ID, {"quantity": 3.0}, _USER_ID)
 
 
 async def test_patch_selected_offer_returns_coherent_item():
@@ -211,14 +219,18 @@ async def test_patch_selected_offer_returns_coherent_item():
         "subcategory": "Latte",
         "found_deals": [{"offer_id": "offer-1", "price_offer": 0.99}],
     }
+    updated_items = [{**initial_items[0], **offer_patch}]
     sb_mock = MagicMock()
-    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
-        "items": initial_items
-    }
+    table = sb_mock.table.return_value
+    table.select.return_value.eq.return_value.single.return_value.execute.side_effect = [
+        MagicMock(data={"items": initial_items}),
+        MagicMock(data={"items": updated_items}),
+    ]
 
     with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
          patch.object(_lists_module, "_verify_member", return_value=None), \
-         patch.object(_lists_module, "_selected_offer_patch", return_value=offer_patch):
+         patch.object(_lists_module, "_selected_offer_patch", return_value=offer_patch), \
+         patch.object(_lists_module, "_rpc_update_list_item", new=AsyncMock()) as rpc_mock:
         resp = await _patch_req(
             f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
             json={"pinned_offer_id": "offer-1"},
@@ -230,6 +242,7 @@ async def test_patch_selected_offer_returns_coherent_item():
     assert resp.json()["pinned_offer_id"] == "offer-1"
     assert resp.json()["pinned_product_id"] == "prod-1"
     assert resp.json()["found_deals"][0]["offer_id"] == "offer-1"
+    rpc_mock.assert_awaited_once_with(_LIST_ID, _ITEM_ID, offer_patch, _USER_ID)
 
 
 async def test_patch_category_returns_updated_item():
@@ -243,13 +256,22 @@ async def test_patch_category_returns_updated_item():
             "subcategory": None,
         }
     ]
+    updated_items = [
+        {
+            **initial_items[0],
+            "category": "alimentari-freschi",
+            "subcategory": "Latticini e Formaggi",
+        }
+    ]
     sb_mock = MagicMock()
-    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
-        "items": initial_items
-    }
+    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.side_effect = [
+        MagicMock(data={"items": initial_items}),
+        MagicMock(data={"items": updated_items}),
+    ]
 
     with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
-         patch.object(_lists_module, "_verify_member", return_value=None):
+         patch.object(_lists_module, "_verify_member", return_value=None), \
+         patch.object(_lists_module, "_rpc_update_list_item", new=AsyncMock()):
         resp = await _patch_req(
             f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
             json={
@@ -262,6 +284,41 @@ async def test_patch_category_returns_updated_item():
     assert resp.status_code == 200
     assert resp.json()["category"] == "alimentari-freschi"
     assert resp.json()["subcategory"] == "Latticini e Formaggi"
+
+
+async def test_patch_selected_offer_404_does_not_call_rpc():
+    initial_items = [
+        {
+            "id": _ITEM_ID,
+            "name": "Latte",
+            "quantity": 1.0,
+            "source": "manual",
+            "pinned_product_id": None,
+            "pinned_offer_id": None,
+            "found_deals": [],
+        }
+    ]
+    sb_mock = MagicMock()
+    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+        "items": initial_items
+    }
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None), \
+         patch.object(
+             _lists_module,
+             "_selected_offer_patch",
+             side_effect=HTTPException(status_code=404, detail="Offer not found"),
+         ), \
+         patch.object(_lists_module, "_rpc_update_list_item", new=AsyncMock()) as rpc_mock:
+        resp = await _patch_req(
+            f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
+            json={"pinned_offer_id": "missing"},
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 404
+    rpc_mock.assert_not_awaited()
 
 
 async def test_patch_category_422_on_invalid_category():

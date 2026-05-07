@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from jose import jwt
 from pydantic import BaseModel
 
 from core.auth import get_current_user_id
+from core.config import settings
 from core.database import get_supabase
+from services.extraction.normalizer import format_unit_price_label
 from services.deal_freshness import classify_deal_freshness
 
 router = APIRouter()
@@ -227,28 +232,68 @@ def _deal_snapshot_from_offer(offer: dict) -> dict:
         "unit_price": offer.get("unit_price"),
         "unit_price_value": offer.get("unit_price_value"),
         "unit_price_unit": offer.get("unit_price_unit"),
-        "unit_price_label": offer.get("unit_price_label"),
+        "unit_price_label": offer.get("unit_price") or format_unit_price_label(
+            offer.get("unit_price_value"),
+            offer.get("unit_price_unit"),
+        ),
         "valid_to": offer.get("valid_to"),
         "captured_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
-def _selected_offer_patch(sb: object, offer_id: str) -> dict:
-    offer = (
+def _offer_row(sb: object, offer_id: str) -> dict:
+    rows = (
         sb.table("offers")  # type: ignore[union-attr,attr-defined]
         .select(
             "id, product_id, supermarket_id, price_offer, price_original, "
             "discount_pct, unit_price, unit_price_value, unit_price_unit, "
-            "unit_price_label, valid_to, products(name, category, subcategory), "
-            "supermarkets(name)"
+            "valid_to"
         )
         .eq("id", offer_id)
-        .maybe_single()
+        .limit(1)
         .execute()
         .data
     )
-    if not offer:
+    if not rows:
         raise HTTPException(status_code=404, detail="Offer not found")
+    return rows[0]
+
+
+def _product_row(sb: object, product_id: str) -> dict:
+    rows = (
+        sb.table("products")  # type: ignore[union-attr,attr-defined]
+        .select("id, name, category, subcategory")
+        .eq("id", product_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return rows[0] if rows else {}
+
+
+def _supermarket_row(sb: object, supermarket_id: str | None) -> dict:
+    if not supermarket_id:
+        return {}
+    rows = (
+        sb.table("supermarkets")  # type: ignore[union-attr,attr-defined]
+        .select("id, name")
+        .eq("id", supermarket_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return rows[0] if rows else {}
+
+
+def _selected_offer_patch(sb: object, offer_id: str) -> dict:
+    offer = _offer_row(sb, offer_id)
+    product = _product_row(sb, offer["product_id"])
+    supermarket = _supermarket_row(sb, offer.get("supermarket_id"))
+    offer = {
+        **offer,
+        "products": product,
+        "supermarkets": supermarket,
+    }
     product = offer.get("products") or {}
     return {
         "source": "offer",
@@ -258,6 +303,44 @@ def _selected_offer_patch(sb: object, offer_id: str) -> dict:
         "subcategory": product.get("subcategory"),
         "found_deals": [_deal_snapshot_from_offer(offer)],
     }
+
+
+def _rpc_token_for_user(user_id: str) -> str:
+    now = int(time.time())
+    payload = {
+        "sub": user_id,
+        "role": "authenticated",
+        "aud": "authenticated",
+        "iss": "supabase",
+        "iat": now,
+        "exp": now + 300,
+    }
+    return jwt.encode(payload, settings.supabase_jwt_secret, algorithm="HS256")
+
+
+async def _rpc_update_list_item(
+    list_id: str,
+    item_id: str,
+    patch: dict,
+    user_id: str,
+) -> None:
+    token = _rpc_token_for_user(user_id)
+    headers = {
+        "apikey": settings.supabase_service_role_key,
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    url = f"{settings.supabase_url.rstrip('/')}/rest/v1/rpc/update_list_item"
+    payload = {
+        "p_list_id": list_id,
+        "p_item_id": item_id,
+        "p_patch": patch,
+    }
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(url, json=payload, headers=headers)
+    if response.status_code in (200, 204):
+        return
+    raise HTTPException(status_code=500, detail="Failed to persist list item patch")
 
 
 @router.get("/active")
@@ -420,9 +503,17 @@ async def patch_item(
     patch.update(_validated_category_patch(body, current_item))
     if body.pinned_offer_id:
         patch.update(_selected_offer_patch(sb, body.pinned_offer_id))
-    updated_items = _patch_item_in_items(items, item_id, patch)
-    sb.table("shopping_lists").update({"items": updated_items}).eq("id", list_id).execute()
-    return next(i for i in updated_items if i["id"] == item_id)
+    _patch_item_in_items(items, item_id, patch)
+    await _rpc_update_list_item(list_id, item_id, patch, user_id)
+    refreshed = (
+        sb.table("shopping_lists")
+        .select("items")
+        .eq("id", list_id)
+        .single()
+        .execute()
+        .data["items"]
+    )
+    return _find_item(refreshed, item_id)
 
 
 @router.post("/{list_id}/invite")

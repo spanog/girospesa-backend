@@ -118,7 +118,7 @@ Il backend usa tre livelli di autenticazione:
 | `GET` | `/lists/active` | ✅ | Lista spesa attiva; auto-crea se non esiste; arricchisce gli item con `category` e `subcategory` |
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
 | `POST` | `/lists/{id}/items` | ✅ member | Aggiunge item (manuale o da offerta) e salva snapshot `category`/`subcategory` quando collegato a prodotto/offerta |
-| `PATCH` | `/lists/{id}/items/{item_id}` | ✅ member | Aggiorna quantità o alternativa selezionata; con `pinned_offer_id` salva `source`, `pinned_product_id`, `found_deals`, categoria e sottocategoria coerenti |
+| `PATCH` | `/lists/{id}/items/{item_id}` | ✅ member | Aggiorna quantità o alternativa selezionata; con `pinned_offer_id` salva `source`, `pinned_product_id`, `found_deals`, categoria e sottocategoria coerenti via RPC concorrente-safe `update_list_item`, poi rilegge item persistito |
 | `DELETE` | `/lists/{id}/items/{item_id}` | ✅ member | Rimuove item |
 | `POST` | `/lists/{id}/items/{item_id}/toggle` | ✅ member | Check/uncheck item; registra `checked_by`, `checked_at` |
 | `POST` | `/lists/{id}/invite` | ✅ owner | Crea link invito (token 64 char, TTL 7 giorni) |
