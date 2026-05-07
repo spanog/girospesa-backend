@@ -42,7 +42,9 @@ def _make_list_item(
     return {
         "id": str(uuid.uuid4()),
         "name": name,
+        "quantity": 1,
         "checked": False,
+        "purchased": False,
         "added_by": None,
         "added_at": None,
         "pinned_product_id": pinned_product_id,
@@ -54,6 +56,20 @@ def _make_list_item(
 def _supabase_with_real_db(supabase_client: object) -> object:
     """Return the service-role client as-is (no storage mock needed for optimize)."""
     return supabase_client
+
+
+def _create_member_list(supabase_client, auth_user: str, name: str, items: list[dict]) -> dict:
+    row = (
+        supabase_client.table("shopping_lists")
+        .insert({"user_id": auth_user, "name": name, "items": items})
+        .execute()
+    ).data[0]
+    supabase_client.table("list_members").insert({
+        "list_id": row["id"],
+        "user_id": auth_user,
+        "role": "owner",
+    }).execute()
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +143,7 @@ def seeded_offer(supabase_client, seeded_product, seeded_supermarket):
             "unit_price_value": 1.29,
             "unit_price_unit": "l",
             "valid_to": _FUTURE_DATE,
+            "is_confirmed": True,
         })
         .execute()
     ).data[0]
@@ -136,36 +153,21 @@ def seeded_offer(supabase_client, seeded_product, seeded_supermarket):
 @pytest.fixture()
 def shopping_list_with_match(supabase_client, auth_user, seeded_offer):
     """Create a shopping list with one item that matches the seeded offer."""
-    items = [_make_list_item("Latte intero")]
-    row = (
-        supabase_client.table("shopping_lists")
-        .insert({"user_id": auth_user, "name": "Test list", "items": items})
-        .execute()
-    ).data[0]
-    return row
+    items = [_make_list_item("Latte intero", pinned_product_id=seeded_offer["product_id"])]
+    return _create_member_list(supabase_client, auth_user, "Test list", items)
 
 
 @pytest.fixture()
 def shopping_list_empty(supabase_client, auth_user):
     """Create a shopping list with no items."""
-    row = (
-        supabase_client.table("shopping_lists")
-        .insert({"user_id": auth_user, "name": "Empty list", "items": []})
-        .execute()
-    ).data[0]
-    return row
+    return _create_member_list(supabase_client, auth_user, "Empty list", [])
 
 
 @pytest.fixture()
 def shopping_list_no_match(supabase_client, auth_user, seeded_offer):
     """Create a shopping list whose item has no matching offer in the DB."""
     items = [_make_list_item("Articolo inesistente XYZ 999")]
-    row = (
-        supabase_client.table("shopping_lists")
-        .insert({"user_id": auth_user, "name": "No-match list", "items": items})
-        .execute()
-    ).data[0]
-    return row
+    return _create_member_list(supabase_client, auth_user, "No-match list", items)
 
 
 @pytest.fixture()
@@ -181,12 +183,7 @@ def shopping_list_pinned_offer_and_no_match(
         ),
         _make_list_item("Articolo inesistente XYZ 999"),
     ]
-    row = (
-        supabase_client.table("shopping_lists")
-        .insert({"user_id": auth_user, "name": "Mixed list", "items": items})
-        .execute()
-    ).data[0]
-    return row
+    return _create_member_list(supabase_client, auth_user, "Mixed list", items)
 
 
 @pytest.fixture()
@@ -207,12 +204,9 @@ def shopping_list_pinned_open_ended_offer(
             pinned_offer_id=seeded_offer["id"],
         )
     ]
-    row = (
-        supabase_client.table("shopping_lists")
-        .insert({"user_id": auth_user, "name": "Open-ended offer list", "items": items})
-        .execute()
-    ).data[0]
-    return row
+    return _create_member_list(
+        supabase_client, auth_user, "Open-ended offer list", items
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +241,7 @@ class TestOptimizeIntegration:
         assert len(body["store_groups"]) >= 1
         assert body["total_cost"] > 0
         assert body["unmatched_items"] == []
+        assert "mode" not in body
 
         # Verify matched product fields
         matched = body["store_groups"][0]["products"][0]
@@ -282,7 +277,7 @@ class TestOptimizeIntegration:
     async def test_optimize_no_matching_offers_returns_zero_coverage(
         self, supabase_client, shopping_list_no_match
     ):
-        """Items with no matching offer → coverage_percent=0, all items unmatched."""
+        """Manual items with no offer stay in the plan without alternatives."""
         sb = _supabase_with_real_db(supabase_client)
 
         async with httpx.AsyncClient(app=app, base_url="http://test") as client:
@@ -294,10 +289,13 @@ class TestOptimizeIntegration:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["coverage_percent"] == 0
-        assert body["store_groups"] == []
-        assert len(body["unmatched_items"]) == 1
-        assert "Articolo inesistente XYZ 999" in body["unmatched_items"]
+        assert body["coverage_percent"] == 100
+        assert body["unmatched_items"] == []
+        assert body["store_groups"][0]["supermarket_id"] == "__manual__"
+        matched = body["store_groups"][0]["products"][0]
+        assert matched["source"] == "manual"
+        assert matched["offer_id"] is None
+        assert matched["alternatives"] == []
 
     async def test_optimize_keeps_pinned_offer_when_manual_item_has_no_match(
         self, supabase_client, shopping_list_pinned_offer_and_no_match, seeded_offer
@@ -314,12 +312,12 @@ class TestOptimizeIntegration:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["coverage_percent"] == 50
-        assert body["unmatched_items"] == ["Articolo inesistente XYZ 999"]
-        assert len(body["store_groups"]) == 1
-        assert len(body["store_groups"][0]["products"]) == 1
+        assert body["coverage_percent"] == 100
+        assert body["unmatched_items"] == []
+        assert len(body["store_groups"]) == 2
 
-        matched = body["store_groups"][0]["products"][0]
+        offer_group = next(g for g in body["store_groups"] if g["supermarket_id"] != "__manual__")
+        matched = offer_group["products"][0]
         assert matched["offer_id"] == seeded_offer["id"]
         assert matched["match_score"] == pytest.approx(1.0)
 
@@ -342,10 +340,10 @@ class TestOptimizeIntegration:
         assert body["unmatched_items"] == []
         assert body["store_groups"][0]["products"][0]["offer_id"] == seeded_offer["id"]
 
-    async def test_optimize_minimize_stores_mode(
+    async def test_optimize_ignores_legacy_mode_field(
         self, supabase_client, shopping_list_with_match
     ):
-        """minimize_stores mode returns valid result with mode field set correctly."""
+        """Legacy clients may send mode; optimizer ignores it and returns one plan."""
         sb = _supabase_with_real_db(supabase_client)
 
         async with httpx.AsyncClient(app=app, base_url="http://test") as client:
@@ -359,5 +357,29 @@ class TestOptimizeIntegration:
                 )
 
         assert resp.status_code == 200
-        assert resp.json()["mode"] == "minimize_stores"
-        assert resp.json()["coverage_percent"] > 0
+        body = resp.json()
+        assert "mode" not in body
+        assert body["coverage_percent"] > 0
+
+    async def test_optimize_manual_item_uses_fuzzy_product_name_search(
+        self, supabase_client, auth_user, seeded_product, seeded_offer
+    ):
+        """Manual item stays manual while fuzzy offers appear as alternatives."""
+        items = [_make_list_item("Late intero")]
+        row = _create_member_list(supabase_client, auth_user, "Fuzzy list", items)
+        sb = _supabase_with_real_db(supabase_client)
+
+        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+            with patch("api.routers.optimize.get_supabase", return_value=sb):
+                resp = await client.post("/optimize", json={"list_id": row["id"]})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["coverage_percent"] == 100
+        matched = body["store_groups"][0]["products"][0]
+        assert matched["source"] == "manual"
+        assert matched["product_name"] == "Late intero"
+        assert matched["product_id"] is None
+        assert matched["offer_id"] is None
+        assert matched["alternatives"][0]["product_id"] == seeded_product["id"]
+        assert matched["alternatives"][0]["offer_id"] == seeded_offer["id"]

@@ -117,6 +117,7 @@ Il backend usa tre livelli di autenticazione:
 | `GET` | `/lists/active` | ✅ | Lista spesa attiva; auto-crea se non esiste; arricchisce gli item con `category` e `subcategory` |
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
 | `POST` | `/lists/{id}/items` | ✅ member | Aggiunge item (manuale o da offerta) e salva snapshot `category`/`subcategory` quando collegato a prodotto/offerta |
+| `PATCH` | `/lists/{id}/items/{item_id}` | ✅ member | Aggiorna quantità o alternativa selezionata; con `pinned_offer_id` salva `source`, `pinned_product_id`, `found_deals`, categoria e sottocategoria coerenti |
 | `DELETE` | `/lists/{id}/items/{item_id}` | ✅ member | Rimuove item |
 | `POST` | `/lists/{id}/items/{item_id}/toggle` | ✅ member | Check/uncheck item; registra `checked_by`, `checked_at` |
 | `POST` | `/lists/{id}/invite` | ✅ owner | Crea link invito (token 64 char, TTL 7 giorni) |
@@ -279,7 +280,7 @@ curl -X POST http://localhost:8000/flyers/admin/cleanup \
 
 ```
 Frontend
-  POST /optimize {list_id, mode: "maximize_savings" | "minimize_stores"}
+  POST /optimize {list_id}
                     │
                     ▼
   Carica items non spuntati dalla lista
@@ -287,18 +288,19 @@ Frontend
   Carica tutte le offerte attive nella finestra corrente (`valid_from <= oggi <= valid_to`, null-safe) con prodotto + supermercato
                     │
                     ▼ per ogni item
-  Usa `pinned_offer_id` come match esatto; poi `pinned_product_id`; solo gli item manuali passano al fuzzy-match (difflib, soglia 0.5)
+  Usa `pinned_offer_id` come default se ancora valido/vicino
+  Usa `pinned_product_id` come match canonico se non c'è offerta specifica
+  Gli item manuali restano nel gruppo `Senza offerta`
+  Per gli item manuali usa ricerca fuzzy `pg_trgm` solo per le alternative
   Filtra per distanza con PostGIS (`nearby_supermarkets`, `ST_DWithin`)
                     │
                     ▼
-  Greedy set-cover loop:
-    ┌─────────────────────────────────────────┐
-    │  Assegna un punteggio a ogni negozio    │
-    │  (coverage × risparmio, o viceversa)    │
-    │  Scegli il negozio migliore             │
-    │  Assegna tutti gli item che copre       │
-    │  Ripeti finché nessun item rimane       │
-    └─────────────────────────────────────────┘
+  Raggruppa item con offerta per supermercato
+  Raggruppa item manuali senza offerta separatamente
+  Include alternative ordinate per prezzo crescente
+  Se l'utente sceglie un'alternativa:
+    PATCH /lists/{list_id}/items/{item_id}
+    aggiorna pinned_offer_id, pinned_product_id, found_deals e categorie
                     │
                     ▼
   Risposta: store_groups[{supermercato, prodotti, subtotal,

@@ -44,8 +44,9 @@ class InviteBody(BaseModel):
     email: str | None = None
 
 
-class UpdateItemQuantityBody(BaseModel):
-    quantity: float
+class UpdateListItemBody(BaseModel):
+    quantity: float | None = None
+    pinned_offer_id: str | None = None
 
 
 def _product_categories(sb: object, product_ids: set[str]) -> dict[str, dict]:
@@ -96,19 +97,74 @@ def _enrich_items_with_categories(sb: object, items: list[dict]) -> list[dict]:
 def _patch_quantity_in_items(
     items: list[dict], item_id: str, quantity: float
 ) -> list[dict]:
-    if quantity < 1:
+    return _patch_item_in_items(items, item_id, {"quantity": quantity})
+
+
+def _patch_item_in_items(
+    items: list[dict], item_id: str, patch: dict
+) -> list[dict]:
+    quantity = patch.get("quantity")
+    if quantity is not None and quantity < 1:
         raise HTTPException(status_code=422, detail="quantity must be >= 1")
     updated = []
     found = False
     for item in items:
         if item["id"] == item_id:
-            updated.append({**item, "quantity": quantity})
+            updated.append({**item, **patch})
             found = True
         else:
             updated.append(item)
     if not found:
         raise HTTPException(status_code=404, detail="Item not found")
     return updated
+
+
+def _deal_snapshot_from_offer(offer: dict) -> dict:
+    product = offer.get("products") or {}
+    supermarket = offer.get("supermarkets") or {}
+    return {
+        "offer_id": offer["id"],
+        "product_id": offer["product_id"],
+        "product_name": product.get("name"),
+        "supermarket_id": offer.get("supermarket_id"),
+        "supermarket_name": supermarket.get("name"),
+        "price_offer": offer.get("price_offer"),
+        "price_original": offer.get("price_original"),
+        "discount_pct": offer.get("discount_pct"),
+        "unit_price": offer.get("unit_price"),
+        "unit_price_value": offer.get("unit_price_value"),
+        "unit_price_unit": offer.get("unit_price_unit"),
+        "unit_price_label": offer.get("unit_price_label"),
+        "valid_to": offer.get("valid_to"),
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _selected_offer_patch(sb: object, offer_id: str) -> dict:
+    offer = (
+        sb.table("offers")  # type: ignore[union-attr,attr-defined]
+        .select(
+            "id, product_id, supermarket_id, price_offer, price_original, "
+            "discount_pct, unit_price, unit_price_value, unit_price_unit, "
+            "unit_price_label, valid_to, products(name, category, subcategory), "
+            "supermarkets(name)"
+        )
+        .eq("id", offer_id)
+        .maybe_single()
+        .execute()
+        .data
+    )
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    product = offer.get("products") or {}
+    return {
+        "source": "offer",
+        "pinned_product_id": offer["product_id"],
+        "pinned_offer_id": offer["id"],
+        "category": product.get("category"),
+        "subcategory": product.get("subcategory"),
+        "found_deals": [_deal_snapshot_from_offer(offer)],
+    }
 
 
 @router.get("/active")
@@ -256,16 +312,19 @@ async def toggle_item(
 
 
 @router.patch("/{list_id}/items/{item_id}")
-async def patch_item_quantity(
+async def patch_item(
     list_id: str,
     item_id: str,
-    body: UpdateItemQuantityBody,
+    body: UpdateListItemBody,
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict:
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
     current = sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
-    updated_items = _patch_quantity_in_items(current.data["items"], item_id, body.quantity)
+    patch = body.model_dump(exclude_none=True)
+    if body.pinned_offer_id:
+        patch.update(_selected_offer_patch(sb, body.pinned_offer_id))
+    updated_items = _patch_item_in_items(current.data["items"], item_id, patch)
     sb.table("shopping_lists").update({"items": updated_items}).eq("id", list_id).execute()
     return next(i for i in updated_items if i["id"] == item_id)
 

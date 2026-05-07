@@ -60,6 +60,7 @@ async def _run_optimize(items, offer, profile=None) -> dict:
         profile = {"home_lat": 38.0, "home_lng": 16.0, "max_distance_km": 10}
     sb = _make_table_mock(items, profile, offer)
     offers_query = MagicMock()
+    offers_query.eq.return_value = offers_query
     offers_query.execute.return_value.data = [offer]
 
     transport = httpx.ASGITransport(app=_test_app)
@@ -67,8 +68,9 @@ async def _run_optimize(items, offer, profile=None) -> dict:
         _test_app.dependency_overrides = _deps()
         with patch.object(_opt_module, "get_supabase", return_value=sb), \
              patch.object(_opt_module, "apply_current_offer_window", return_value=offers_query), \
+             patch.object(_opt_module, "_semantic_product_scores", return_value={"prod-1": 1.0}), \
              patch.object(_opt_module, "_nearby_distances", return_value={"store-1": 1.5}):
-            resp = await client.post("/optimize", json={"list_id": "list-1", "mode": "maximize_savings"})
+            resp = await client.post("/optimize", json={"list_id": "list-1"})
 
     assert resp.status_code == 200, f"Got {resp.status_code}: {resp.text}"
     return resp.json()
@@ -82,7 +84,7 @@ def _make_item(quantity: float, name: str = "Latte") -> dict:
         "checked": False,
         "purchased": False,
         "pinned_offer_id": None,
-        "pinned_product_id": None,
+        "pinned_product_id": "prod-1",
     }
 
 

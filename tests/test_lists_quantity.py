@@ -1,5 +1,5 @@
 import pytest
-from api.routers.lists import _patch_quantity_in_items
+from api.routers.lists import _patch_item_in_items, _patch_quantity_in_items
 
 
 def _make_item(item_id: str, quantity: float = 1.0) -> dict:
@@ -50,6 +50,45 @@ def test_raises_422_when_quantity_negative():
     with pytest.raises(HTTPException) as exc_info:
         _patch_quantity_in_items(items, "item-1", -1.0)
     assert exc_info.value.status_code == 422
+
+
+def test_patch_item_sets_selected_offer_snapshot():
+    items = [
+        {
+            "id": "item-1",
+            "name": "Latte",
+            "quantity": 1.0,
+            "source": "manual",
+            "pinned_product_id": None,
+            "pinned_offer_id": None,
+            "found_deals": [],
+        }
+    ]
+    offer_patch = {
+        "source": "offer",
+        "pinned_product_id": "prod-1",
+        "pinned_offer_id": "offer-1",
+        "category": "dairy",
+        "subcategory": "Latte",
+        "found_deals": [
+            {
+                "offer_id": "offer-1",
+                "product_id": "prod-1",
+                "product_name": "Latte intero",
+                "supermarket_id": "store-1",
+                "supermarket_name": "Lidl",
+                "price_offer": 0.99,
+            }
+        ],
+    }
+
+    result = _patch_item_in_items(items, "item-1", offer_patch)
+
+    assert result[0]["source"] == "offer"
+    assert result[0]["pinned_offer_id"] == "offer-1"
+    assert result[0]["pinned_product_id"] == "prod-1"
+    assert result[0]["found_deals"][0]["offer_id"] == "offer-1"
+    assert result[0]["found_deals"][0]["supermarket_name"] == "Lidl"
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +174,47 @@ async def test_patch_quantity_returns_updated_item():
     assert resp.json()["id"] == _ITEM_ID
 
 
+async def test_patch_selected_offer_returns_coherent_item():
+    initial_items = [
+        {
+            "id": _ITEM_ID,
+            "name": "Latte",
+            "quantity": 1.0,
+            "source": "manual",
+            "pinned_product_id": None,
+            "pinned_offer_id": None,
+            "found_deals": [],
+        }
+    ]
+    offer_patch = {
+        "source": "offer",
+        "pinned_product_id": "prod-1",
+        "pinned_offer_id": "offer-1",
+        "category": "dairy",
+        "subcategory": "Latte",
+        "found_deals": [{"offer_id": "offer-1", "price_offer": 0.99}],
+    }
+    sb_mock = MagicMock()
+    sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+        "items": initial_items
+    }
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None), \
+         patch.object(_lists_module, "_selected_offer_patch", return_value=offer_patch):
+        resp = await _patch_req(
+            f"/lists/{_LIST_ID}/items/{_ITEM_ID}",
+            json={"pinned_offer_id": "offer-1"},
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "offer"
+    assert resp.json()["pinned_offer_id"] == "offer-1"
+    assert resp.json()["pinned_product_id"] == "prod-1"
+    assert resp.json()["found_deals"][0]["offer_id"] == "offer-1"
+
+
 async def test_patch_quantity_422_on_zero():
     sb_mock = MagicMock()
     sb_mock.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
@@ -171,10 +251,8 @@ async def test_reset_list_clears_items_and_returns_updated_list():
         "is_active": True,
     }
     sb_mock = MagicMock()
-    update_query = sb_mock.table.return_value.update.return_value
-    update_query.eq.return_value.single.return_value.execute.return_value.data = (
-        updated_list
-    )
+    table = sb_mock.table.return_value
+    table.select.return_value.eq.return_value.single.return_value.execute.return_value.data = updated_list
 
     with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
          patch.object(_lists_module, "_verify_member", return_value=None):

@@ -132,10 +132,10 @@ class TestOptimizerPerformance:
         assert body["coverage_percent"] > 0, "Expected at least some items covered"
         assert len(body["store_groups"]) >= 1, "Expected at least one store group"
 
-    async def test_optimize_minimize_stores_mode_under_2s(
+    async def test_optimize_legacy_mode_payload_under_2s(
         self, supabase_client, seeded_1k_optimizer_dataset, shopping_list_50_items
     ):
-        """minimize_stores mode also completes in < 2s with 1k offers."""
+        """Legacy mode payload is ignored and still completes in < 2s."""
         async with httpx.AsyncClient(app=app, base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=supabase_client):
                 start = time.perf_counter()
@@ -147,6 +147,6 @@ class TestOptimizerPerformance:
 
         assert resp.status_code == 200
         assert elapsed_s < OPTIMIZE_LIMIT_S, (
-            f"minimize_stores mode took {elapsed_s:.2f}s — exceeds {OPTIMIZE_LIMIT_S}s."
+            f"Optimize with legacy mode took {elapsed_s:.2f}s — exceeds {OPTIMIZE_LIMIT_S}s."
         )
-        assert resp.json()["mode"] == "minimize_stores"
+        assert "mode" not in resp.json()

@@ -1,12 +1,11 @@
 """
-Greedy set-cover optimization for shopping lists.
-Returns the cheapest store combination that covers as many list items as possible.
+Single-plan offer matching for shopping lists.
+Returns best offer per item, grouped by supermarket with selectable alternatives.
 """
 
 from __future__ import annotations
 
-import difflib
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -33,7 +32,6 @@ def _verify_member(sb: object, list_id: str, user_id: str) -> None:
 
 class OptimizeBody(BaseModel):
     list_id: str
-    mode: Literal["minimize_stores", "maximize_savings"] = "maximize_savings"
 
 
 class ProductAlternative(BaseModel):
@@ -59,13 +57,14 @@ class ProductAlternative(BaseModel):
 class MatchedProduct(BaseModel):
     list_item_id: str
     list_item_name: str
-    offer_id: str
-    product_id: str
+    source: str = "offer"
+    offer_id: str | None
+    product_id: str | None
     product_name: str
     brand: str | None
     format: dict
     format_label: str
-    price_offer: float
+    price_offer: float | None
     price_original: float | None
     discount_pct: int | None
     unit_price: str | None = None
@@ -93,11 +92,6 @@ class OptimizationResult(BaseModel):
     total_cost: float
     unmatched_items: list[str]
     coverage_percent: int
-    mode: str
-
-
-def _match_score(item_name: str, product_name: str) -> float:
-    return difflib.SequenceMatcher(None, item_name.lower(), product_name.lower()).ratio()
 
 
 def _pick_search_coordinate(profile: dict, search_key: str, home_key: str) -> float | None:
@@ -160,17 +154,189 @@ def _coverage_match(
     }
 
 
+def _semantic_product_scores(sb: object, item_name: str, limit: int = 12) -> dict[str, float]:
+    rows = sb.rpc(  # type: ignore[union-attr,attr-defined]
+        "search_products_catalog",
+        {"query": item_name, "lim": limit},
+    ).execute().data or []
+    return {row["id"]: float(row.get("score") or 0) for row in rows}
+
+
+def _semantic_offer_matches(
+    sb: object,
+    item: dict,
+    all_offers: list[dict],
+    nearby_distances: dict[str, float] | None,
+) -> list[dict]:
+    scores = _semantic_product_scores(sb, item["name"])
+    matches = [
+        _coverage_match(offer, scores[offer["product_id"]], nearby_distances)
+        for offer in all_offers
+        if offer.get("product_id") in scores and _is_nearby(offer, nearby_distances)
+    ]
+    return sorted(matches, key=lambda x: (float(x["offer"].get("price_offer", 0)), -x["score"]))
+
+
+def _product_offer_matches(
+    product_id: str,
+    all_offers: list[dict],
+    nearby_distances: dict[str, float] | None,
+) -> list[dict]:
+    matches = [
+        _coverage_match(offer, 1.0, nearby_distances)
+        for offer in all_offers
+        if offer.get("product_id") == product_id and _is_nearby(offer, nearby_distances)
+    ]
+    return sorted(matches, key=lambda x: float(x["offer"].get("price_offer", 0)))
+
+
+def _dedupe_matches(matches: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    result: list[dict] = []
+    for match in matches:
+        offer_id = match["offer"].get("id")
+        if offer_id in seen:
+            continue
+        seen.add(offer_id)
+        result.append(match)
+    return result
+
+
+def _item_matches(
+    sb: object,
+    item: dict,
+    all_offers: list[dict],
+    offers_by_id: dict[str, dict],
+    nearby_distances: dict[str, float] | None,
+) -> list[dict]:
+    pinned_offer = offers_by_id.get(item.get("pinned_offer_id"))
+    primary = []
+    if pinned_offer and _is_nearby(pinned_offer, nearby_distances):
+        primary = [_coverage_match(pinned_offer, 1.0, nearby_distances)]
+
+    product_matches = []
+    if item.get("pinned_product_id"):
+        product_matches = _product_offer_matches(
+            item["pinned_product_id"], all_offers, nearby_distances
+        )
+
+    semantic_matches = _semantic_offer_matches(sb, item, all_offers, nearby_distances)
+    return _dedupe_matches(primary + product_matches + semantic_matches)
+
+
+def _product_alternative(match: dict, selected_store_id: str) -> ProductAlternative:
+    offer = match["offer"]
+    product_info = match["product_info"]
+    store = match["store"]
+    return ProductAlternative(
+        offer_id=offer["id"],
+        product_id=offer["product_id"],
+        brand=product_info.get("brand"),
+        name=product_info.get("name", ""),
+        format=product_info.get("format") or {},
+        format_label=product_info.get("format_label") or "",
+        price_offer=float(offer.get("price_offer", 0)),
+        price_original=float(offer["price_original"]) if offer.get("price_original") else None,
+        discount_pct=offer.get("discount_pct"),
+        unit_price=offer.get("unit_price"),
+        unit_price_value=offer.get("unit_price_value"),
+        unit_price_unit=offer.get("unit_price_unit"),
+        unit_price_label=offer.get("unit_price") or format_unit_price_label(
+            offer.get("unit_price_value"), offer.get("unit_price_unit")
+        ),
+        supermarket_id=store.get("id", ""),
+        supermarket_name=store.get("name", ""),
+        valid_to=str(offer.get("valid_to") or ""),
+        is_same_store=store.get("id") == selected_store_id,
+    )
+
+
+def _matched_product(item: dict, match: dict, matches: list[dict]) -> MatchedProduct:
+    offer = match["offer"]
+    product_info = match["product_info"]
+    store_id = match["store"].get("id", "")
+    alternatives = [_product_alternative(alt, store_id) for alt in matches]
+    return MatchedProduct(
+        list_item_id=item["id"],
+        list_item_name=item["name"],
+        source="offer",
+        offer_id=offer["id"],
+        product_id=offer["product_id"],
+        product_name=product_info.get("name", ""),
+        brand=product_info.get("brand"),
+        format=product_info.get("format") or {},
+        format_label=product_info.get("format_label") or "",
+        price_offer=float(offer["price_offer"]),
+        price_original=float(offer["price_original"]) if offer.get("price_original") else None,
+        discount_pct=offer.get("discount_pct"),
+        unit_price=offer.get("unit_price"),
+        unit_price_value=offer.get("unit_price_value"),
+        unit_price_unit=offer.get("unit_price_unit"),
+        unit_price_label=offer.get("unit_price") or format_unit_price_label(
+            offer.get("unit_price_value"), offer.get("unit_price_unit")
+        ),
+        quantity=float(item.get("quantity", 1)),
+        match_score=match["score"],
+        alternatives=alternatives,
+    )
+
+
+def _manual_product(item: dict, matches: list[dict]) -> MatchedProduct:
+    return MatchedProduct(
+        list_item_id=item["id"],
+        list_item_name=item["name"],
+        source="manual",
+        offer_id=None,
+        product_id=None,
+        product_name=item["name"],
+        brand=None,
+        format={},
+        format_label="",
+        price_offer=None,
+        price_original=None,
+        discount_pct=None,
+        quantity=float(item.get("quantity", 1)),
+        match_score=1.0,
+        alternatives=[_product_alternative(alt, "__manual__") for alt in matches],
+    )
+
+
+def _empty_store_group(match: dict) -> dict:
+    store = match["store"]
+    return {
+        "supermarket_id": store.get("id", ""),
+        "supermarket_name": store.get("name", ""),
+        "supermarket_logo_url": store.get("logo_url"),
+        "distance_km": match["distance"],
+        "products": [],
+        "subtotal": 0.0,
+        "savings": 0.0,
+    }
+
+
+def _manual_store_group() -> dict:
+    return {
+        "supermarket_id": "__manual__",
+        "supermarket_name": "Senza offerta",
+        "supermarket_logo_url": None,
+        "distance_km": None,
+        "products": [],
+        "subtotal": 0.0,
+        "savings": 0.0,
+    }
+
+
 @router.post("")
 async def optimize(
     body: OptimizeBody,
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> OptimizationResult:
     """
-    Greedy set-cover optimization.
+    Build one shopping route plan.
     1. Load list items for the user.
-    2. For each item, fuzzy-match against active offers using difflib similarity.
-    3. Build coverage matrix (item → best offer per store).
-    4. Greedy: pick store with most coverage (ties broken by savings or store count).
+    2. Keep pinned offers as defaults when still active and nearby.
+    3. Fuzzy-match manual item names through pg_trgm product search.
+    4. Pick best offer per item and expose alternatives ordered by price.
     """
     sb = get_supabase()
     _verify_member(sb, body.list_id, user_id)
@@ -193,7 +359,6 @@ async def optimize(
             total_cost=0,
             unmatched_items=[],
             coverage_percent=100,
-            mode=body.mode,
         )
 
     # Fetch user profile for location — may not exist for new users
@@ -216,197 +381,44 @@ async def optimize(
     # Fetch all active offers joined with product catalog and supermarket info
     offers_query = apply_current_offer_window(
         sb.table("offers").select(_offer_select())
-    )
+    ).eq("is_confirmed", True)
     all_offers: list[dict] = offers_query.execute().data or []
     offers_by_id = {offer["id"]: offer for offer in all_offers}
 
-    # Build coverage matrix: item_id → list of matched offers
-    coverage: dict[str, list[dict]] = {item["id"]: [] for item in unchecked}
+    store_groups: dict[str, dict] = {}
+    unmatched: list[str] = []
 
     for item in unchecked:
-        pinned_offer_id = item.get("pinned_offer_id")
-        if pinned_offer_id:
-            offer = offers_by_id.get(pinned_offer_id)
-            if offer and _is_nearby(offer, nearby_distances):
-                coverage[item["id"]].append(_coverage_match(offer, 1.0, nearby_distances))
+        matches = _item_matches(sb, item, all_offers, offers_by_id, nearby_distances)
+        is_manual = not item.get("pinned_offer_id") and not item.get("pinned_product_id")
+        if is_manual:
+            if "__manual__" not in store_groups:
+                store_groups["__manual__"] = _manual_store_group()
+            store_groups["__manual__"]["products"].append(_manual_product(item, matches))
             continue
 
-        pinned_product_id = item.get("pinned_product_id")
-        if pinned_product_id:
-            product_offers = [
-                offer for offer in all_offers
-                if offer.get("product_id") == pinned_product_id
-                and _is_nearby(offer, nearby_distances)
-            ]
-            coverage[item["id"]].extend(
-                _coverage_match(offer, 1.0, nearby_distances)
-                for offer in product_offers
-            )
+        if not matches:
+            unmatched.append(item["name"])
             continue
 
-        for offer in all_offers:
-            if not _is_nearby(offer, nearby_distances):
-                continue
-            product_info: dict = offer.get("products") or {}
-            product_name = product_info.get("name", "")
-            score = _match_score(item["name"], product_name)
-            if score < 0.5:
-                continue
+        match = matches[0]
+        store_id = match["store"].get("id")
+        if not store_id:
+            unmatched.append(item["name"])
+            continue
 
-            coverage[item["id"]].append(_coverage_match(offer, score, nearby_distances))
+        if store_id not in store_groups:
+            store_groups[store_id] = _empty_store_group(match)
 
-    # Sort matches by price_offer ASC, then score DESC for each item
-    for item_id in coverage:
-        coverage[item_id].sort(
-            key=lambda x: (float(x["offer"].get("price_offer", 0)), -x["score"])
-        )
-
-    # Greedy store selection
-    store_groups: dict[str, dict] = {}
-    assigned: set[str] = set()
-    remaining = [item["id"] for item in unchecked]
-
-    while remaining:
-        store_scores: dict[str, dict] = {}
-        for item_id in remaining:
-            seen_stores_for_item: set[str] = set()
-            for match in coverage[item_id]:
-                store_id = match["store"].get("id")
-                if not store_id or store_id in seen_stores_for_item:
-                    continue
-                seen_stores_for_item.add(store_id)
-                if store_id not in store_scores:
-                    store_scores[store_id] = {
-                        "store": match["store"],
-                        "items": [],
-                        "total_savings": 0.0,
-                    }
-                if item_id not in [x["item_id"] for x in store_scores[store_id]["items"]]:
-                    store_scores[store_id]["items"].append({
-                        "item_id": item_id,
-                        "match": match,
-                    })
-                    store_scores[store_id]["total_savings"] += match["savings"]
-
-        if not store_scores:
-            break
-
-        if body.mode == "minimize_stores":
-            best_store_id = max(
-                store_scores,
-                key=lambda sid: (
-                    len(store_scores[sid]["items"]),
-                    store_scores[sid]["total_savings"],
-                ),
-            )
-        else:  # maximize_savings
-            best_store_id = max(
-                store_scores,
-                key=lambda sid: (
-                    store_scores[sid]["total_savings"],
-                    len(store_scores[sid]["items"]),
-                ),
-            )
-
-        best = store_scores[best_store_id]
-        if not best["items"]:
-            break
-
-        store_info = best["store"]
-        if best_store_id not in store_groups:
-            store_groups[best_store_id] = {
-                "supermarket_id": best_store_id,
-                "supermarket_name": store_info.get("name", ""),
-                "supermarket_logo_url": store_info.get("logo_url"),
-                "distance_km": best["items"][0]["match"]["distance"] if best["items"] else None,
-                "products": [],
-                "subtotal": 0.0,
-                "savings": 0.0,
-            }
-
-        for entry in best["items"]:
-            item_id = entry["item_id"]
-            if item_id in assigned:
-                continue
-            match = entry["match"]
-            offer = match["offer"]
-            product_info = match["product_info"]
-            item_name = next((i["name"] for i in unchecked if i["id"] == item_id), "")
-
-            alternatives = [
-                ProductAlternative(
-                    offer_id=alt["offer"]["id"],
-                    product_id=alt["offer"]["product_id"],
-                    brand=alt["product_info"].get("brand"),
-                    name=alt["product_info"].get("name", ""),
-                    format=alt["product_info"].get("format") or {},
-                    format_label=alt["product_info"].get("format_label") or "",
-                    price_offer=float(alt["offer"].get("price_offer", 0)),
-                    price_original=(
-                        float(alt["offer"]["price_original"])
-                        if alt["offer"].get("price_original")
-                        else None
-                    ),
-                    discount_pct=alt["offer"].get("discount_pct"),
-                    unit_price=alt["offer"].get("unit_price"),
-                    unit_price_value=alt["offer"].get("unit_price_value"),
-                    unit_price_unit=alt["offer"].get("unit_price_unit"),
-                    unit_price_label=alt["offer"].get("unit_price") or format_unit_price_label(
-                        alt["offer"].get("unit_price_value"),
-                        alt["offer"].get("unit_price_unit"),
-                    ),
-                    supermarket_id=alt["store"].get("id", ""),
-                    supermarket_name=alt["store"].get("name", ""),
-                    valid_to=str(alt["offer"].get("valid_to", "")),
-                    is_same_store=alt["store"].get("id") == best_store_id,
-                )
-                for alt in coverage[item_id]
-            ]
-
-            item_quantity = float(
-                next((i.get("quantity", 1) for i in unchecked if i["id"] == item_id), 1)
-            )
-
-            store_groups[best_store_id]["products"].append(
-                MatchedProduct(
-                    list_item_id=item_id,
-                    list_item_name=item_name,
-                    offer_id=offer["id"],
-                    product_id=offer["product_id"],
-                    product_name=product_info.get("name", ""),
-                    brand=product_info.get("brand"),
-                    format=product_info.get("format") or {},
-                    format_label=product_info.get("format_label") or "",
-                    price_offer=float(offer["price_offer"]),
-                    price_original=(
-                        float(offer["price_original"]) if offer.get("price_original") else None
-                    ),
-                    discount_pct=offer.get("discount_pct"),
-                    unit_price=offer.get("unit_price"),
-                    unit_price_value=offer.get("unit_price_value"),
-                    unit_price_unit=offer.get("unit_price_unit"),
-                    unit_price_label=offer.get("unit_price") or format_unit_price_label(
-                        offer.get("unit_price_value"),
-                        offer.get("unit_price_unit"),
-                    ),
-                    quantity=item_quantity,
-                    match_score=match["score"],
-                    alternatives=alternatives,
-                )
-            )
-            store_groups[best_store_id]["subtotal"] += float(offer["price_offer"]) * item_quantity
-            store_groups[best_store_id]["savings"] += match["savings"] * item_quantity
-            assigned.add(item_id)
-            remaining.remove(item_id)
-
-    unmatched = [
-        next(i["name"] for i in unchecked if i["id"] == item_id)
-        for item_id in (set(i["id"] for i in unchecked) - assigned)
-    ]
+        item_quantity = float(item.get("quantity", 1))
+        store_groups[store_id]["products"].append(_matched_product(item, match, matches))
+        store_groups[store_id]["subtotal"] += float(match["offer"]["price_offer"]) * item_quantity
+        store_groups[store_id]["savings"] += match["savings"] * item_quantity
 
     total_cost = sum(sg["subtotal"] for sg in store_groups.values())
     total_savings = sum(sg["savings"] for sg in store_groups.values())
-    coverage_pct = int(len(assigned) / len(unchecked) * 100) if unchecked else 100
+    matched_count = len(unchecked) - len(unmatched)
+    coverage_pct = int(matched_count / len(unchecked) * 100) if unchecked else 100
 
     return OptimizationResult(
         store_groups=[StoreGroup(**sg) for sg in store_groups.values()],
@@ -414,5 +426,4 @@ async def optimize(
         total_cost=round(total_cost, 2),
         unmatched_items=unmatched,
         coverage_percent=coverage_pct,
-        mode=body.mode,
     )

@@ -56,6 +56,13 @@ def _nearby_supermarket_ids(sb, lat: float, lng: float, max_distance_km: float) 
     return [row["id"] for row in (response.data or [])]
 
 
+def _search_product_ids(sb, q: str | None, limit: int = 200) -> list[str] | None:
+    if not q:
+        return None
+    rows = sb.rpc("search_products_catalog", {"query": q, "lim": limit}).execute().data or []
+    return [row["id"] for row in rows]
+
+
 router = APIRouter()
 
 
@@ -70,9 +77,11 @@ def _resolve_supermarket_id(sb, slug: str) -> str | None:
     return resp.data["id"] if resp.data else None
 
 
-def _apply_offer_filters(query, *, q, category, subcategory, supermarket_id, nearby_ids):
-    if q:
-        query = query.ilike("products.name", f"%{q}%")
+def _apply_offer_filters(
+    query, *, product_ids, category, subcategory, supermarket_id, nearby_ids
+):
+    if product_ids is not None:
+        query = query.in_("product_id", product_ids)
     if category:
         query = query.eq("products.category", category)
     if subcategory:
@@ -130,7 +139,17 @@ async def list_products(
         if not nearby_ids:
             return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0, "expiring_soon_count": 0}
 
-    filter_kwargs = dict(q=q, category=category, subcategory=subcategory, supermarket_id=supermarket_id, nearby_ids=nearby_ids)
+    product_ids = _search_product_ids(sb, q)
+    if product_ids == []:
+        return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0, "expiring_soon_count": 0}
+
+    filter_kwargs = dict(
+        product_ids=product_ids,
+        category=category,
+        subcategory=subcategory,
+        supermarket_id=supermarket_id,
+        nearby_ids=nearby_ids,
+    )
     today = date.today()
 
     base_query = (
