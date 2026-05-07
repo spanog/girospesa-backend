@@ -154,9 +154,10 @@ async def reset_list(
 ) -> dict:
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
+    sb.table("shopping_lists").update({"items": []}).eq("id", list_id).execute()
     row = (
         sb.table("shopping_lists")
-        .update({"items": []})
+        .select("*")
         .eq("id", list_id)
         .single()
         .execute()
