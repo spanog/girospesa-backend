@@ -83,18 +83,49 @@ def test_extract_products_chunks_pdf_in_fixed_groups_of_three_pages() -> None:
         PdfChunk(start_page=4, end_page=6, pdf_bytes=b"chunk-4-6"),
         PdfChunk(start_page=7, end_page=7, pdf_bytes=b"chunk-7"),
     ]
+    progress_events: list[dict] = []
     with patch(
         "services.extraction.providers.gemini.split_pdf_into_chunks",
         return_value=chunks,
     ):
         provider = GeminiProvider(api_key="test-key")
-        products, retry_errors = provider.extract_products(b"%PDF-fake", "application/pdf")
+        products, retry_errors = provider.extract_products(
+            b"%PDF-fake",
+            "application/pdf",
+            progress_callback=progress_events.append,
+        )
 
     assert [p["name"] for p in products] == ["Prodotto 1", "Prodotto 2", "Prodotto 3"]
     assert retry_errors == []
     assert len(fake_client.models.calls) == 3
     assert all(call["contents"][0]["mime_type"] == "application/pdf" for call in fake_client.models.calls)
     assert [call["contents"][0]["data"] for call in fake_client.models.calls] == [chunk.pdf_bytes for chunk in chunks]
+    assert progress_events == [
+        {
+            "chunks_completed": 1,
+            "chunks_total": 3,
+            "current_chunk_start": 1,
+            "current_chunk_end": 3,
+            "pages_processed": 3,
+            "products_found": 1,
+        },
+        {
+            "chunks_completed": 2,
+            "chunks_total": 3,
+            "current_chunk_start": 4,
+            "current_chunk_end": 6,
+            "pages_processed": 6,
+            "products_found": 2,
+        },
+        {
+            "chunks_completed": 3,
+            "chunks_total": 3,
+            "current_chunk_start": 7,
+            "current_chunk_end": 7,
+            "pages_processed": 7,
+            "products_found": 3,
+        },
+    ]
 
 
 def test_extract_products_aborts_when_one_pdf_chunk_keeps_failing() -> None:

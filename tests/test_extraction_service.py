@@ -396,6 +396,81 @@ class TestExtractionServiceSubcategoryPersisted:
         assert metadata["chunks_completed"] == 3
         assert metadata["chunk_failures"] == 0
 
+    def test_chunk_progress_metadata_is_updated_after_each_provider_chunk(self):
+        sb = _make_sb(
+            flyer_data={
+                "id": "flyer-1",
+                "file_url": "https://example.com/flyer.pdf",
+                "file_name": "flyer.pdf",
+                "supermarket_id": "sup-1",
+                "supermarket_name": "Test Super",
+                "valid_from": None,
+                "valid_to": "2026-05-01",
+                "user_id": "user-1",
+            }
+        )
+
+        def _extract_products(file_bytes, mime_type, progress_callback=None):
+            if progress_callback:
+                progress_callback(
+                    {
+                        "chunks_completed": 1,
+                        "chunks_total": 3,
+                        "current_chunk_start": 1,
+                        "current_chunk_end": 3,
+                        "pages_processed": 3,
+                        "products_found": 4,
+                    }
+                )
+                progress_callback(
+                    {
+                        "chunks_completed": 2,
+                        "chunks_total": 3,
+                        "current_chunk_start": 4,
+                        "current_chunk_end": 6,
+                        "pages_processed": 6,
+                        "products_found": 7,
+                    }
+                )
+            return (_EXTRACTED_PRODUCTS_V2, [])
+
+        mock_provider = MagicMock()
+        mock_provider.chunk_size_pages = 3
+        mock_provider.extract_products.side_effect = _extract_products
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=7),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+            svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
+            svc.run("flyer-1")
+
+        metadata_updates = [
+            call[0][0]["extraction_metadata"]
+            for call in sb.table.return_value.update.call_args_list
+            if call[0][0].get("extraction_metadata", {}).get("stage") == "extracting"
+        ]
+        assert any(
+            metadata.get("pages_processed") == 3
+            and metadata.get("progress_percent") == 43
+            and metadata.get("current_chunk_start") == 1
+            and metadata.get("current_chunk_end") == 3
+            and metadata.get("products_found") == 4
+            for metadata in metadata_updates
+        )
+        assert any(
+            metadata.get("pages_processed") == 6
+            and metadata.get("progress_percent") == 86
+            and metadata.get("current_chunk_start") == 4
+            and metadata.get("current_chunk_end") == 6
+            and metadata.get("products_found") == 7
+            for metadata in metadata_updates
+        )
+
     def test_incomplete_extraction_format_does_not_fail_entire_flyer(self):
         sb = _make_sb()
         mock_provider = MagicMock()

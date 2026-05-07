@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from typing import Callable
 
 from services.extraction.pdf_utils import PdfChunk, split_pdf_into_chunks
 from services.extraction.providers.prompts import EXTRACTION_PROMPT
@@ -31,7 +32,10 @@ class GeminiProvider:
         self.chunk_size_pages = PDF_CHUNK_SIZE_PAGES
 
     def extract_products(
-        self, file_bytes: bytes, mime_type: str
+        self,
+        file_bytes: bytes,
+        mime_type: str,
+        progress_callback: Callable[[dict], None] | None = None,
     ) -> tuple[list[dict], list[str]]:
         """Send file bytes to Gemini; return (products, retry_errors).
 
@@ -60,6 +64,7 @@ class GeminiProvider:
                 client=client,
                 gtypes=gtypes,
                 pdf_bytes=file_bytes,
+                progress_callback=progress_callback,
             )
         return self._extract_single_payload(
             client=client,
@@ -126,6 +131,7 @@ class GeminiProvider:
         client: object,
         gtypes: object,
         pdf_bytes: bytes,
+        progress_callback: Callable[[dict], None] | None,
     ) -> tuple[list[dict], list[str]]:
         chunks = split_pdf_into_chunks(pdf_bytes, PDF_CHUNK_SIZE_PAGES)
         products: list[dict] = []
@@ -149,6 +155,17 @@ class GeminiProvider:
                     f"{label} failed after {MAX_RETRIES} attempts"
                 )
             products.extend(chunk_products)
+            if progress_callback:
+                progress_callback(
+                    {
+                        "chunks_completed": chunk_index,
+                        "chunks_total": len(chunks),
+                        "current_chunk_start": chunk.start_page,
+                        "current_chunk_end": chunk.end_page,
+                        "pages_processed": chunk.end_page,
+                        "products_found": len(products),
+                    }
+                )
 
         return products, retry_errors
 

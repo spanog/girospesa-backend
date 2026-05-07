@@ -119,7 +119,17 @@ class ExtractionService:
             pages_count,
         )
         provider_started_at = time.perf_counter()
-        all_products, retry_errors = self._provider.extract_products(content, mime_type)
+        all_products, retry_errors = self._provider.extract_products(
+            content,
+            mime_type,
+            progress_callback=lambda progress: self._update_chunk_progress(
+                sb,
+                flyer_id,
+                mime_type,
+                pages_count,
+                progress,
+            ),
+        )
         provider_seconds = time.perf_counter() - provider_started_at
         success_chunk_metadata = self._chunk_metadata(
             mime_type,
@@ -432,6 +442,37 @@ class ExtractionService:
             "chunks_completed": chunks_total if chunks_completed is None else chunks_completed,
             "chunk_failures": chunk_failures,
         }
+
+    def _progress_percent(self, pages_processed: int, pages_count: int) -> int:
+        if pages_count < 1:
+            return 0
+        return min(100, round((pages_processed / pages_count) * 100))
+
+    def _update_chunk_progress(
+        self,
+        sb: object,
+        flyer_id: str,
+        mime_type: str,
+        pages_count: int,
+        progress: dict,
+    ) -> None:
+        pages_processed = int(progress.get("pages_processed") or 0)
+        metadata = {
+            "stage": "extracting",
+            "pages_total": pages_count,
+            "progress_percent": self._progress_percent(pages_processed, pages_count),
+            **self._chunk_metadata(
+                mime_type,
+                pages_count,
+                chunks_completed=int(progress.get("chunks_completed") or 0),
+                chunk_failures=int(progress.get("chunk_failures") or 0),
+            ),
+            "current_chunk_start": progress.get("current_chunk_start"),
+            "current_chunk_end": progress.get("current_chunk_end"),
+            "pages_processed": pages_processed,
+            "products_found": int(progress.get("products_found") or 0),
+        }
+        sb.table("flyers").update({"extraction_metadata": metadata}).eq("id", flyer_id).execute()  # type: ignore[union-attr]
 
     def _fetch_flyer(self, sb: object, flyer_id: str) -> dict:
         result = (
