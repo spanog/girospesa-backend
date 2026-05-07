@@ -28,6 +28,7 @@ from api.routers import (
 )
 from core.config import settings
 from services.flyer_cleanup import FlyerCleanupService
+from services.purchased_items_cleanup import PurchasedItemsCleanupService
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,14 @@ async def lifespan(app: FastAPI):
         id="flyer_cleanup",
         replace_existing=True,
     )
+    scheduler.add_job(
+        PurchasedItemsCleanupService().run,
+        CronTrigger(hour=0, minute=0, timezone="Europe/Rome"),
+        id="purchased_items_cleanup",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info("Flyer cleanup scheduler started (fires daily at midnight Europe/Rome)")
+    logger.info("Nightly schedulers started (fire daily at midnight Europe/Rome)")
     yield
     scheduler.shutdown(wait=False)
 

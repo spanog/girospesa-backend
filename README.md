@@ -73,7 +73,8 @@ girospesa-backend/
 │
 ├── services/                 # Logica di business
 │   ├── deal_freshness.py     # Classifica freshness offerte in lista (fresh/expired/price_changed)
-│   ├── flyer_cleanup.py      # Eliminazione notiturna volantini scaduti (APScheduler, midnight Europe/Rome)
+│   ├── flyer_cleanup.py      # Eliminazione notturna volantini scaduti (APScheduler, midnight Europe/Rome)
+│   ├── purchased_items_cleanup.py # Rimozione notturna item già acquistati da liste spesa
 │   ├── geocoding.py          # Geocoding indirizzi via Nominatim (OpenStreetMap)
 │   └── push_notify.py        # Invio Web Push con VAPID
 │
@@ -248,6 +249,9 @@ Le notifiche Web Push di completamento/fallimento estrazione includono nel campo
 
 The backend runs scheduled background jobs via APScheduler (`AsyncIOScheduler`), started in the FastAPI lifespan context manager in `main.py`.
 
+- `flyer_cleanup` runs daily at 00:00 Europe/Rome and deletes expired flyers.
+- `purchased_items_cleanup` runs daily at 00:00 Europe/Rome and removes purchased list items from previous Rome days, resetting the "Acquistati oggi" section automatically without touching purchase history.
+
 ### Note storico acquisti
 
 - `purchase_history.product_id` resta valorizzabile come snapshot storico del prodotto acquistato, ma non mantiene più una foreign key verso `products`.
@@ -256,6 +260,7 @@ The backend runs scheduled background jobs via APScheduler (`AsyncIOScheduler`),
 | Job | Schedule | Service | Description |
 |-----|----------|---------|-------------|
 | `flyer_cleanup` | Daily at 00:00 Europe/Rome | `services/flyer_cleanup.py` | Deletes flyers where `valid_to < today`. Removes the Supabase Storage file (best-effort) and the DB row. `offers.flyer_id` is set to NULL via ON DELETE SET NULL — offers are not deleted. Flyers with `valid_to = NULL` are never auto-deleted. |
+| `purchased_items_cleanup` | Daily at 00:00 Europe/Rome | `services/purchased_items_cleanup.py` | Removes from each shopping list all items already purchased on previous Rome days. Items still purchased today stay visible in "Acquistati oggi" until midnight. Purchase history is not deleted. |
 
 To trigger cleanup manually (ops or testing):
 
