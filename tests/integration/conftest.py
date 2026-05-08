@@ -2,15 +2,22 @@
 
 import pytest
 
-from scripts.integration_stack import apply_integration_env, run_compose
-
-apply_integration_env()
+from scripts.integration_stack import integration_env, run_compose
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ensure_integration_stack():
+def integration_test_env():
+    """Applica env integration solo dentro sessione pytest e poi ripristina."""
+    monkeypatch = pytest.MonkeyPatch()
+    for key, value in integration_env().items():
+        monkeypatch.setenv(key, value)
+    yield
+    monkeypatch.undo()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ensure_integration_stack(integration_test_env):
     """Avvia e distrugge solo stack Docker dedicato ai test integration."""
-    apply_integration_env()
     try:
         run_compose("up", "-d", "--wait")
     except Exception as exc:

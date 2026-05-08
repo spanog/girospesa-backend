@@ -101,6 +101,9 @@ class TestTriggerExtraction:
             )
         assert resp.status_code == 202
         assert resp.json()["status"] == "processing"
+        update_payload = sb.table.return_value.update.call_args_list[-1][0][0]
+        assert update_payload["status"] == "processing"
+        assert update_payload["error_message"] is None
 
     @pytest.mark.asyncio
     async def test_done_status_returns_409(self):

@@ -419,7 +419,7 @@ async def trigger_extraction(
             detail=f"Cannot trigger extraction: flyer status is '{flyer.get('status')}'",
         )
 
-    sb.table("flyers").update({"status": "processing"}).eq("id", flyer_id).execute()
+    sb.table("flyers").update({"status": "processing", "error_message": None}).eq("id", flyer_id).execute()
 
     from services.extraction.service import ExtractionService
     background_tasks.add_task(ExtractionService().run, flyer_id)

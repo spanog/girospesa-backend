@@ -60,6 +60,14 @@ def test_integration_fixture_does_not_shell_out_to_supabase_cli():
     assert "ensure_integration_stack" in integration_conftest
 
 
+def test_integration_fixture_scopes_env_to_pytest_session():
+    integration_conftest = _read("tests/integration/conftest.py")
+
+    assert "apply_integration_env()" not in integration_conftest
+    assert "pytest.MonkeyPatch()" in integration_conftest
+    assert "monkeypatch.undo()" in integration_conftest
+
+
 def test_bootstrap_script_applies_schema_then_seed():
     bootstrap = _read("supabase/init/001-bootstrap-local-db.sh")
 

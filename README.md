@@ -153,7 +153,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 | `GET` | `/flyers/public` | ❌ | Lista volantini pubblici completati con almeno un'offerta confermata |
 | `GET` | `/flyers/{flyer_id}` | ✅ admin/manager | Dettaglio singolo volantino |
 | `POST` | `/flyers/upload` | ✅ admin/manager | Upload volantino (PDF/JPG/PNG/WebP, max 50 MB); crea riga `status='pending'` |
-| `POST` | `/flyers/{flyer_id}/extract` | ✅ admin/manager | Avvia estrazione AI per un volantino pending/error |
+| `POST` | `/flyers/{flyer_id}/extract` | ✅ admin/manager | Avvia estrazione AI per un volantino `pending` oppure riprende da chunk fallito se `status='error'` e `resume_available=true` |
 | `GET` | `/flyers/{flyer_id}/draft-offers` | ✅ admin/manager | Lista offerte estratte ma non confermate |
 | `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline di una draft offer e dei campi prodotto collegati |
 | `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma tutte le offerte draft e le rende pubbliche |
@@ -184,7 +184,8 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 - `format.varianti` è consentito solo in input estrazione LLM: il backend lo espande in prodotti/offerte distinti prima dell'upsert. Nessun prodotto persistito rappresenta un parent con varianti miste.
 - Matching fuzzy/optimizer usa `name`, `brand`, `format_label`; mai JSON raw.
 - Durante l'estrazione il backend deduplica prima in memoria su `(name, brand, format_key)`, fa batch upsert dei prodotti unici del volantino e registra timing per `provider`, `varianti`, `normalizzazione`, `dedupe`, `upsert prodotti`, `insert offerte`.
-- Per PDF multipagina il backend divide il file in chunk PDF rigidi da 3 pagine e invia un chunk per volta a Gemini. Dopo ogni chunk riuscito aggiorna `flyers.extraction_metadata` con pagina corrente, percentuale e prodotti trovati, così il frontend può mostrare avanzamento live durante il polling. Se un chunk fallisce dopo i retry, l'intera estrazione fallisce senza persistere risultati parziali.
+- Per PDF multipagina il backend divide il file in chunk PDF rigidi da 3 pagine e invia un chunk per volta a Gemini. Dopo ogni chunk riuscito persiste subito le draft offers di quel chunk e aggiorna `flyers.extraction_metadata` con pagina corrente, percentuale, `last_completed_chunk` e `next_chunk_*`, così il frontend può mostrare avanzamento live durante il polling e review parziale.
+- Se un chunk fallisce dopo i retry, il flyer passa a `status='error'`, ma le draft offers dei chunk già riusciti restano salvate. `flyers.extraction_metadata` espone `resume_available`, `failed_chunk_*`, `next_chunk_*` e `partial_products_count`; una nuova `POST /flyers/{flyer_id}/extract` riparte dal primo chunk non completato correttamente senza duplicare le offerte già persistite.
 - Quando Gemini fallisce o va in retry, backend logga anche contesto strutturato se disponibile: tipo eccezione, `code`, `status`, `message`, HTTP status/body e request id. Stesso dettaglio finisce in `retry_errors` dentro `extraction_log`.
 
 ### Ottimizzazione (`/optimize`)
@@ -438,7 +439,7 @@ Valori locali canonici:
 - `SUPABASE_SERVICE_ROLE_KEY` e `SUPABASE_JWT_SECRET` si copiano da `supabase status -o env`
 - `ADMIN_EMAIL` e `ADMIN_PASSWORD` servono per seedare utente admin via API service-role
 - `.env` backend deve contenere solo variabili lette da FastAPI; credenziali Docker/Supabase CLI come `POSTGRES_PASSWORD`, `ANON_KEY`, `JWT_SECRET` e `SERVICE_ROLE_KEY` non vanno copiate qui
-- `.env.test` e' locale-only ed e' ignorato da Git; i test integration sovrascrivono questi valori con lo stack Docker isolato su porte `55421`/`55422`
+- `.env.test` e' locale-only ed e' ignorato da Git; i test integration iniettano questi valori solo dentro processo `pytest`, puntando allo stack Docker isolato su porte `55421`/`55422`, poi ripristinano l'env della sessione a fine run
 
 ### 3. Avviare lo stack Supabase locale
 
@@ -626,7 +627,7 @@ cp .env.test.example .env.test
 .venv/bin/python -m pytest tests/integration -v
 ```
 
-Lo stack integration usa `docker-compose.integration.yml` con progetto Docker `girospesa-itest`, volumi dedicati e porte `55421` (API/Kong) + `55422` (PostgreSQL). Non usa `supabase start`, non legge `supabase status` e non cancella dati dello stack locale.
+Lo stack integration usa `docker-compose.integration.yml` con progetto Docker `girospesa-itest`, volumi dedicati e porte `55421` (API/Kong) + `55422` (PostgreSQL). Non usa `supabase start`, non legge `supabase status`, non cancella dati dello stack locale e non deve lasciare variabili integration esportate fuori dalla sessione `pytest`.
 
 Comandi manuali utili:
 

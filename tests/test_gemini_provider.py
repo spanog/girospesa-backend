@@ -186,6 +186,7 @@ def test_extract_products_aborts_when_one_pdf_chunk_keeps_failing() -> None:
     _install_google_stub(fake_client)
 
     from services.extraction.pdf_utils import PdfChunk
+    from services.extraction.providers.base import PdfChunkExtractionError
     from services.extraction.providers.gemini import GeminiProvider
 
     with patch(
@@ -196,10 +197,50 @@ def test_extract_products_aborts_when_one_pdf_chunk_keeps_failing() -> None:
         ],
     ):
         provider = GeminiProvider(api_key="test-key")
-        with pytest.raises(ValueError, match=r"Chunk 2/2 \(pages 4-6\) failed after 3 attempts"):
+        with pytest.raises(PdfChunkExtractionError) as excinfo:
             provider.extract_products(b"%PDF-fake", "application/pdf")
 
+    assert str(excinfo.value) == "Chunk 2/2 (pages 4-6) failed after 3 attempts"
+    assert excinfo.value.chunk_index == 2
+    assert excinfo.value.start_page == 4
+    assert excinfo.value.end_page == 6
+    assert len(excinfo.value.retry_errors) == 3
     assert len(fake_client.models.calls) == 4
+
+
+def test_extract_products_can_resume_from_specific_pdf_chunk() -> None:
+    fake_client = _FakeClient(
+        responses=[
+            json.dumps({"products": [{"name": "Prodotto 2", "price_current": 2.0}]}),
+            json.dumps({"products": [{"name": "Prodotto 3", "price_current": 3.0}]}),
+        ]
+    )
+    _install_google_stub(fake_client)
+
+    from services.extraction.pdf_utils import PdfChunk
+    from services.extraction.providers.gemini import GeminiProvider
+
+    with patch(
+        "services.extraction.providers.gemini.split_pdf_into_chunks",
+        return_value=[
+            PdfChunk(start_page=1, end_page=3, pdf_bytes=b"chunk-1-3"),
+            PdfChunk(start_page=4, end_page=6, pdf_bytes=b"chunk-4-6"),
+            PdfChunk(start_page=7, end_page=7, pdf_bytes=b"chunk-7"),
+        ],
+    ):
+        provider = GeminiProvider(api_key="test-key")
+        products, retry_errors = provider.extract_products(
+            b"%PDF-fake",
+            "application/pdf",
+            start_chunk_index=2,
+        )
+
+    assert [p["name"] for p in products] == ["Prodotto 2", "Prodotto 3"]
+    assert retry_errors == []
+    assert [call["contents"][0]["data"] for call in fake_client.models.calls] == [
+        b"chunk-4-6",
+        b"chunk-7",
+    ]
 
 
 def test_extract_products_keeps_single_request_for_non_pdf_images() -> None:
