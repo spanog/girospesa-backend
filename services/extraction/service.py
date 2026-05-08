@@ -353,8 +353,8 @@ class ExtractionService:
         current = metadata if isinstance(metadata, dict) else {}
         resume_available = (
             mime_type == "application/pdf"
-            and flyer.get("status") == "error"
             and bool(current.get("resume_available"))
+            and self._int_metadata(current.get("next_chunk_index"), minimum=1) is not None
         )
         start_chunk_index = self._int_metadata(current.get("next_chunk_index"), minimum=1) if resume_available else 1
         chunk_size = getattr(self._provider, "chunk_size_pages", 1) if mime_type == "application/pdf" else 1

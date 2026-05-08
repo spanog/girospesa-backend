@@ -416,6 +416,94 @@ class TestExtractionServiceErrorPath:
         assert done_payloads
         assert done_payloads[-1]["products_count"] == 2
 
+    def test_run_resumes_even_after_router_flips_status_to_processing(self):
+        sb = _make_sb(
+            flyer_data={
+                "id": "flyer-1",
+                "file_url": "https://example.com/flyer.pdf",
+                "file_name": "flyer.pdf",
+                "supermarket_id": "sup-1",
+                "supermarket_name": "Test Super",
+                "valid_from": None,
+                "valid_to": "2026-05-01",
+                "user_id": "user-1",
+                "status": "processing",
+                "extraction_metadata": {
+                    "stage": "extracting",
+                    "extraction_started_at": "2026-05-08T10:00:00Z",
+                    "resume_available": True,
+                    "next_chunk_index": 2,
+                    "next_chunk_start": 4,
+                    "next_chunk_end": 6,
+                    "partial_products_count": 1,
+                    "products_raw_count": 1,
+                    "products_after_variants_count": 1,
+                    "products_unique_count": 1,
+                    "last_completed_chunk": 1,
+                    "chunks_completed": 1,
+                    "chunks_total": 2,
+                    "chunk_failures": 1,
+                },
+            }
+        )
+
+        def _extract_products(
+            file_bytes,
+            mime_type,
+            progress_callback=None,
+            chunk_result_callback=None,
+            start_chunk_index=1,
+        ):
+            assert start_chunk_index == 2
+            if chunk_result_callback:
+                chunk_result_callback(
+                    {
+                        "chunk_index": 2,
+                        "chunks_total": 2,
+                        "current_chunk_start": 4,
+                        "current_chunk_end": 6,
+                        "products": _EXTRACTED_PRODUCTS,
+                        "retry_errors": [],
+                    }
+                )
+            if progress_callback:
+                progress_callback(
+                    {
+                        "chunks_completed": 2,
+                        "chunks_total": 2,
+                        "current_chunk_start": 4,
+                        "current_chunk_end": 6,
+                        "pages_processed": 6,
+                        "products_found": 2,
+                    }
+                )
+            return (_EXTRACTED_PRODUCTS, [])
+
+        mock_provider = MagicMock()
+        mock_provider.chunk_size_pages = 3
+        mock_provider.extract_products.side_effect = _extract_products
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=6),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+
+            ExtractionService(provider=mock_provider, supabase_factory=lambda: sb).run("flyer-1")
+
+        offer_inserts = [
+            c for c in sb.table.return_value.insert.call_args_list if isinstance(c[0][0], list)
+        ]
+        assert len(offer_inserts) == 1
+        done_payloads = [
+            c[0][0] for c in sb.table.return_value.update.call_args_list if c[0][0].get("status") == "done"
+        ]
+        assert done_payloads
+        assert done_payloads[-1]["products_count"] == 2
+
 
 class TestUpsertProductFallback:
     """_upsert_product falls back to SELECT when upsert returns empty data."""

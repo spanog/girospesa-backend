@@ -55,18 +55,43 @@ def test_legacy_scraping_log_is_replaced_by_extraction_log():
     assert rows == [{"tablename": "extraction_log"}]
 
 
-def test_flyer_requests_has_no_public_insert_policy():
+def test_internal_tables_have_explicit_deny_all_policies():
     rows = _fetch_all(
         """
-        SELECT policyname, cmd, roles, qual, with_check
+        SELECT tablename, policyname, cmd, roles, qual, with_check
         FROM pg_policies
         WHERE schemaname = 'public'
-          AND tablename = 'flyer_requests'
-        ORDER BY policyname
+          AND tablename IN ('analytics_data', 'extraction_log', 'flyer_requests')
+        ORDER BY tablename, policyname
         """
     )
 
-    assert rows == []
+    assert rows == [
+        {
+            "tablename": "analytics_data",
+            "policyname": "analytics_data_deny_all",
+            "cmd": "ALL",
+            "roles": ["public"],
+            "qual": "false",
+            "with_check": "false",
+        },
+        {
+            "tablename": "extraction_log",
+            "policyname": "extraction_log_deny_all",
+            "cmd": "ALL",
+            "roles": ["public"],
+            "qual": "false",
+            "with_check": "false",
+        },
+        {
+            "tablename": "flyer_requests",
+            "policyname": "flyer_requests_deny_all",
+            "cmd": "ALL",
+            "roles": ["public"],
+            "qual": "false",
+            "with_check": "false",
+        },
+    ]
 
 
 def test_security_sensitive_functions_have_fixed_search_path():
