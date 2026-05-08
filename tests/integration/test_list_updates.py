@@ -147,3 +147,22 @@ def test_update_list_item_concurrent_patches(db_setup):
     assert item2["quantity"] == 3
     assert item2["checked"] is False  # unchanged
     assert len(items) == 2
+
+
+def test_update_list_item_rpc_denied_to_anon(db_setup):
+    conn, owner_id, list_id, item1_id, _item2_id = db_setup
+    cur = conn.cursor()
+
+    cur.execute("SET LOCAL role = anon;")
+    cur.execute(
+        "SELECT set_config('request.jwt.claims', %s, true)",
+        (json.dumps({"role": "anon"}),),
+    )
+
+    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+        cur.execute(
+            "SELECT update_list_item(%s::uuid, %s::text, %s::jsonb)",
+            (list_id, item1_id, json.dumps({"quantity": 9})),
+        )
+
+    conn.rollback()

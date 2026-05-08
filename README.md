@@ -734,6 +734,8 @@ Flow identica in locale, test, prod: cambia solo valore env.
 | `flyers` | `{user_id}/{uuid}.{pdf\|jpg}` | Volantini caricati (pre-estrazione) | 50 MB | URL pubblico |
 | `product-images` | `{product_id}/{uuid}.{ext}` | Immagini prodotti (admin) | — | URL pubblico |
 
+I bucket pubblici non espongono listing anonimo via `storage.objects`: client e frontend devono usare solo URL diretti `/storage/v1/object/public/...`.
+
 ---
 
 ## Schema Analytics B2B

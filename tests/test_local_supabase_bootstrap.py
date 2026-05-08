@@ -79,6 +79,18 @@ def test_bootstrap_reapplies_offer_function_search_path():
     assert "ALTER FUNCTION public.offers_compute_fields() SET search_path = public" in bootstrap
 
 
+def test_local_supabase_exposes_only_public_and_storage_schemas():
+    compose = _read("docker-compose.yml")
+    integration_compose = _read("docker-compose.integration.yml")
+    backend_config = _read("supabase/config.toml")
+    frontend_config = _read("../girospesa-webapp/supabase/config.toml")
+
+    assert "graphql_public" not in compose
+    assert "graphql_public" not in integration_compose
+    assert 'schemas = ["public"]' in backend_config
+    assert 'schemas = ["public"]' in frontend_config
+
+
 def test_shared_backend_migration_copies_match_frontend_canonical_files():
     migrations_dir = BACKEND_ROOT / "supabase/migrations"
     expected_root = BACKEND_ROOT.parent / "girospesa-webapp/supabase/migrations"
