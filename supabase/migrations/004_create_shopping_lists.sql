@@ -66,7 +66,10 @@ BEGIN
 
   RETURN v_list_id;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY INVOKER;
+
+REVOKE EXECUTE ON FUNCTION public.create_list(text) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.create_list(text) TO authenticated;
 
 -- RPC: atomic per-item patch to avoid concurrent overwrites
 CREATE OR REPLACE FUNCTION update_list_item(
@@ -93,7 +96,10 @@ BEGIN
       WHERE lm.list_id = p_list_id AND lm.user_id = auth.uid()
     );
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY INVOKER;
+
+REVOKE EXECUTE ON FUNCTION public.update_list_item(uuid, text, jsonb) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.update_list_item(uuid, text, jsonb) TO authenticated;
 
 -- RLS: shopping_lists
 ALTER TABLE shopping_lists ENABLE ROW LEVEL SECURITY;

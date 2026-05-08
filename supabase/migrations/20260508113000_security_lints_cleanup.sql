@@ -74,8 +74,10 @@ DROP POLICY IF EXISTS "product_images_read_public" ON storage.objects;
 
 REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM public, anon, authenticated;
 
-REVOKE EXECUTE ON FUNCTION public.create_list(text) FROM public, anon, authenticated;
+ALTER FUNCTION public.create_list(text) SECURITY INVOKER;
+REVOKE EXECUTE ON FUNCTION public.create_list(text) FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.create_list(text) TO authenticated;
 
-REVOKE EXECUTE ON FUNCTION public.update_list_item(uuid, text, jsonb) FROM public, anon, authenticated;
+ALTER FUNCTION public.update_list_item(uuid, text, jsonb) SECURITY INVOKER;
+REVOKE EXECUTE ON FUNCTION public.update_list_item(uuid, text, jsonb) FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.update_list_item(uuid, text, jsonb) TO authenticated;

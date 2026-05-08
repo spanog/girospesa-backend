@@ -69,7 +69,7 @@ def test_flyer_requests_has_no_public_insert_policy():
     assert rows == []
 
 
-def test_security_definer_functions_have_fixed_public_search_path():
+def test_security_sensitive_functions_have_fixed_search_path():
     rows = _fetch_all(
         """
         SELECT p.proname AS function_name,
@@ -79,10 +79,8 @@ def test_security_definer_functions_have_fixed_public_search_path():
         WHERE n.nspname = 'public'
           AND p.proname IN (
             'products_update_tsv',
-            'create_list',
             'search_products_catalog',
             'offer_is_currently_active',
-            'update_list_item',
             'offers_compute_fields',
             'set_updated_at'
           )
@@ -91,13 +89,11 @@ def test_security_definer_functions_have_fixed_public_search_path():
     )
 
     assert rows == [
-        {"function_name": "create_list", "function_config": "search_path=public"},
         {"function_name": "offer_is_currently_active", "function_config": "search_path=public"},
         {"function_name": "offers_compute_fields", "function_config": "search_path=public"},
         {"function_name": "products_update_tsv", "function_config": "search_path=public"},
         {"function_name": "search_products_catalog", "function_config": "search_path=public, extensions"},
         {"function_name": "set_updated_at", "function_config": "search_path=public"},
-        {"function_name": "update_list_item", "function_config": "search_path=public"},
     ]
 
 
@@ -148,7 +144,7 @@ def test_public_storage_buckets_do_not_allow_listing():
     assert rows == []
 
 
-def test_security_definer_execute_privileges_are_limited():
+def test_list_rpc_execute_privileges_match_intended_access():
     rows = _fetch_all(
         """
         SELECT
@@ -176,6 +172,24 @@ def test_security_definer_execute_privileges_are_limited():
             "update_list_item": True,
             "handle_new_user": False,
         },
+    ]
+
+
+def test_list_rpcs_are_not_security_definer():
+    rows = _fetch_all(
+        """
+        SELECT p.proname AS function_name, p.prosecdef AS security_definer
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND p.proname IN ('create_list', 'update_list_item')
+        ORDER BY p.proname
+        """
+    )
+
+    assert rows == [
+        {"function_name": "create_list", "security_definer": False},
+        {"function_name": "update_list_item", "security_definer": False},
     ]
 
 
