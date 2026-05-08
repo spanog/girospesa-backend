@@ -25,6 +25,64 @@ def _retry_delay(exc: Exception) -> float:
     return float(m.group(1)) if m else RETRY_BACKOFF_S
 
 
+def _trim_text(value: object, limit: int = 280) -> str:
+    text = str(value).strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3]}..."
+
+
+def _serialize_error_value(value: object) -> str:
+    if isinstance(value, (dict, list, tuple)):
+        try:
+            return json.dumps(value, ensure_ascii=True, sort_keys=True)
+        except TypeError:
+            return repr(value)
+    return str(value)
+
+
+def _extract_request_id(headers: object) -> str | None:
+    if not hasattr(headers, "get"):
+        return None
+    for key in ("x-request-id", "x-goog-request-id"):
+        value = headers.get(key) or headers.get(key.upper())
+        if value:
+            return str(value)
+    return None
+
+
+def _response_details(response: object) -> list[str]:
+    parts: list[str] = []
+    status_code = getattr(response, "status_code", None)
+    if status_code is not None:
+        parts.append(f"http_status={status_code}")
+    request_id = _extract_request_id(getattr(response, "headers", None))
+    if request_id:
+        parts.append(f"request_id={request_id}")
+    body = getattr(response, "text", None) or getattr(response, "body", None)
+    if body:
+        parts.append(f"response={_trim_text(_serialize_error_value(body))}")
+    return parts
+
+
+def _format_exception(exc: Exception) -> str:
+    parts = [f"type={exc.__class__.__name__}", f"error={_trim_text(exc)}"]
+    for attr in ("code", "status", "message"):
+        value = getattr(exc, attr, None)
+        if value is not None:
+            parts.append(f"{attr}={_trim_text(value)}")
+    details = getattr(exc, "details", None)
+    if details:
+        parts.append(f"details={_trim_text(_serialize_error_value(details))}")
+    response = getattr(exc, "response", None)
+    if response is not None:
+        parts.extend(_response_details(response))
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None:
+        parts.append(f"cause={cause.__class__.__name__}: {_trim_text(cause)}")
+    return " | ".join(parts)
+
+
 class GeminiProvider:
     def __init__(self, api_key: str, model: str = "gemma-4-31b-it") -> None:
         self._api_key = api_key
@@ -112,7 +170,10 @@ class GeminiProvider:
                     mime_type=mime_type,
                 )
             except Exception as exc:
-                msg = f"Attempt {attempt + 1}/{MAX_RETRIES} failed: {exc}"
+                msg = (
+                    f"Attempt {attempt + 1}/{MAX_RETRIES} failed: "
+                    f"{_format_exception(exc)}"
+                )
                 logger.warning(msg)
                 retry_errors.append(msg)
                 if attempt < MAX_RETRIES - 1:
@@ -204,7 +265,10 @@ class GeminiProvider:
                     mime_type="application/pdf",
                 )
             except Exception as exc:
-                msg = f"{label} attempt {attempt + 1}/{MAX_RETRIES} failed: {exc}"
+                msg = (
+                    f"{label} attempt {attempt + 1}/{MAX_RETRIES} failed: "
+                    f"{_format_exception(exc)}"
+                )
                 logger.warning(msg)
                 retry_errors.append(msg)
                 if attempt < MAX_RETRIES - 1:

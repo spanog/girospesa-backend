@@ -65,6 +65,27 @@ class _FakeClient:
         self.models = _FakeModels(responses)
 
 
+class _FakeHttpResponse:
+    def __init__(self, status_code: int, text: str, headers: dict[str, str] | None = None) -> None:
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers or {}
+
+
+class _FakeGeminiError(Exception):
+    def __init__(self) -> None:
+        super().__init__("500 INTERNAL.")
+        self.code = 500
+        self.status = "INTERNAL"
+        self.message = "Internal error encountered."
+        self.details = {"retryable": True, "provider": "gemini"}
+        self.response = _FakeHttpResponse(
+            500,
+            '{"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}',
+            {"x-request-id": "req-123"},
+        )
+
+
 def test_extract_products_chunks_pdf_in_fixed_groups_of_three_pages() -> None:
     fake_client = _FakeClient(
         responses=[
@@ -195,3 +216,24 @@ def test_extract_products_keeps_single_request_for_non_pdf_images() -> None:
     assert products == [{"name": "Latte", "price_current": 1.49}]
     assert retry_errors == []
     assert len(fake_client.models.calls) == 1
+
+
+def test_extract_products_logs_structured_gemini_error_details(caplog: pytest.LogCaptureFixture) -> None:
+    fake_client = _FakeClient(responses=[_FakeGeminiError(), _FakeGeminiError(), _FakeGeminiError()])
+    _install_google_stub(fake_client)
+
+    from services.extraction.providers.gemini import GeminiProvider
+
+    provider = GeminiProvider(api_key="test-key")
+    with caplog.at_level("WARNING"):
+        products, retry_errors = provider.extract_products(b"image-fake", "image/jpeg")
+
+    assert products == []
+    assert len(retry_errors) == 3
+    assert "type=_FakeGeminiError" in retry_errors[0]
+    assert "code=500" in retry_errors[0]
+    assert "status=INTERNAL" in retry_errors[0]
+    assert "message=Internal error encountered." in retry_errors[0]
+    assert "request_id=req-123" in retry_errors[0]
+    assert "response={\"error\":{\"code\":500,\"message\":\"Internal error encountered.\",\"status\":\"INTERNAL\"}}" in retry_errors[0]
+    assert retry_errors[0] in caplog.text

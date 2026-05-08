@@ -185,6 +185,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 - Matching fuzzy/optimizer usa `name`, `brand`, `format_label`; mai JSON raw.
 - Durante l'estrazione il backend deduplica prima in memoria su `(name, brand, format_key)`, fa batch upsert dei prodotti unici del volantino e registra timing per `provider`, `varianti`, `normalizzazione`, `dedupe`, `upsert prodotti`, `insert offerte`.
 - Per PDF multipagina il backend divide il file in chunk PDF rigidi da 3 pagine e invia un chunk per volta a Gemini. Dopo ogni chunk riuscito aggiorna `flyers.extraction_metadata` con pagina corrente, percentuale e prodotti trovati, così il frontend può mostrare avanzamento live durante il polling. Se un chunk fallisce dopo i retry, l'intera estrazione fallisce senza persistere risultati parziali.
+- Quando Gemini fallisce o va in retry, backend logga anche contesto strutturato se disponibile: tipo eccezione, `code`, `status`, `message`, HTTP status/body e request id. Stesso dettaglio finisce in `retry_errors` dentro `extraction_log`.
 
 ### Ottimizzazione (`/optimize`)
 
