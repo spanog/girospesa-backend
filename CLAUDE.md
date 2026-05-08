@@ -31,6 +31,7 @@
 - Draft and confirmed offer payloads returned by flyer review endpoints must flatten `products.subcategory` alongside `category`.
 - Draft and confirmed offer payloads must expose both `format` and `format_label`.
 - `GET /products` ordina default per `products.name`; `sort=expiry` ordina per `offers.valid_to` crescente con offerte senza scadenza dopo, poi per `products.name`.
+- `GET /products` search RPC `public.search_products_catalog` must preserve fuzzy `word_similarity` ranking but also match prefix/substring queries on product name and brand, so inputs like `mozza` still return `Mozzarella`.
 - `flyers.extraction_metadata` should keep live extraction progress during `processing`, then per-stage timing keys (`provider_seconds`, `variant_expansion_seconds`, `normalization_seconds`, `dedupe_seconds`, `product_upsert_seconds`, `offer_insert_seconds`, `total_seconds`) plus product-count and average-format-size telemetry at completion.
 - Extraction completion/failure Web Push payloads must include structured `data`: `kind`, `flyer_id`, `status`, `products_count`, and `url`. Frontend admin cache sync depends on those fields.
 - Admin product delete on `/admin/products/{id}` is hard delete only when product has zero linked offers; endpoint must also delete linked favorites.

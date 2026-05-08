@@ -315,3 +315,63 @@ def test_search_products_catalog_still_returns_matches():
         finally:
             cleanup.close()
             conn.close()
+
+
+def test_search_products_catalog_matches_prefix_fragments():
+    product_id = str(uuid.uuid4())
+    conn = psycopg2.connect(DB_DSN)
+    try:
+        conn.autocommit = False
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO public.products (
+                  id,
+                  name,
+                  brand,
+                  category,
+                  subcategory,
+                  format,
+                  format_key,
+                  format_label
+                )
+                VALUES (
+                  %s,
+                  'Mozzarella',
+                  'Vallelata',
+                  'latticini-uova',
+                  'Formaggi Freschi',
+                  '{"tipo":"pezzo"}'::jsonb,
+                  'tipo:pezzo',
+                  'Pezzo'
+                )
+                ON CONFLICT (id) DO NOTHING
+                """,
+                (product_id,),
+            )
+            conn.commit()
+
+            cur.execute(
+                """
+                SELECT id, name, brand
+                FROM public.search_products_catalog('mozza', 100)
+                WHERE id = %s
+                """,
+                (product_id,),
+            )
+            match = cur.fetchone()
+
+        assert match == {
+            "id": product_id,
+            "name": "Mozzarella",
+            "brand": "Vallelata",
+        }
+    finally:
+        cleanup = psycopg2.connect(DB_DSN)
+        try:
+            cleanup.autocommit = True
+            with cleanup.cursor() as cur:
+                cur.execute("DELETE FROM public.products WHERE id = %s", (product_id,))
+        finally:
+            cleanup.close()
+            conn.close()
