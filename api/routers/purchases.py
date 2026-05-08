@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -38,6 +38,7 @@ class PurchaseRecord(BaseModel):
     offer_id: str | None
     supermarket_id: str | None
     supermarket_name: str | None
+    quantity: float
     price_paid: float
     price_original: float | None
     discount_pct: int | None
@@ -99,9 +100,13 @@ async def purchase_item(
             "supermarkets": {"name": deal.get("supermarket_name")},
         }
 
-    price_paid = float(offer_data.get("price_offer") or 0)
+    quantity = float(item.get("quantity") or 1)
+    unit_price_paid = float(offer_data.get("price_offer") or 0)
+    price_paid = round(unit_price_paid * quantity, 2)
     price_original = (
-        float(offer_data["price_original"]) if offer_data.get("price_original") else None
+        round(float(offer_data["price_original"]) * quantity, 2)
+        if offer_data.get("price_original")
+        else None
     )
 
     now = datetime.now(timezone.utc).isoformat()
@@ -115,6 +120,7 @@ async def purchase_item(
         "offer_id": offer_data.get("id"),
         "supermarket_id": offer_data.get("supermarket_id"),
         "supermarket_name": (offer_data.get("supermarkets") or {}).get("name"),
+        "quantity": quantity,
         "price_paid": price_paid,
         "price_original": price_original,
         "discount_pct": offer_data.get("discount_pct"),
@@ -145,6 +151,7 @@ async def purchase_item(
         offer_id=record.get("offer_id"),
         supermarket_id=record.get("supermarket_id"),
         supermarket_name=record.get("supermarket_name"),
+        quantity=float(record.get("quantity") or quantity),
         price_paid=float(record["price_paid"]),
         price_original=float(record["price_original"]) if record.get("price_original") else None,
         discount_pct=record.get("discount_pct"),
@@ -196,12 +203,14 @@ async def get_history(
 ) -> SavingsSummary:
     """Return savings history for the authenticated user."""
     sb = get_supabase()
+    # PostgREST filters compare literal values, so compute cutoff timestamp here.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
     resp = (
         sb.table("purchase_history")
         .select("*")
         .eq("user_id", user_id)
-        .gte("purchased_at", f"now() - interval '{days} days'")
+        .gte("purchased_at", cutoff)
         .order("purchased_at", desc=True)
         .limit(limit)
         .execute()
@@ -218,6 +227,7 @@ async def get_history(
             offer_id=r.get("offer_id"),
             supermarket_id=r.get("supermarket_id"),
             supermarket_name=r.get("supermarket_name"),
+            quantity=float(r.get("quantity") or 1),
             price_paid=float(r["price_paid"]),
             price_original=float(r["price_original"]) if r.get("price_original") else None,
             discount_pct=r.get("discount_pct"),

@@ -34,6 +34,7 @@
 - Extraction completion/failure Web Push payloads must include structured `data`: `kind`, `flyer_id`, `status`, `products_count`, and `url`. Frontend admin cache sync depends on those fields.
 - Admin product delete on `/admin/products/{id}` is hard delete only when product has zero linked offers; endpoint must also delete linked favorites.
 - `purchase_history.product_id` is historical snapshot data, not live FK protection for canonical products.
+- `purchase_history.quantity` stores purchased quantity; stored `price_paid`, `price_original`, and `savings` must be quantity-scaled totals, not unit values.
 
 ## Supabase Query Builder
 
