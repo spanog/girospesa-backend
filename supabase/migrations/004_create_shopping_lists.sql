@@ -72,6 +72,41 @@ REVOKE EXECUTE ON FUNCTION public.create_list(text) FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.create_list(text) TO authenticated;
 
 -- RPC: atomic per-item patch to avoid concurrent overwrites
+CREATE OR REPLACE FUNCTION public.is_list_member(
+  p_list_id UUID,
+  p_user_id UUID
+)
+RETURNS BOOLEAN AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.list_members
+    WHERE list_id = p_list_id
+      AND user_id = p_user_id
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+ALTER FUNCTION public.is_list_member(uuid, uuid) SET search_path = public;
+
+CREATE OR REPLACE FUNCTION public.is_list_owner(
+  p_list_id UUID,
+  p_user_id UUID
+)
+RETURNS BOOLEAN AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.list_members
+    WHERE list_id = p_list_id
+      AND user_id = p_user_id
+      AND role = 'owner'
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+ALTER FUNCTION public.is_list_owner(uuid, uuid) SET search_path = public;
+
+REVOKE EXECUTE ON FUNCTION public.is_list_member(uuid, uuid) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.is_list_member(uuid, uuid) TO authenticated;
+
+REVOKE EXECUTE ON FUNCTION public.is_list_owner(uuid, uuid) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.is_list_owner(uuid, uuid) TO authenticated;
+
 CREATE OR REPLACE FUNCTION update_list_item(
   p_list_id UUID,
   p_item_id TEXT,
@@ -91,10 +126,7 @@ BEGIN
   ),
   updated_at = now()
   WHERE id = p_list_id
-    AND EXISTS (
-      SELECT 1 FROM list_members lm
-      WHERE lm.list_id = p_list_id AND lm.user_id = auth.uid()
-    );
+    AND public.is_list_member(p_list_id, auth.uid());
 END;
 $$ LANGUAGE plpgsql SECURITY INVOKER;
 
@@ -109,10 +141,7 @@ CREATE POLICY "lists_select"
   TO authenticated
   USING (
     user_id = auth.uid()
-    OR EXISTS (
-      SELECT 1 FROM list_members lm
-      WHERE lm.list_id = id AND lm.user_id = auth.uid()
-    )
+    OR public.is_list_member(id, auth.uid())
   );
 
 CREATE POLICY "lists_insert"
@@ -123,12 +152,7 @@ CREATE POLICY "lists_insert"
 CREATE POLICY "lists_update"
   ON shopping_lists FOR UPDATE
   TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM list_members lm
-      WHERE lm.list_id = id AND lm.user_id = auth.uid()
-    )
-  );
+  USING (public.is_list_member(id, auth.uid()));
 
 CREATE POLICY "lists_delete"
   ON shopping_lists FOR DELETE
@@ -141,37 +165,20 @@ ALTER TABLE list_members ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "list_members_select"
   ON list_members FOR SELECT
   TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM list_members lm2
-      WHERE lm2.list_id = list_members.list_id AND lm2.user_id = auth.uid()
-    )
-  );
+  USING (public.is_list_member(list_members.list_id, auth.uid()));
 
 CREATE POLICY "list_members_insert_owner"
   ON list_members FOR INSERT
   TO authenticated
   WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM list_members lm
-      WHERE lm.list_id = list_members.list_id
-        AND lm.user_id = auth.uid()
-        AND lm.role = 'owner'
-    )
+    public.is_list_owner(list_members.list_id, auth.uid())
     OR (user_id = auth.uid() AND role = 'owner')
   );
 
 CREATE POLICY "list_members_delete_owner"
   ON list_members FOR DELETE
   TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM list_members lm
-      WHERE lm.list_id = list_members.list_id
-        AND lm.user_id = auth.uid()
-        AND lm.role = 'owner'
-    )
-  );
+  USING (public.is_list_owner(list_members.list_id, auth.uid()));
 
 -- RLS: list_invites (only service_role + authenticated owners)
 ALTER TABLE list_invites ENABLE ROW LEVEL SECURITY;

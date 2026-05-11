@@ -13,9 +13,17 @@ class _Table:
         self.name = name
         self.store = store
         self.payload = None
+        self.filters: dict[str, object] = {}
 
     def insert(self, payload):
         self.payload = payload
+        return self
+
+    def delete(self):
+        return self
+
+    def eq(self, key: str, value: object):
+        self.filters[key] = value
         return self
 
     def execute(self):
@@ -23,6 +31,16 @@ class _Table:
             row = {"id": "list-1", **self.payload}
             self.store[self.name].append(row)
             return _Result([row])
+        if self.payload is None and self.filters:
+            remaining = []
+            removed = []
+            for row in self.store[self.name]:
+                if all(row.get(key) == value for key, value in self.filters.items()):
+                    removed.append(row)
+                else:
+                    remaining.append(row)
+            self.store[self.name] = remaining
+            return _Result(removed)
         self.store[self.name].append(self.payload)
         return _Result([self.payload])
 
@@ -54,3 +72,19 @@ def test_create_owned_list_falls_back_to_supabase_when_direct_postgres_missing(m
         "user_id": "user-1",
         "role": "owner",
     }
+
+
+def test_delete_member_falls_back_to_supabase_when_direct_postgres_missing(monkeypatch):
+    fake = _FakeSupabase()
+    fake.store["list_members"] = [
+        {"list_id": "list-1", "user_id": "user-1", "role": "owner"},
+        {"list_id": "list-1", "user_id": "user-2", "role": "member"},
+    ]
+    monkeypatch.setattr(lists_repository, "has_direct_postgres", lambda: False)
+    monkeypatch.setattr(lists_repository, "get_supabase", lambda: fake)
+
+    lists_repository.delete_member("list-1", "user-2")
+
+    assert fake.store["list_members"] == [
+        {"list_id": "list-1", "user_id": "user-1", "role": "owner"}
+    ]

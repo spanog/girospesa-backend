@@ -113,7 +113,7 @@ Il backend usa tre livelli di autenticazione:
 
 ### Lista spesa (`/lists`)
 
-Le liste non-default possono essere eliminate solo dal proprietario. Se lista condivisa viene rimossa, backend riallinea gli `active_list_id` dei membri alla loro `Lista principale`, crea una `app_notification` persistente per ogni membro attivo e prova anche l'invio Web Push se esiste una subscription.
+Le liste non-default possono essere eliminate solo dal proprietario. Se lista condivisa viene rimossa, backend riallinea gli `active_list_id` dei membri alla loro `Lista principale`, crea una `app_notification` persistente per ogni membro attivo e prova anche l'invio Web Push se esiste una subscription. Anche la rimozione di un singolo membro da una lista condivisa riallinea l'`active_list_id` del target alla sua `Lista principale` e genera notifica persistente + Web Push solo per l'utente rimosso.
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
@@ -125,7 +125,7 @@ Le liste non-default possono essere eliminate solo dal proprietario. Se lista co
 | `POST` | `/lists/{id}/items/{item_id}/toggle` | ✅ member | Check/uncheck item; registra `checked_by`, `checked_at` |
 | `POST` | `/lists/{id}/invite` | ✅ owner | Crea link invito (token 64 char, TTL 7 giorni) |
 | `GET` | `/lists/{id}/members` | ✅ member | Lista membri lista condivisa |
-| `DELETE` | `/lists/{id}/members/{user_id}` | ✅ owner | Rimuove membro |
+| `DELETE` | `/lists/{id}/members/{user_id}` | ✅ owner | Rimuove membro; se era lista attiva del target, fallback su `Lista principale` + notifica inbox/Web Push al solo utente rimosso |
 | `GET` | `/lists/{id}/deal-freshness` | ✅ member | Freshness di tutte le offerte pinnate nella lista |
 
 ### Prodotti e offerte (`/products`)

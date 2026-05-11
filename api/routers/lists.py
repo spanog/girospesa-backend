@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 from typing import Annotated, Literal
+from uuid import UUID
+import json
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -11,7 +13,7 @@ from pydantic import BaseModel
 
 from core.auth import get_current_user_id
 from core.config import settings
-from core.database import get_supabase
+from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
 from services.repositories import lists_repository as repo
 from services.extraction.normalizer import format_unit_price_label
 from services.deal_freshness import classify_deal_freshness
@@ -367,6 +369,10 @@ async def _rpc_remove_list_item(
 
 
 async def _rpc_call(function_name: str, payload: dict, user_id: str) -> None:
+    if has_direct_postgres():
+        _direct_rpc_call(function_name, payload, user_id)
+        return
+
     token = _rpc_token_for_user(user_id)
     headers = {
         "apikey": settings.supabase_service_role_key,
@@ -379,6 +385,48 @@ async def _rpc_call(function_name: str, payload: dict, user_id: str) -> None:
     if response.status_code in (200, 204):
         return
     raise HTTPException(status_code=500, detail=f"Failed to call RPC {function_name}")
+
+
+def _direct_rpc_call(function_name: str, payload: dict, user_id: str) -> None:
+    claims = json.dumps({
+        "sub": user_id,
+        "role": "authenticated",
+    })
+    with get_postgres_cursor() as cursor:
+        cursor.execute("SET ROLE authenticated")
+        cursor.execute(
+            "SELECT set_config('request.jwt.claims', %s, false)",
+            (claims,),
+        )
+        if function_name == "update_list_item":
+            cursor.execute(
+                "SELECT public.update_list_item(%s::uuid, %s::text, %s::jsonb)",
+                (
+                    payload["p_list_id"],
+                    payload["p_item_id"],
+                    json.dumps(payload["p_patch"]),
+                ),
+            )
+            return
+        if function_name == "append_list_item":
+            cursor.execute(
+                "SELECT public.append_list_item(%s::uuid, %s::jsonb)",
+                (
+                    payload["p_list_id"],
+                    json.dumps(payload["p_item"]),
+                ),
+            )
+            return
+        if function_name == "remove_list_item":
+            cursor.execute(
+                "SELECT public.remove_list_item(%s::uuid, %s::text)",
+                (
+                    payload["p_list_id"],
+                    payload["p_item_id"],
+                ),
+            )
+            return
+    raise HTTPException(status_code=500, detail=f"Unsupported RPC {function_name}")
 
 
 def _profile_row(sb: object, user_id: str) -> dict:
@@ -531,6 +579,15 @@ def _list_deleted_payload(list_name: str, deleted_by: str | None, list_id: str) 
     }
 
 
+def _list_member_removed_payload(list_name: str, removed_by: str | None, list_id: str) -> dict:
+    return {
+        "list_id": list_id,
+        "list_name": list_name,
+        "removed_by": removed_by,
+        "url": "/lista",
+    }
+
+
 def _create_app_notification(
     sb: object,
     user_id: str,
@@ -567,6 +624,10 @@ def _insert_member(list_id: str, user_id: str, role: str, invited_by: str | None
     repo.insert_member(list_id, user_id, role, invited_by)
 
 
+def _delete_member(list_id: str, user_id: str) -> None:
+    repo.delete_member(list_id, user_id)
+
+
 def _set_invite_status(invite_id: str, *, status: str, accepted_by: str | None = None) -> None:
     repo.set_invite_status(invite_id, status=status, accepted_by=accepted_by)
 
@@ -588,13 +649,34 @@ def _impacted_member_user_ids_for_list(list_id: str) -> list[str]:
 
 
 def _notify_invited_user(sb: object, user_id: str, title: str, body: str, data: dict) -> None:
-    subs_resp = (
-        sb.table("push_subscriptions")  # type: ignore[union-attr,attr-defined]
-        .select("endpoint, p256dh, auth_key")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    for sub in subs_resp.data:
+    try:
+        UUID(user_id)
+        use_direct_postgres = has_direct_postgres()
+    except ValueError:
+        use_direct_postgres = False
+
+    if use_direct_postgres:
+        with get_postgres_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT endpoint, p256dh, auth_key
+                FROM public.push_subscriptions
+                WHERE user_id = %s
+                ORDER BY created_at ASC NULLS LAST, id ASC
+                """,
+                (user_id,),
+            )
+            subscriptions = [dict(row) for row in cursor.fetchall()]
+    else:
+        subs_resp = (
+            sb.table("push_subscriptions")  # type: ignore[union-attr,attr-defined]
+            .select("endpoint, p256dh, auth_key")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        subscriptions = subs_resp.data
+
+    for sub in subscriptions:
         subscription = PushSubscription(
             endpoint=sub["endpoint"],
             p256dh=sub["p256dh"],
@@ -1165,17 +1247,29 @@ async def remove_member(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> Response:
     sb = get_supabase()
-    owner = (
-        sb.table("list_members")
-        .select("role")
-        .eq("list_id", list_id)
-        .eq("user_id", user_id)
-        .single()
-        .execute()
-    )
-    if not owner.data or owner.data["role"] != "owner":
-        raise HTTPException(status_code=403, detail="Only the owner can remove members")
+    _verify_owner(sb, list_id, user_id)
     if member_user_id == user_id:
         raise HTTPException(status_code=400, detail="Owner cannot remove themselves")
-    sb.table("list_members").delete().eq("list_id", list_id).eq("user_id", member_user_id).execute()
+    if not _existing_member(list_id, member_user_id):
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    list_row = _shopping_list_row(list_id)
+    owner_profile = _profile_row(sb, user_id)
+    owner_name = owner_profile.get("display_name") or "Un utente"
+
+    _delete_member(list_id, member_user_id)
+    _fallback_selected_list_for_users(sb, {member_user_id}, list_id)
+
+    title = "Rimosso dalla lista"
+    body = f"{owner_name} ti ha rimosso dalla lista {list_row['name']}"
+    payload = _list_member_removed_payload(list_row["name"], owner_name, list_id)
+    _create_app_notification(
+        sb,
+        member_user_id,
+        kind="list_member_removed",
+        title=title,
+        body=body,
+        data=payload,
+    )
+    _notify_invited_user(sb, member_user_id, title, body, payload)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -360,3 +360,163 @@ async def test_member_cannot_delete_owner_list(
     assert member_notifications == []
 
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_owner_remove_member_notifies_target_and_falls_back_selected_list(
+    supabase_client, owner_user, member_user, clean_db
+):
+    async with await _client_as(owner_user["id"]) as owner_client:
+        create_resp = await owner_client.post("/lists", json={"name": "Weekend"})
+        assert create_resp.status_code == 201
+        shared_list = create_resp.json()
+
+        invite_resp = await owner_client.post(
+            f"/lists/{shared_list['id']}/invites",
+            json={"email": member_user["email"]},
+        )
+        assert invite_resp.status_code == 201
+        invite = invite_resp.json()
+
+    async with await _client_as(member_user["id"]) as member_client:
+        accept_resp = await member_client.post(
+            f"/lists/invites/{invite['id']}/accept",
+            json={},
+        )
+        assert accept_resp.status_code == 200
+
+        select_resp = await member_client.post(
+            "/lists/select",
+            json={"list_id": shared_list["id"]},
+        )
+        assert select_resp.status_code == 200
+
+    (
+        supabase_client.table("push_subscriptions")
+        .insert(
+            {
+                "user_id": member_user["id"],
+                "endpoint": f"https://push.example.com/{uuid.uuid4().hex}",
+                "p256dh": "test_p256dh_key",
+                "auth_key": "test_auth_key",
+                "user_agent": "TestBrowser/1.0",
+            }
+        )
+        .execute()
+    )
+
+    with patch("api.routers.lists.send_push_notification") as mock_push:
+        async with await _client_as(owner_user["id"]) as owner_client:
+            remove_resp = await owner_client.delete(
+                f"/lists/{shared_list['id']}/members/{member_user['id']}"
+            )
+            assert remove_resp.status_code == 204
+
+    member_rows = (
+        supabase_client.table("list_members")
+        .select("id")
+        .eq("list_id", shared_list["id"])
+        .eq("user_id", member_user["id"])
+        .execute()
+        .data
+    )
+    assert member_rows == []
+
+    profile_row = (
+        supabase_client.table("user_profiles")
+        .select("active_list_id")
+        .eq("id", member_user["id"])
+        .single()
+        .execute()
+        .data
+    )
+    member_default = (
+        supabase_client.table("shopping_lists")
+        .select("id")
+        .eq("user_id", member_user["id"])
+        .eq("is_default", True)
+        .single()
+        .execute()
+        .data
+    )
+    assert profile_row["active_list_id"] == member_default["id"]
+
+    notification_rows = (
+        supabase_client.table("app_notifications")
+        .select("kind, title, body, data")
+        .eq("user_id", member_user["id"])
+        .eq("kind", "list_member_removed")
+        .execute()
+        .data
+    )
+    assert len(notification_rows) == 1
+    notification = notification_rows[0]
+    assert notification["title"] == "Rimosso dalla lista"
+    assert notification["data"]["list_id"] == shared_list["id"]
+    assert notification["data"]["list_name"] == shared_list["name"]
+    assert notification["data"]["removed_by"] == "Owner Test"
+    assert notification["data"]["url"] == "/lista"
+    assert "Weekend" in notification["body"]
+
+    owner_notifications = (
+        supabase_client.table("app_notifications")
+        .select("id")
+        .eq("user_id", owner_user["id"])
+        .eq("kind", "list_member_removed")
+        .execute()
+        .data
+    )
+    assert owner_notifications == []
+
+    mock_push.assert_called_once()
+    push_kwargs = mock_push.call_args.kwargs
+    assert push_kwargs["title"] == "Rimosso dalla lista"
+    assert push_kwargs["body"] == "Owner Test ti ha rimosso dalla lista Weekend"
+    assert push_kwargs["data"]["list_id"] == shared_list["id"]
+    assert push_kwargs["data"]["removed_by"] == "Owner Test"
+    assert push_kwargs["data"]["url"] == "/lista"
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_non_owner_cannot_remove_member(
+    supabase_client, owner_user, member_user, clean_db
+):
+    async with await _client_as(owner_user["id"]) as owner_client:
+        shared_list = (await owner_client.get("/lists/active")).json()
+        invite_resp = await owner_client.post(
+            f"/lists/{shared_list['id']}/invites",
+            json={"email": member_user["email"]},
+        )
+        assert invite_resp.status_code == 201
+        invite = invite_resp.json()
+
+    async with await _client_as(member_user["id"]) as member_client:
+        accept_resp = await member_client.post(
+            f"/lists/invites/{invite['id']}/accept",
+            json={},
+        )
+        assert accept_resp.status_code == 200
+
+        remove_resp = await member_client.delete(
+            f"/lists/{shared_list['id']}/members/{owner_user['id']}"
+        )
+        assert remove_resp.status_code == 403
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_owner_remove_member_returns_404_when_target_missing(
+    supabase_client, owner_user, member_user, clean_db
+):
+    async with await _client_as(owner_user["id"]) as owner_client:
+        shared_list = (await owner_client.get("/lists/active")).json()
+
+        remove_resp = await owner_client.delete(
+            f"/lists/{shared_list['id']}/members/{member_user['id']}"
+        )
+        assert remove_resp.status_code == 404
+
+    app.dependency_overrides.clear()

@@ -490,6 +490,28 @@ def insert_member(list_id: str, user_id: str, role: str, invited_by: str | None 
         )
 
 
+def delete_member(list_id: str, user_id: str) -> None:
+    if not has_direct_postgres():
+        (
+            get_supabase()
+            .table("list_members")
+            .delete()
+            .eq("list_id", list_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return
+    with get_postgres_cursor() as cursor:
+        cursor.execute(
+            """
+            DELETE FROM public.list_members
+            WHERE list_id = %s
+              AND user_id = %s
+            """,
+            (list_id, user_id),
+        )
+
+
 def set_invite_status(invite_id: str, *, status: str, accepted_by: str | None = None) -> None:
     accepted_at = _now_utc() if status == "accepted" else None
     declined_at = _now_utc() if status == "declined" else None
