@@ -389,7 +389,7 @@ async def test_reset_list_clears_items_and_returns_updated_list():
     updated_list = {
         "id": _LIST_ID,
         "user_id": _USER_ID,
-        "name": "Lista spesa",
+        "name": "Lista principale",
         "items": [],
         "is_active": True,
     }

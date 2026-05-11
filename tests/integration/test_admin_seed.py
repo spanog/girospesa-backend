@@ -75,5 +75,5 @@ def test_admin_seed_creates_loginable_admin_and_profile(supabase_client):
         "home_province": "RC",
         "home_postal_code": "89024",
     }
-    assert lists == [{"id": lists[0]["id"], "name": "Lista spesa", "items": [], "is_active": True}]
+    assert lists == [{"id": lists[0]["id"], "name": "Lista principale", "items": [], "is_active": True}]
     assert members == [{"list_id": lists[0]["id"], "user_id": result.user_id, "role": "owner"}]

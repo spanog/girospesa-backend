@@ -58,8 +58,8 @@
 
 ## Admin Seed
 
-- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, one default empty owner shopping list, and `user_profiles.active_list_id` aligned to that default list.
-- New auth users must get one default empty owner shopping list from the DB signup trigger, plus `user_profiles.active_list_id` pointing to it; keep this in sync with shared Supabase migrations.
+- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, one default empty owner shopping list named `Lista principale`, and `user_profiles.active_list_id` aligned to that default list.
+- New auth users must get one default empty owner shopping list named `Lista principale` from the DB signup trigger, plus `user_profiles.active_list_id` pointing to it; keep this in sync with shared Supabase migrations.
 
 ## Optimizer
 
@@ -70,7 +70,7 @@
 ## Shopping Lists
 
 - Shopping lists are multi-list: `GET /lists` returns owned + shared summaries, `POST /lists` creates non-default owned lists, `POST /lists/select` sets current `user_profiles.active_list_id`, and `GET /lists/active` stays compatibility alias for selected list detail.
-- Default list is protected: owner may rename/share it but never delete it. Non-default owned lists may be deleted; shared members cannot rename/delete owner lists.
+- Default list is protected: owner may share it but may never rename or delete it. Non-default owned lists may be renamed/deleted; shared members cannot rename/delete owner lists.
 - `POST /lists/{id}/reset` clears current list items after frontend confirmation and requires list membership.
 - `POST /lists/{id}/items`, `DELETE /lists/{id}/items/{item_id}`, `POST /lists/{id}/items/{item_id}/toggle`, `POST /lists/{id}/items/{item_id}/check`, and purchase flows tied to `list_id` must verify list membership before any read/write using the service-role client.
 - Use RPC helpers for concurrent-safe item mutation (`update_list_item`, `append_list_item`, `remove_list_item`) instead of overwriting full `shopping_lists.items` arrays. These RPCs are `SECURITY INVOKER` and must keep `search_path = public` pinned.

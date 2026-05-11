@@ -18,6 +18,7 @@ from services.deal_freshness import classify_deal_freshness
 from services.push_notify import PushEndpointGoneError, PushSubscription, send_push_notification
 
 router = APIRouter()
+DEFAULT_LIST_NAME = "Lista principale"
 
 PRODUCT_SUBCATEGORIES = {
     "alimentari-freschi": {
@@ -79,7 +80,7 @@ def _verify_owner(sb: object, list_id: str, user_id: str) -> None:
 
 
 class CreateListBody(BaseModel):
-    name: str = "Lista spesa"
+    name: str = DEFAULT_LIST_NAME
 
 
 class RenameListBody(BaseModel):
@@ -680,7 +681,7 @@ async def get_active_list(user_id: Annotated[str, Depends(get_current_user_id)])
 
     new_list = _create_owned_list(
         user_id=user_id,
-        name="Lista spesa",
+        name=DEFAULT_LIST_NAME,
         items=[],
         is_active=True,
         is_default=True,
@@ -772,6 +773,8 @@ async def rename_list(
 ) -> dict:
     sb = get_supabase()
     _verify_owner(sb, list_id, user_id)
+    if _is_default_by_list_id(list_id):
+        raise HTTPException(status_code=400, detail="Default list cannot be renamed")
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="List name is required")

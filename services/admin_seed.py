@@ -16,7 +16,7 @@ ADMIN_HOME_ADDRESS = "Via Palmiro Togliatti"
 ADMIN_HOME_CITY = "Polistena"
 ADMIN_HOME_PROVINCE = "RC"
 ADMIN_HOME_POSTAL_CODE = "89024"
-DEFAULT_LIST_NAME = "Lista spesa"
+DEFAULT_LIST_NAME = "Lista principale"
 
 
 @dataclass(frozen=True)

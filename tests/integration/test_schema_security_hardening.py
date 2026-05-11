@@ -289,7 +289,7 @@ def test_auth_signup_trigger_creates_profile_and_default_list():
         assert profile == {"id": user_id, "display_name": "Schema Test"}
         assert shopping_list == {
             "user_id": user_id,
-            "name": "Lista spesa",
+            "name": "Lista principale",
             "is_active": True,
             "role": "owner",
         }

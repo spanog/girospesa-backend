@@ -79,6 +79,12 @@ async def test_user_can_create_second_list_and_switch_selection(
         delete_default_resp = await client.delete(f"/lists/{default_list['id']}")
         assert delete_default_resp.status_code == 400
 
+        rename_default_resp = await client.patch(
+            f"/lists/{default_list['id']}",
+            json={"name": "Spesa casa"},
+        )
+        assert rename_default_resp.status_code == 400
+
     app.dependency_overrides.clear()
 
 

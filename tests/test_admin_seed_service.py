@@ -165,7 +165,7 @@ def test_seed_admin_creates_missing_admin_user(monkeypatch: pytest.MonkeyPatch):
     assert supabase.shopping_lists.insert_calls == [
         {
             "user_id": "created-admin-id",
-            "name": "Lista spesa",
+            "name": "Lista principale",
             "items": [],
             "is_active": True,
         }
