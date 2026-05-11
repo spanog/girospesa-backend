@@ -16,4 +16,5 @@ psql -v ON_ERROR_STOP=1 -U postgres -d postgres -f /supabase-backend/seed.sql
 
 psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL'
 ALTER FUNCTION public.offers_compute_fields() SET search_path = public;
+NOTIFY pgrst, 'reload schema';
 SQL

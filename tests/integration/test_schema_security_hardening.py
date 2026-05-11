@@ -103,22 +103,30 @@ def test_security_sensitive_functions_have_fixed_search_path():
         JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'public'
           AND p.proname IN (
+            'append_list_item',
+            'create_list',
             'products_update_tsv',
+            'remove_list_item',
             'search_products_catalog',
             'offer_is_currently_active',
             'offers_compute_fields',
-            'set_updated_at'
+            'set_updated_at',
+            'update_list_item'
           )
         ORDER BY p.proname
         """
     )
 
     assert rows == [
+        {"function_name": "append_list_item", "function_config": "search_path=public"},
+        {"function_name": "create_list", "function_config": "search_path=public"},
         {"function_name": "offer_is_currently_active", "function_config": "search_path=public"},
         {"function_name": "offers_compute_fields", "function_config": "search_path=public"},
         {"function_name": "products_update_tsv", "function_config": "search_path=public"},
+        {"function_name": "remove_list_item", "function_config": "search_path=public"},
         {"function_name": "search_products_catalog", "function_config": "search_path=public, extensions"},
         {"function_name": "set_updated_at", "function_config": "search_path=public"},
+        {"function_name": "update_list_item", "function_config": "search_path=public"},
     ]
 
 

@@ -187,7 +187,10 @@ def find_user_by_email(admin_api, email: str):
     page = 1
     per_page = 200
     while True:
-        users = admin_api.list_users(page=page, per_page=per_page)
+        response = admin_api.list_users(page=page, per_page=per_page)
+        users = getattr(response, "users", response)
+        if isinstance(users, dict):
+            users = users.get("users", [])
         if not users:
             return None
         for user in users:

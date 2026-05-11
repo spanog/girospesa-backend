@@ -12,8 +12,10 @@ from pydantic import BaseModel
 from core.auth import get_current_user_id
 from core.config import settings
 from core.database import get_supabase
+from services.repositories import lists_repository as repo
 from services.extraction.normalizer import format_unit_price_label
 from services.deal_freshness import classify_deal_freshness
+from services.push_notify import PushEndpointGoneError, PushSubscription, send_push_notification
 
 router = APIRouter()
 
@@ -69,21 +71,23 @@ PRODUCT_CATEGORIES = set(PRODUCT_SUBCATEGORIES)
 
 
 def _verify_member(sb: object, list_id: str, user_id: str) -> None:
-    """Raise 403 if user_id is not a member of list_id."""
-    from fastapi import HTTPException
-    result = (
-        sb.table("list_members")  # type: ignore[union-attr,attr-defined]
-        .select("id")
-        .eq("list_id", list_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-    if not result.data:
-        raise HTTPException(status_code=403, detail="Not a member of this list")
+    repo.verify_member(sb, list_id, user_id)
+
+
+def _verify_owner(sb: object, list_id: str, user_id: str) -> None:
+    repo.verify_owner(sb, list_id, user_id)
 
 
 class CreateListBody(BaseModel):
     name: str = "Lista spesa"
+
+
+class RenameListBody(BaseModel):
+    name: str
+
+
+class SelectListBody(BaseModel):
+    list_id: str
 
 
 class AddItemBody(BaseModel):
@@ -99,11 +103,19 @@ class InviteBody(BaseModel):
     email: str | None = None
 
 
+class InviteByEmailBody(BaseModel):
+    email: str
+
+
 class UpdateListItemBody(BaseModel):
     quantity: float | None = None
     pinned_offer_id: str | None = None
     category: str | None = None
     subcategory: str | None = None
+
+
+def _now_utc() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _product_categories(sb: object, product_ids: set[str]) -> dict[str, dict]:
@@ -324,59 +336,462 @@ async def _rpc_update_list_item(
     patch: dict,
     user_id: str,
 ) -> None:
+    await _rpc_call("update_list_item", {
+        "p_list_id": list_id,
+        "p_item_id": item_id,
+        "p_patch": patch,
+    }, user_id)
+
+
+async def _rpc_append_list_item(
+    list_id: str,
+    item: dict,
+    user_id: str,
+) -> None:
+    await _rpc_call("append_list_item", {
+        "p_list_id": list_id,
+        "p_item": item,
+    }, user_id)
+
+
+async def _rpc_remove_list_item(
+    list_id: str,
+    item_id: str,
+    user_id: str,
+) -> None:
+    await _rpc_call("remove_list_item", {
+        "p_list_id": list_id,
+        "p_item_id": item_id,
+    }, user_id)
+
+
+async def _rpc_call(function_name: str, payload: dict, user_id: str) -> None:
     token = _rpc_token_for_user(user_id)
     headers = {
         "apikey": settings.supabase_service_role_key,
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    url = f"{settings.supabase_url.rstrip('/')}/rest/v1/rpc/update_list_item"
-    payload = {
-        "p_list_id": list_id,
-        "p_item_id": item_id,
-        "p_patch": patch,
-    }
+    url = f"{settings.supabase_url.rstrip('/')}/rest/v1/rpc/{function_name}"
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(url, json=payload, headers=headers)
     if response.status_code in (200, 204):
         return
-    raise HTTPException(status_code=500, detail="Failed to persist list item patch")
+    raise HTTPException(status_code=500, detail=f"Failed to call RPC {function_name}")
+
+
+def _profile_row(sb: object, user_id: str) -> dict:
+    return repo.profile_row(sb, user_id)
+
+
+def _set_active_list_id(user_id: str, list_id: str | None) -> None:
+    repo.set_active_list_id(user_id, list_id)
+
+
+def _default_list_id_for_user(sb: object, user_id: str) -> str | None:
+    return repo.default_list_id_for_user(sb, user_id)
+
+
+def _is_default_by_list_id(list_id: str) -> bool:
+    return repo.is_default_by_list_id(list_id)
+
+
+def _list_default_flags(list_ids: list[str]) -> dict[str, bool]:
+    return repo.list_default_flags(list_ids)
+
+
+def _insert_shopping_list(
+    *,
+    user_id: str,
+    name: str,
+    is_default: bool,
+    is_active: bool = True,
+    items: list[dict] | None = None,
+) -> dict:
+    return repo.create_owned_list(
+        user_id=user_id,
+        name=name,
+        is_default=is_default,
+        is_active=is_active,
+        items=items,
+    )
+
+
+def _create_owned_list(
+    *,
+    user_id: str,
+    name: str,
+    is_default: bool,
+    is_active: bool = True,
+    items: list[dict] | None = None,
+) -> dict:
+    return repo.create_owned_list(
+        user_id=user_id,
+        name=name,
+        is_default=is_default,
+        is_active=is_active,
+        items=items,
+    )
+
+
+def _shopping_list_row(list_id: str) -> dict:
+    return repo.shopping_list_row(list_id)
+
+
+def _shopping_list_rows(list_ids: list[str]) -> list[dict]:
+    return repo.shopping_list_rows(list_ids)
+
+
+def _rename_shopping_list(list_id: str, name: str) -> None:
+    repo.rename_shopping_list(list_id, name)
+
+
+def _delete_shopping_list(list_id: str) -> None:
+    repo.delete_shopping_list(list_id)
+
+
+def _visible_memberships(sb: object, user_id: str) -> list[dict]:
+    return repo.visible_memberships(sb, user_id)
+
+
+def _resolve_selected_list_id(sb: object, user_id: str) -> str | None:
+    profile = _profile_row(sb, user_id)
+    memberships = _visible_memberships(sb, user_id)
+    visible_ids = {row["list_id"] for row in memberships}
+    active_list_id = profile.get("active_list_id")
+    if active_list_id and active_list_id in visible_ids:
+        return active_list_id
+    default_list_id = _default_list_id_for_user(sb, user_id)
+    if default_list_id:
+        if active_list_id != default_list_id:
+            _set_active_list_id(user_id, default_list_id)
+        return default_list_id
+    if memberships:
+        fallback_id = memberships[0]["list_id"]
+        _set_active_list_id(user_id, fallback_id)
+        return fallback_id
+    return None
+
+
+def _list_member_role(sb: object, list_id: str, user_id: str) -> str | None:
+    return repo.list_member_role(sb, list_id, user_id)
+
+
+def _list_detail(sb: object, list_id: str, user_id: str) -> dict:
+    _verify_member(sb, list_id, user_id)
+    row = _shopping_list_row(list_id)
+    row["items"] = _enrich_items_with_categories(sb, row.get("items") or [])
+    row["is_default"] = _is_default_by_list_id(list_id)
+    member_role = _list_member_role(sb, list_id, user_id)
+    selected_list_id = _resolve_selected_list_id(sb, user_id)
+    row["member_role"] = member_role
+    row["is_owner"] = member_role == "owner"
+    row["is_selected"] = row["id"] == selected_list_id
+    return row
+
+
+def _member_counts(list_ids: list[str]) -> dict[str, int]:
+    return repo.member_counts(list_ids)
+
+
+def _fallback_selected_list_for_users(sb: object, user_ids: set[str], deleted_list_id: str) -> None:
+    for impacted_user_id in user_ids:
+        default_list_id = _default_list_id_for_user(sb, impacted_user_id)
+        current = _profile_row(sb, impacted_user_id)
+        if current.get("active_list_id") in {None, deleted_list_id}:
+            _set_active_list_id(impacted_user_id, default_list_id)
+
+
+def _invite_payload(list_name: str, inviter_name: str | None, invite_id: str, list_id: str) -> dict:
+    return {
+        "invite_id": invite_id,
+        "list_id": list_id,
+        "url": f"/lista?invite={invite_id}&list={list_id}",
+        "list_name": list_name,
+        "invited_by": inviter_name,
+    }
+
+
+def _create_app_notification(
+    sb: object,
+    user_id: str,
+    *,
+    kind: str,
+    title: str,
+    body: str,
+    data: dict,
+) -> dict:
+    return repo.create_app_notification(user_id, kind=kind, title=title, body=body, data=data)
+
+
+def _mark_invite_notifications_read(sb: object, invite_id: str, user_id: str) -> None:
+    repo.mark_invite_notifications_read(invite_id, user_id)
+
+
+def _delete_invite_notifications(sb: object, invite_id: str, user_id: str) -> None:
+    repo.delete_invite_notifications(invite_id, user_id)
+
+
+def _pending_list_invites_for_user(user_id: str) -> list[dict]:
+    return repo.pending_list_invites_for_user(user_id)
+
+
+def _invite_for_user(invite_id: str, user_id: str) -> dict | None:
+    return repo.invite_for_user(invite_id, user_id)
+
+
+def _existing_member(list_id: str, user_id: str) -> bool:
+    return repo.existing_member(list_id, user_id)
+
+
+def _insert_member(list_id: str, user_id: str, role: str, invited_by: str | None = None) -> None:
+    repo.insert_member(list_id, user_id, role, invited_by)
+
+
+def _set_invite_status(invite_id: str, *, status: str, accepted_by: str | None = None) -> None:
+    repo.set_invite_status(invite_id, status=status, accepted_by=accepted_by)
+
+
+def _pending_invite_for_target(list_id: str, invited_user_id: str) -> dict | None:
+    return repo.pending_invite_for_target(list_id, invited_user_id)
+
+
+def _insert_list_invite(list_id: str, invited_by: str, invited_user_id: str, email: str) -> dict:
+    return repo.insert_list_invite(list_id, invited_by, invited_user_id, email)
+
+
+def _auth_user_by_email(email: str) -> dict | None:
+    return repo.auth_user_by_email(email)
+
+
+def _notify_invited_user(sb: object, user_id: str, title: str, body: str, data: dict) -> None:
+    subs_resp = (
+        sb.table("push_subscriptions")  # type: ignore[union-attr,attr-defined]
+        .select("endpoint, p256dh, auth_key")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    for sub in subs_resp.data:
+        subscription = PushSubscription(
+            endpoint=sub["endpoint"],
+            p256dh=sub["p256dh"],
+            auth_key=sub["auth_key"],
+        )
+        try:
+            send_push_notification(
+                subscription=subscription,
+                title=title,
+                body=body,
+                data=data,
+            )
+        except PushEndpointGoneError:
+            (
+                sb.table("push_subscriptions")  # type: ignore[union-attr,attr-defined]
+                .delete()
+                .eq("user_id", user_id)
+                .eq("endpoint", sub["endpoint"])
+                .execute()
+            )
+        except Exception:
+            continue
+
+
+@router.get("")
+async def list_lists(user_id: Annotated[str, Depends(get_current_user_id)]) -> list[dict]:
+    sb = get_supabase()
+    memberships = _visible_memberships(sb, user_id)
+    if not memberships:
+        selected_list = await get_active_list(user_id)
+        memberships = [{"list_id": selected_list["id"], "role": "owner"}]
+    list_ids = [membership["list_id"] for membership in memberships]
+    role_by_list_id = {membership["list_id"]: membership["role"] for membership in memberships}
+    selected_list_id = _resolve_selected_list_id(sb, user_id)
+    list_rows = _shopping_list_rows(list_ids)
+    default_flags = _list_default_flags(list_ids)
+    member_count_by_list = _member_counts(list_ids)
+    owner_ids = sorted({row["user_id"] for row in list_rows if row.get("user_id")})
+    owner_profiles = (
+        sb.table("user_profiles")
+        .select("id, display_name")
+        .in_("id", owner_ids)
+        .execute()
+        .data
+        if owner_ids
+        else []
+    )
+    owner_names = {profile["id"]: profile.get("display_name") for profile in owner_profiles}
+    summaries: list[dict] = []
+    for row in list_rows:
+        role = role_by_list_id.get(row["id"])
+        summaries.append({
+            "id": row["id"],
+            "user_id": row.get("user_id"),
+            "name": row.get("name"),
+            "is_active": row.get("is_active", True),
+            "is_default": default_flags.get(row["id"], False),
+            "is_selected": row["id"] == selected_list_id,
+            "member_role": role,
+            "is_owner": role == "owner",
+            "member_count": member_count_by_list.get(row["id"], 0),
+            "item_count": len(row.get("items") or []),
+            "owner_display_name": owner_names.get(row.get("user_id")),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        })
+    return summaries
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+async def create_list(
+    body: CreateListBody,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    sb = get_supabase()
+    name = body.name.strip() or "Nuova lista"
+    created = _create_owned_list(
+        user_id=user_id,
+        name=name,
+        items=[],
+        is_active=True,
+        is_default=False,
+    )
+    _set_active_list_id(user_id, created["id"])
+    return _list_detail(sb, created["id"], user_id)
+
+
+@router.post("/select")
+async def select_list(
+    body: SelectListBody,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    sb = get_supabase()
+    _verify_member(sb, body.list_id, user_id)
+    _set_active_list_id(user_id, body.list_id)
+    return _list_detail(sb, body.list_id, user_id)
 
 
 @router.get("/active")
 async def get_active_list(user_id: Annotated[str, Depends(get_current_user_id)]) -> dict:
-    """Return the user's active shopping list (most recent). Creates one if none exists."""
+    """Return currently selected shopping list. Creates default one if missing."""
     sb = get_supabase()
-    resp = (
-        sb.table("shopping_lists")
-        .select("*")
-        .eq("user_id", user_id)
-        .eq("is_active", True)
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    if resp.data:
-        row = resp.data[0]
-        row["items"] = _enrich_items_with_categories(sb, row.get("items") or [])
-        return row
+    selected_list_id = _resolve_selected_list_id(sb, user_id)
+    if selected_list_id:
+        return _list_detail(sb, selected_list_id, user_id)
 
-    # Auto-create — use explicit user_id; service-role client has no auth.uid()
-    new_list = (
-        sb.table("shopping_lists")
-        .insert({"user_id": user_id, "name": "Lista spesa", "is_active": True, "items": []})
-        .execute()
-        .data[0]
+    new_list = _create_owned_list(
+        user_id=user_id,
+        name="Lista spesa",
+        items=[],
+        is_active=True,
+        is_default=True,
     )
-    new_list_id = new_list["id"]
-    sb.table("list_members").insert({
-        "list_id": new_list_id,
-        "user_id": user_id,
-        "role": "owner",
-    }).execute()
-    row = sb.table("shopping_lists").select("*").eq("id", new_list_id).single().execute().data
-    row["items"] = _enrich_items_with_categories(sb, row.get("items") or [])
-    return row
+    _set_active_list_id(user_id, new_list["id"])
+    return _list_detail(sb, new_list["id"], user_id)
+
+
+@router.get("/invites/pending")
+async def list_pending_invites(
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> list[dict]:
+    sb = get_supabase()
+    invites = _pending_list_invites_for_user(user_id)
+    if not invites:
+        return []
+    list_ids = sorted({invite["list_id"] for invite in invites})
+    inviter_ids = sorted({invite["invited_by"] for invite in invites})
+    lists = (
+        sb.table("shopping_lists")
+        .select("id, name")
+        .in_("id", list_ids)
+        .execute()
+        .data
+    )
+    profiles = (
+        sb.table("user_profiles")
+        .select("id, display_name")
+        .in_("id", inviter_ids)
+        .execute()
+        .data
+    )
+    list_names = {row["id"]: row["name"] for row in lists}
+    inviter_names = {row["id"]: row.get("display_name") for row in profiles}
+    for invite in invites:
+        invite["list_name"] = list_names.get(invite["list_id"])
+        invite["invited_by_name"] = inviter_names.get(invite["invited_by"])
+    return invites
+
+
+@router.post("/invites/{invite_id}/accept")
+async def accept_pending_invite(
+    invite_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    sb = get_supabase()
+    invite = _invite_for_user(invite_id, user_id)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if invite["expires_at"] < datetime.now(timezone.utc):
+        _set_invite_status(invite_id, status="expired")
+        _mark_invite_notifications_read(sb, invite_id, user_id)
+        raise HTTPException(status_code=410, detail="Invite has expired")
+    if not _existing_member(invite["list_id"], user_id):
+        _insert_member(invite["list_id"], user_id, "member", invite.get("invited_by"))
+    _set_invite_status(invite_id, status="accepted", accepted_by=user_id)
+    _mark_invite_notifications_read(sb, invite_id, user_id)
+    return {"list_id": invite["list_id"]}
+
+
+@router.post("/invites/{invite_id}/decline")
+async def decline_pending_invite(
+    invite_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> Response:
+    sb = get_supabase()
+    invite = _invite_for_user(invite_id, user_id)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    _set_invite_status(invite_id, status="declined")
+    _mark_invite_notifications_read(sb, invite_id, user_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{list_id}")
+async def get_list(
+    list_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    sb = get_supabase()
+    return _list_detail(sb, list_id, user_id)
+
+
+@router.patch("/{list_id}")
+async def rename_list(
+    list_id: str,
+    body: RenameListBody,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    sb = get_supabase()
+    _verify_owner(sb, list_id, user_id)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="List name is required")
+    _rename_shopping_list(list_id, name)
+    return _list_detail(sb, list_id, user_id)
+
+
+@router.delete("/{list_id}")
+async def delete_list(
+    list_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> Response:
+    sb = get_supabase()
+    _verify_owner(sb, list_id, user_id)
+    if _is_default_by_list_id(list_id):
+        raise HTTPException(status_code=400, detail="Default list cannot be deleted")
+    impacted_users = repo.impacted_user_ids_for_list(list_id)
+    _delete_shopping_list(list_id)
+    _fallback_selected_list_for_users(sb, impacted_users, list_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{list_id}/reset")
@@ -426,20 +841,7 @@ async def add_item(
         "found_deals": [],
     }
     new_item = _enrich_items_with_categories(sb, [new_item])[0]
-    sb.rpc("update_list_item", {
-        "p_list_id": list_id,
-        "p_item_id": new_item["id"],
-        "p_patch": new_item,
-    }).execute()
-    # Simpler: just append via jsonb_array_append
-    sb.table("shopping_lists").update({
-        "items": sb.table("shopping_lists")
-        .select("items")
-        .eq("id", list_id)
-        .single()
-        .execute()
-        .data["items"] + [new_item]
-    }).eq("id", list_id).execute()
+    await _rpc_append_list_item(list_id, new_item, user_id)
     return new_item
 
 
@@ -452,9 +854,7 @@ async def remove_item(
     sb = get_supabase()
     # Verify user is a member of the list before modifying
     _verify_member(sb, list_id, user_id)
-    current = sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
-    items = [i for i in current.data["items"] if i["id"] != item_id]
-    sb.table("shopping_lists").update({"items": items}).eq("id", list_id).execute()
+    await _rpc_remove_list_item(list_id, item_id, user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -468,23 +868,39 @@ async def toggle_item(
     _verify_member(sb, list_id, user_id)
     current = sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
     items = current.data["items"]
-    updated = []
-    toggled = None
-    for item in items:
-        if item["id"] == item_id:
-            new_checked = not item.get("checked", False)
-            item = {
-                **item,
-                "checked": new_checked,
-                "checked_by": user_id if new_checked else None,
-                "checked_at": datetime.now(timezone.utc).isoformat() if new_checked else None,
-            }
-            toggled = item
-        updated.append(item)
-    sb.table("shopping_lists").update({"items": updated}).eq("id", list_id).execute()
+    toggled = _find_item(items, item_id)
+    new_checked = not toggled.get("checked", False)
+    patch = {
+        "checked": new_checked,
+        "checked_by": user_id if new_checked else None,
+        "checked_at": _now_utc() if new_checked else None,
+    }
+    await _rpc_update_list_item(list_id, item_id, patch, user_id)
+    toggled = {**toggled, **patch}
     if toggled is None:
         raise HTTPException(status_code=404, detail="Item not found")
     return toggled
+
+
+@router.post("/{list_id}/items/{item_id}/check")
+async def set_item_checked(
+    list_id: str,
+    item_id: str,
+    body: dict,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
+    current = sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
+    item = _find_item(current.data["items"], item_id)
+    checked = bool(body.get("checked"))
+    patch = {
+        "checked": checked,
+        "checked_by": user_id if checked else None,
+        "checked_at": _now_utc() if checked else None,
+    }
+    await _rpc_update_list_item(list_id, item_id, patch, user_id)
+    return {**item, **patch}
 
 
 @router.patch("/{list_id}/items/{item_id}")
@@ -516,6 +932,112 @@ async def patch_item(
     return _find_item(refreshed, item_id)
 
 
+@router.post("/{list_id}/invites", status_code=status.HTTP_201_CREATED)
+async def invite_member_by_email(
+    list_id: str,
+    body: InviteByEmailBody,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    sb = get_supabase()
+    _verify_owner(sb, list_id, user_id)
+    email = body.email.strip().lower()
+    if not email:
+        raise HTTPException(status_code=422, detail="Email is required")
+    invited_user = _auth_user_by_email(email)
+    if invited_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    invited_user_id = invited_user["id"]
+    if invited_user_id == user_id:
+        raise HTTPException(status_code=400, detail="You cannot invite yourself")
+    if _existing_member(list_id, invited_user_id):
+        raise HTTPException(status_code=409, detail="User is already a member")
+    if _pending_invite_for_target(list_id, invited_user_id):
+        raise HTTPException(status_code=409, detail="Pending invite already exists")
+    list_row = _shopping_list_row(list_id)
+    inviter_profile = _profile_row(sb, user_id)
+    inviter_name = inviter_profile.get("display_name") or "Un utente"
+    invite = _insert_list_invite(list_id, user_id, invited_user_id, email)
+    title = "Invito lista spesa"
+    body_text = f"{inviter_name} ti ha invitato in {list_row['name']}"
+    payload = _invite_payload(list_row["name"], inviter_name, invite["id"], list_id)
+    notification = _create_app_notification(
+        sb,
+        invited_user_id,
+        kind="list_invite",
+        title=title,
+        body=body_text,
+        data=payload,
+    )
+    _notify_invited_user(sb, invited_user_id, title, body_text, payload)
+    invite["notification"] = notification
+    return invite
+
+
+@router.get("/{list_id}/invites")
+async def list_list_invites(
+    list_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> list[dict]:
+    sb = get_supabase()
+    _verify_owner(sb, list_id, user_id)
+    invites = (
+        sb.table("list_invites")
+        .select("*")
+        .eq("list_id", list_id)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+    )
+    inviter_ids = sorted({invite["invited_by"] for invite in invites})
+    invited_ids = sorted({invite["invited_user_id"] for invite in invites if invite.get("invited_user_id")})
+    profile_ids = sorted(set(inviter_ids + invited_ids))
+    profiles = (
+        sb.table("user_profiles")
+        .select("id, display_name")
+        .in_("id", profile_ids)
+        .execute()
+        .data
+        if profile_ids
+        else []
+    )
+    names = {profile["id"]: profile.get("display_name") for profile in profiles}
+    for invite in invites:
+        invite["invited_by_name"] = names.get(invite["invited_by"])
+        invite["invited_user_name"] = names.get(invite.get("invited_user_id"))
+    return invites
+
+
+@router.delete("/{list_id}/invites/{invite_id}")
+async def revoke_invite(
+    list_id: str,
+    invite_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> Response:
+    sb = get_supabase()
+    _verify_owner(sb, list_id, user_id)
+    invite_resp = (
+        sb.table("list_invites")
+        .select("invited_user_id, status")
+        .eq("id", invite_id)
+        .eq("list_id", list_id)
+        .limit(1)
+        .execute()
+    )
+    if not invite_resp.data:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    invite = invite_resp.data[0]
+    if invite["status"] == "pending":
+        (
+            sb.table("list_invites")
+            .update({"status": "revoked"})
+            .eq("id", invite_id)
+            .execute()
+        )
+        if invite.get("invited_user_id"):
+            _delete_invite_notifications(sb, invite_id, invite["invited_user_id"])
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/{list_id}/invite")
 async def create_invite(
     list_id: str,
@@ -523,16 +1045,7 @@ async def create_invite(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict:
     sb = get_supabase()
-    # Ensure requester is owner
-    member = (
-        sb.table("list_members")
-        .select("role")
-        .eq("list_id", list_id)
-        .eq("user_id", user_id)
-        .execute()
-    )
-    if not member.data or member.data[0]["role"] != "owner":
-        raise HTTPException(status_code=403, detail="Only the owner can invite")
+    _verify_owner(sb, list_id, user_id)
 
     invite = (
         sb.table("list_invites")

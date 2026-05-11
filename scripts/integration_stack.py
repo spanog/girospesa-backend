@@ -6,6 +6,7 @@ import argparse
 import os
 import string
 import subprocess
+import time
 from pathlib import Path
 
 from jose import jwt as _jwt
@@ -81,17 +82,101 @@ def compose_command(*args: str) -> list[str]:
     ]
 
 
+def _run_capture(*args: str, env: dict[str, str]) -> str:
+    completed = subprocess.run(
+        compose_command(*args),
+        cwd=BACKEND_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _wait_for_schema(env: dict[str, str], timeout_seconds: int = 60) -> None:
+    sql = """
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'shopping_lists'
+          AND column_name = 'is_default'
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'user_profiles'
+          AND column_name = 'active_list_id'
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'list_invites'
+          AND column_name = 'invited_user_id'
+      )
+      AND to_regclass('public.app_notifications') IS NOT NULL
+      AND to_regprocedure('public.append_list_item(uuid, jsonb)') IS NOT NULL;
+    """
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        output = _run_capture(
+            "exec",
+            "-T",
+            "db",
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            "-tAc",
+            sql,
+            env=env,
+        )
+        if output.lower() == "t":
+            _run_capture(
+                "exec",
+                "-T",
+                "db",
+                "psql",
+                "-U",
+                "postgres",
+                "-d",
+                "postgres",
+                "-c",
+                "NOTIFY pgrst, 'reload schema';",
+                env=env,
+            )
+            return
+        time.sleep(1)
+    raise RuntimeError("Timed out waiting for integration schema bootstrap")
+
+
 def run_compose(*args: str) -> None:
     if args and args[0] == "up":
         _generate_kong_config()
     env = os.environ.copy()
     env.update(integration_env())
-    subprocess.run(
-        compose_command(*args),
-        cwd=BACKEND_ROOT,
-        env=env,
-        check=True,
-    )
+    subprocess.run(compose_command(*args), cwd=BACKEND_ROOT, env=env, check=True)
+    if args and args[0] == "up":
+        _wait_for_schema(env)
+        # PostgREST may start before local bootstrap migrations finish. Restart it
+        # only after schema objects exist so cache sees new columns/RPCs/tables.
+        subprocess.run(
+            compose_command("restart", "rest"),
+            cwd=BACKEND_ROOT,
+            env=env,
+            check=True,
+        )
+        subprocess.run(
+            compose_command("up", "-d", "--wait", "rest"),
+            cwd=BACKEND_ROOT,
+            env=env,
+            check=True,
+        )
 
 
 def print_env() -> None:

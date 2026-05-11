@@ -10,6 +10,12 @@
 - Manage integration stack manually: `.venv/bin/python -m scripts.integration_stack up|down|status|env`
 - Run performance tests: `.venv/bin/python -m pytest tests/performance -v -s`
 
+## Data Access Rule
+
+- FastAPI is the only application layer allowed to touch database persistence details.
+- Frontend-facing features must expose backend endpoints instead of coupling UI code to Supabase tables/RPCs directly.
+- Keep raw SQL, PostgREST, Supabase service-role access, and schema-specific branching inside backend repositories/services, never inside frontend code.
+
 ## Integration Test Isolation
 
 - `tests/integration/` must boot a fresh Docker stack on project `girospesa-itest` and destroy only that stack with `down -v --remove-orphans`.
@@ -52,8 +58,8 @@
 
 ## Admin Seed
 
-- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, and one active empty owner shopping list.
-- New auth users must get one active empty owner shopping list from the DB signup trigger; keep this in sync with webapp Supabase migrations.
+- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, one default empty owner shopping list, and `user_profiles.active_list_id` aligned to that default list.
+- New auth users must get one default empty owner shopping list from the DB signup trigger, plus `user_profiles.active_list_id` pointing to it; keep this in sync with shared Supabase migrations.
 
 ## Optimizer
 
@@ -63,8 +69,12 @@
 
 ## Shopping Lists
 
-- `POST /lists/{id}/reset` clears the current list items after frontend confirmation and requires list membership.
-- `POST /lists/{id}/items`, `POST /lists/{id}/items/{item_id}/toggle`, and purchase flows tied to `list_id` must verify list membership before any read/write using the service-role client.
+- Shopping lists are multi-list: `GET /lists` returns owned + shared summaries, `POST /lists` creates non-default owned lists, `POST /lists/select` sets current `user_profiles.active_list_id`, and `GET /lists/active` stays compatibility alias for selected list detail.
+- Default list is protected: owner may rename/share it but never delete it. Non-default owned lists may be deleted; shared members cannot rename/delete owner lists.
+- `POST /lists/{id}/reset` clears current list items after frontend confirmation and requires list membership.
+- `POST /lists/{id}/items`, `DELETE /lists/{id}/items/{item_id}`, `POST /lists/{id}/items/{item_id}/toggle`, `POST /lists/{id}/items/{item_id}/check`, and purchase flows tied to `list_id` must verify list membership before any read/write using the service-role client.
+- Use RPC helpers for concurrent-safe item mutation (`update_list_item`, `append_list_item`, `remove_list_item`) instead of overwriting full `shopping_lists.items` arrays. These RPCs are `SECURITY INVOKER` and must keep `search_path = public` pinned.
+- Direct sharing flow is email-targeted: `POST /lists/{list_id}/invites` resolves an already-registered auth user, creates `list_invites` + `app_notifications`, and recipient accepts/declines via `/lists/invites/{invite_id}/accept|decline`.
 
 ## Push Favorites Webhook
 
