@@ -70,11 +70,11 @@
 ## Shopping Lists
 
 - Shopping lists are multi-list: `GET /lists` returns owned + shared summaries, `POST /lists` creates non-default owned lists, `POST /lists/select` sets current `user_profiles.active_list_id`, and `GET /lists/active` stays compatibility alias for selected list detail.
-- Default list is protected: owner may share it but may never rename or delete it. Non-default owned lists may be renamed/deleted; shared members cannot rename/delete owner lists.
+- Default list is protected: owner may share it but may never rename or delete it. Non-default owned lists may be renamed/deleted only by owner; shared members cannot rename/delete owner lists. When owner deletes shared non-default list, active members must receive `app_notifications` + Web Push (if subscribed) and their `active_list_id` must fall back to default list.
 - `POST /lists/{id}/reset` clears current list items after frontend confirmation and requires list membership.
 - `POST /lists/{id}/items`, `DELETE /lists/{id}/items/{item_id}`, `POST /lists/{id}/items/{item_id}/toggle`, `POST /lists/{id}/items/{item_id}/check`, and purchase flows tied to `list_id` must verify list membership before any read/write using the service-role client.
 - Use RPC helpers for concurrent-safe item mutation (`update_list_item`, `append_list_item`, `remove_list_item`) instead of overwriting full `shopping_lists.items` arrays. These RPCs are `SECURITY INVOKER` and must keep `search_path = public` pinned.
-- Direct sharing flow is email-targeted: `POST /lists/{list_id}/invites` resolves an already-registered auth user, creates `list_invites` + `app_notifications`, and recipient accepts/declines via `/lists/invites/{invite_id}/accept|decline`.
+- Direct sharing flow is email-targeted: `POST /lists/{list_id}/invites` resolves an already-registered auth user, creates `list_invites` + `app_notifications`, and recipient accepts/declines via `/lists/invites/{invite_id}/accept|decline`. `DELETE /lists/{list_id}` on shared lists also emits `app_notifications` to active members with payload redirecting to `/lista`.
 
 ## Push Favorites Webhook
 

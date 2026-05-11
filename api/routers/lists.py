@@ -498,6 +498,15 @@ def _member_counts(list_ids: list[str]) -> dict[str, int]:
 def _fallback_selected_list_for_users(sb: object, user_ids: set[str], deleted_list_id: str) -> None:
     for impacted_user_id in user_ids:
         default_list_id = _default_list_id_for_user(sb, impacted_user_id)
+        if default_list_id is None:
+            created = _create_owned_list(
+                user_id=impacted_user_id,
+                name=DEFAULT_LIST_NAME,
+                items=[],
+                is_active=True,
+                is_default=True,
+            )
+            default_list_id = created["id"]
         current = _profile_row(sb, impacted_user_id)
         if current.get("active_list_id") in {None, deleted_list_id}:
             _set_active_list_id(impacted_user_id, default_list_id)
@@ -510,6 +519,15 @@ def _invite_payload(list_name: str, inviter_name: str | None, invite_id: str, li
         "url": f"/lista?invite={invite_id}&list={list_id}",
         "list_name": list_name,
         "invited_by": inviter_name,
+    }
+
+
+def _list_deleted_payload(list_name: str, deleted_by: str | None, list_id: str) -> dict:
+    return {
+        "list_id": list_id,
+        "list_name": list_name,
+        "deleted_by": deleted_by,
+        "url": "/lista",
     }
 
 
@@ -563,6 +581,10 @@ def _insert_list_invite(list_id: str, invited_by: str, invited_user_id: str, ema
 
 def _auth_user_by_email(email: str) -> dict | None:
     return repo.auth_user_by_email(email)
+
+
+def _impacted_member_user_ids_for_list(list_id: str) -> list[str]:
+    return repo.impacted_member_user_ids_for_list(list_id)
 
 
 def _notify_invited_user(sb: object, user_id: str, title: str, body: str, data: dict) -> None:
@@ -791,9 +813,26 @@ async def delete_list(
     _verify_owner(sb, list_id, user_id)
     if _is_default_by_list_id(list_id):
         raise HTTPException(status_code=400, detail="Default list cannot be deleted")
+    list_row = _shopping_list_row(list_id)
+    owner_profile = _profile_row(sb, user_id)
+    owner_name = owner_profile.get("display_name") or "Un utente"
+    member_user_ids = _impacted_member_user_ids_for_list(list_id)
     impacted_users = repo.impacted_user_ids_for_list(list_id)
     _delete_shopping_list(list_id)
     _fallback_selected_list_for_users(sb, impacted_users, list_id)
+    title = "Lista rimossa"
+    body = f"{owner_name} ha rimosso la lista {list_row['name']}"
+    payload = _list_deleted_payload(list_row["name"], owner_name, list_id)
+    for member_user_id in member_user_ids:
+        _create_app_notification(
+            sb,
+            member_user_id,
+            kind="list_deleted",
+            title=title,
+            body=body,
+            data=payload,
+        )
+        _notify_invited_user(sb, member_user_id, title, body, payload)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

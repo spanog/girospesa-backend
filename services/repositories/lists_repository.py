@@ -695,3 +695,30 @@ def impacted_user_ids_for_list(list_id: str) -> set[str]:
         )
         rows = cursor.fetchall()
     return {str(row["user_id"]) for row in rows}
+
+
+def impacted_member_user_ids_for_list(list_id: str) -> list[str]:
+    if not has_direct_postgres():
+        sb = get_supabase()
+        rows = (
+            sb.table("list_members")
+            .select("user_id")
+            .eq("list_id", list_id)
+            .eq("role", "member")
+            .execute()
+            .data
+        )
+        return [row["user_id"] for row in rows]
+    with get_postgres_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT user_id
+            FROM public.list_members
+            WHERE list_id = %s
+              AND role = 'member'
+            ORDER BY user_id ASC
+            """,
+            (list_id,),
+        )
+        rows = cursor.fetchall()
+    return [str(row["user_id"]) for row in rows]

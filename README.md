@@ -113,6 +113,8 @@ Il backend usa tre livelli di autenticazione:
 
 ### Lista spesa (`/lists`)
 
+Le liste non-default possono essere eliminate solo dal proprietario. Se lista condivisa viene rimossa, backend riallinea gli `active_list_id` dei membri alla loro `Lista principale`, crea una `app_notification` persistente per ogni membro attivo e prova anche l'invio Web Push se esiste una subscription.
+
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
 | `GET` | `/lists/active` | ✅ | Lista attiva; auto-crea `Lista principale` se non esiste; arricchisce gli item con `category` e `subcategory` |
