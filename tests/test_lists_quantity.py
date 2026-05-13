@@ -170,6 +170,16 @@ async def _post_req(
         return await client.post(url, json=json)
 
 
+async def _delete_req(
+    url: str,
+    dep_overrides: dict | None = None,
+) -> httpx.Response:
+    _test_app.dependency_overrides = dep_overrides or {}
+    transport = httpx.ASGITransport(app=_test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.delete(url)
+
+
 async def test_patch_quantity_returns_updated_item():
     initial_items = [
         {"id": _ITEM_ID, "name": "Latte", "quantity": 1.0, "checked": False, "purchased": False}
@@ -481,3 +491,75 @@ def test_notify_invited_user_sends_push_for_each_subscription():
     assert push_kwargs["title"] == "Lista rimossa"
     assert push_kwargs["body"] == "Owner ha rimosso lista Weekend"
     assert push_kwargs["data"]["list_id"] == "list-1"
+
+
+@pytest.mark.asyncio
+async def test_member_can_leave_shared_list_and_notify_owner():
+    sb_mock = MagicMock()
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_existing_member", return_value=True), \
+         patch.object(_lists_module, "_list_member_role", return_value="member"), \
+         patch.object(
+             _lists_module,
+             "_shopping_list_row",
+             return_value={"id": "list-1", "name": "Weekend", "user_id": "owner-1"},
+         ), \
+         patch.object(_lists_module, "_delete_member") as delete_member_mock, \
+         patch.object(_lists_module, "_fallback_selected_list_for_users") as fallback_mock, \
+         patch.object(
+             _lists_module,
+             "_profile_row",
+             return_value={"display_name": "Mario"},
+         ) as profile_mock, \
+         patch.object(_lists_module, "_create_app_notification") as create_notification_mock, \
+         patch.object(_lists_module, "_notify_invited_user") as notify_mock, \
+         patch.object(_lists_module, "_verify_owner") as verify_owner_mock:
+        resp = await _delete_req(
+            "/lists/list-1/members/member-1",
+            dep_overrides=_deps("member-1"),
+        )
+
+    assert resp.status_code == 204
+    delete_member_mock.assert_called_once_with("list-1", "member-1")
+    fallback_mock.assert_called_once_with(sb_mock, {"member-1"}, "list-1")
+    verify_owner_mock.assert_not_called()
+    profile_mock.assert_called_once_with(sb_mock, "member-1")
+    create_notification_mock.assert_called_once_with(
+        sb_mock,
+        "owner-1",
+        kind="list_member_left",
+        title="Membro uscito dalla lista",
+        body="Mario ha lasciato la lista Weekend",
+        data={
+            "list_id": "list-1",
+            "list_name": "Weekend",
+            "left_by": "Mario",
+            "url": "/lista",
+        },
+    )
+    notify_mock.assert_called_once_with(
+        sb_mock,
+        "owner-1",
+        "Membro uscito dalla lista",
+        "Mario ha lasciato la lista Weekend",
+        {
+            "list_id": "list-1",
+            "list_name": "Weekend",
+            "left_by": "Mario",
+            "url": "/lista",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_owner_cannot_leave_own_list_endpoint():
+    with patch.object(_lists_module, "get_supabase", return_value=MagicMock()), \
+         patch.object(_lists_module, "_existing_member", return_value=True), \
+         patch.object(_lists_module, "_list_member_role", return_value="owner"):
+        resp = await _delete_req(
+            "/lists/list-1/members/owner-1",
+            dep_overrides=_deps("owner-1"),
+        )
+
+    assert resp.status_code == 400

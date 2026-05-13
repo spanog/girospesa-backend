@@ -599,6 +599,15 @@ def _list_member_removed_payload(list_name: str, removed_by: str | None, list_id
     }
 
 
+def _list_member_left_payload(list_name: str, left_by: str | None, list_id: str) -> dict:
+    return {
+        "list_id": list_id,
+        "list_name": list_name,
+        "left_by": left_by,
+        "url": "/lista",
+    }
+
+
 def _create_app_notification(
     sb: object,
     user_id: str,
@@ -1264,19 +1273,45 @@ async def remove_member(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> Response:
     sb = get_supabase()
-    _verify_owner(sb, list_id, user_id)
-    if member_user_id == user_id:
-        raise HTTPException(status_code=400, detail="Owner cannot remove themselves")
     if not _existing_member(list_id, member_user_id):
         raise HTTPException(status_code=404, detail="Member not found")
 
-    list_row = _shopping_list_row(list_id)
-    owner_profile = _profile_row(sb, user_id)
-    owner_name = owner_profile.get("display_name") or "Un utente"
+    member_role = _list_member_role(sb, list_id, user_id)
+    if member_role is None:
+        raise HTTPException(status_code=403, detail="Not a member of this list")
 
+    is_self_leave = member_user_id == user_id
+    if is_self_leave:
+        if member_role != "member":
+            raise HTTPException(status_code=400, detail="Owner cannot remove themselves")
+    else:
+        _verify_owner(sb, list_id, user_id)
+
+    list_row = _shopping_list_row(list_id)
     _delete_member(list_id, member_user_id)
     _fallback_selected_list_for_users(sb, {member_user_id}, list_id)
 
+    if is_self_leave:
+        owner_id = list_row.get("user_id")
+        if owner_id and owner_id != user_id:
+            member_profile = _profile_row(sb, user_id)
+            member_name = member_profile.get("display_name") or "Un utente"
+            title = "Membro uscito dalla lista"
+            body = f"{member_name} ha lasciato la lista {list_row['name']}"
+            payload = _list_member_left_payload(list_row["name"], member_name, list_id)
+            _create_app_notification(
+                sb,
+                owner_id,
+                kind="list_member_left",
+                title=title,
+                body=body,
+                data=payload,
+            )
+            _notify_invited_user(sb, owner_id, title, body, payload)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    owner_profile = _profile_row(sb, user_id)
+    owner_name = owner_profile.get("display_name") or "Un utente"
     title = "Rimosso dalla lista"
     body = f"{owner_name} ti ha rimosso dalla lista {list_row['name']}"
     payload = _list_member_removed_payload(list_row["name"], owner_name, list_id)
