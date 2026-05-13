@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import time
 from uuid import UUID
 
 import psycopg2.extras
+from psycopg2 import errors as psycopg2_errors
 from fastapi import HTTPException
 
 from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
@@ -21,6 +23,26 @@ def _normalize_db_row(row: dict | None) -> dict | None:
     for key, value in row.items():
         normalized[key] = str(value) if isinstance(value, UUID) else value
     return normalized
+
+
+def _wait_for_auth_user(user_id: str, *, timeout_seconds: float = 3.0) -> None:
+    """Auth admin user creation can lag briefly before auth.users is visible."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        with get_postgres_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM auth.users
+                WHERE id = %s
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            if cursor.fetchone():
+                return
+        time.sleep(0.1)
+    raise HTTPException(status_code=409, detail="User profile is not ready yet")
 
 
 def verify_member(sb: object, list_id: str, user_id: str) -> None:
@@ -222,15 +244,27 @@ def create_owned_list(
         )
         return row
     with get_postgres_cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO public.shopping_lists (user_id, name, items, is_active, is_default)
-            VALUES (%s, %s, %s::jsonb, %s, %s)
-            RETURNING id, user_id, name, items, is_active, created_at, updated_at
-            """,
-            (user_id, name, psycopg2.extras.Json(items or []), is_active, is_default),
-        )
-        row = cursor.fetchone()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO public.shopping_lists (user_id, name, items, is_active, is_default)
+                VALUES (%s, %s, %s::jsonb, %s, %s)
+                RETURNING id, user_id, name, items, is_active, created_at, updated_at
+                """,
+                (user_id, name, psycopg2.extras.Json(items or []), is_active, is_default),
+            )
+            row = cursor.fetchone()
+        except psycopg2_errors.ForeignKeyViolation:
+            _wait_for_auth_user(user_id)
+            cursor.execute(
+                """
+                INSERT INTO public.shopping_lists (user_id, name, items, is_active, is_default)
+                VALUES (%s, %s, %s::jsonb, %s, %s)
+                RETURNING id, user_id, name, items, is_active, created_at, updated_at
+                """,
+                (user_id, name, psycopg2.extras.Json(items or []), is_active, is_default),
+            )
+            row = cursor.fetchone()
     normalized = _normalize_db_row(dict(row))
     if normalized is None:
         raise HTTPException(status_code=500, detail="Failed to create shopping list")

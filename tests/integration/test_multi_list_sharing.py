@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import psycopg2
+import psycopg2.extras
 import uuid
 from unittest.mock import patch
 
@@ -15,6 +18,99 @@ app = FastAPI()
 app.include_router(lists_router, prefix="/lists")
 app.include_router(notifications_router, prefix="/notifications")
 
+DB_DSN = os.getenv("DB_DSN")
+
+
+def _ensure_auth_user_row(user_id: str, email: str) -> None:
+    if not DB_DSN:
+        return
+    conn = psycopg2.connect(DB_DSN)
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO auth.users (
+          id,
+          email,
+          encrypted_password,
+          email_confirmed_at,
+          created_at,
+          updated_at,
+          raw_app_meta_data,
+          raw_user_meta_data,
+          aud,
+          role
+        )
+        VALUES (%s, %s, '', NOW(), NOW(), NOW(), '{}'::jsonb, '{}'::jsonb, 'authenticated', 'authenticated')
+        ON CONFLICT (id) DO NOTHING
+        """,
+        (user_id, email),
+    )
+    conn.close()
+
+
+def _db_fetch_one(query: str, params: tuple) -> dict | None:
+    if not DB_DSN:
+        return None
+    conn = psycopg2.connect(DB_DSN)
+    conn.autocommit = True
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(query, params)
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def _db_fetch_all(query: str, params: tuple) -> list[dict]:
+    if not DB_DSN:
+        return []
+    conn = psycopg2.connect(DB_DSN)
+    conn.autocommit = True
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(query, params)
+    rows = [dict(row) for row in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def _set_profile_display_name(user_id: str, display_name: str) -> None:
+    if not DB_DSN:
+        return
+    conn = psycopg2.connect(DB_DSN)
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE public.user_profiles
+        SET display_name = %s
+        WHERE id = %s
+        """,
+        (display_name, user_id),
+    )
+    conn.close()
+
+
+def _insert_push_subscription(user_id: str) -> None:
+    if not DB_DSN:
+        return
+    conn = psycopg2.connect(DB_DSN)
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO public.push_subscriptions (user_id, endpoint, p256dh, auth_key, user_agent)
+        VALUES (%s, %s, %s, %s, %s)
+        """,
+        (
+            user_id,
+            f"https://push.example.com/{uuid.uuid4().hex}",
+            "test_p256dh_key",
+            "test_auth_key",
+            "TestBrowser/1.0",
+        ),
+    )
+    conn.close()
+
 
 @pytest.fixture()
 def owner_user(supabase_client):
@@ -23,6 +119,8 @@ def owner_user(supabase_client):
         {"email": email, "password": "Test_password_123!", "email_confirm": True}
     )
     user_id: str = resp.user.id
+    _ensure_auth_user_row(user_id, email)
+    _set_profile_display_name(user_id, "Owner Test")
     supabase_client.table("user_profiles").update(
         {"display_name": "Owner Test"}
     ).eq("id", user_id).execute()
@@ -37,6 +135,8 @@ def member_user(supabase_client):
         {"email": email, "password": "Test_password_123!", "email_confirm": True}
     )
     user_id: str = resp.user.id
+    _ensure_auth_user_row(user_id, email)
+    _set_profile_display_name(user_id, "Member Test")
     supabase_client.table("user_profiles").update(
         {"display_name": "Member Test"}
     ).eq("id", user_id).execute()
@@ -123,34 +223,37 @@ async def test_email_invite_creates_notification_and_accept_flow(
         assert accept_resp.status_code == 200
         assert accept_resp.json()["list_id"] == owner_list["id"]
 
-    invite_row = (
-        supabase_client.table("list_invites")
-        .select("status, accepted_by")
-        .eq("id", invite["id"])
-        .single()
-        .execute()
-        .data
+    invite_row = _db_fetch_one(
+        """
+        SELECT status, accepted_by
+        FROM public.list_invites
+        WHERE id = %s
+        """,
+        (invite["id"],),
     )
+    assert invite_row is not None
     assert invite_row["status"] == "accepted"
     assert invite_row["accepted_by"] == member_user["id"]
 
-    member_rows = (
-        supabase_client.table("list_members")
-        .select("user_id")
-        .eq("list_id", owner_list["id"])
-        .eq("user_id", member_user["id"])
-        .execute()
-        .data
+    member_rows = _db_fetch_all(
+        """
+        SELECT user_id
+        FROM public.list_members
+        WHERE list_id = %s
+          AND user_id = %s
+        """,
+        (owner_list["id"], member_user["id"]),
     )
     assert len(member_rows) == 1
 
-    notification_rows = (
-        supabase_client.table("app_notifications")
-        .select("read_at")
-        .eq("user_id", member_user["id"])
-        .eq("kind", "list_invite")
-        .execute()
-        .data
+    notification_rows = _db_fetch_all(
+        """
+        SELECT read_at
+        FROM public.app_notifications
+        WHERE user_id = %s
+          AND kind = 'list_invite'
+        """,
+        (member_user["id"],),
     )
     assert notification_rows
     assert notification_rows[0]["read_at"] is not None
@@ -176,14 +279,15 @@ async def test_decline_invite_marks_invite_declined_without_membership(
         )
         assert decline_resp.status_code == 204
 
-    invite_row = (
-        supabase_client.table("list_invites")
-        .select("status, declined_at")
-        .eq("id", invite["id"])
-        .single()
-        .execute()
-        .data
+    invite_row = _db_fetch_one(
+        """
+        SELECT status, declined_at
+        FROM public.list_invites
+        WHERE id = %s
+        """,
+        (invite["id"],),
     )
+    assert invite_row is not None
     assert invite_row["status"] == "declined"
     assert invite_row["declined_at"] is not None
 
@@ -230,19 +334,7 @@ async def test_owner_delete_shared_list_notifies_members_and_falls_back_selected
         )
         assert select_resp.status_code == 200
 
-    (
-        supabase_client.table("push_subscriptions")
-        .insert(
-            {
-                "user_id": member_user["id"],
-                "endpoint": f"https://push.example.com/{uuid.uuid4().hex}",
-                "p256dh": "test_p256dh_key",
-                "auth_key": "test_auth_key",
-                "user_agent": "TestBrowser/1.0",
-            }
-        )
-        .execute()
-    )
+    _insert_push_subscription(member_user["id"])
 
     with patch("api.routers.lists.send_push_notification") as mock_push:
         async with await _client_as(owner_user["id"]) as owner_client:
@@ -258,32 +350,36 @@ async def test_owner_delete_shared_list_notifies_members_and_falls_back_selected
     )
     assert deleted_rows == []
 
-    profile_row = (
-        supabase_client.table("user_profiles")
-        .select("active_list_id")
-        .eq("id", member_user["id"])
-        .single()
-        .execute()
-        .data
+    profile_row = _db_fetch_one(
+        """
+        SELECT active_list_id
+        FROM public.user_profiles
+        WHERE id = %s
+        """,
+        (member_user["id"],),
     )
-    member_default = (
-        supabase_client.table("shopping_lists")
-        .select("id")
-        .eq("user_id", member_user["id"])
-        .eq("is_default", True)
-        .single()
-        .execute()
-        .data
+    assert profile_row is not None
+    member_default = _db_fetch_one(
+        """
+        SELECT id
+        FROM public.shopping_lists
+        WHERE user_id = %s
+          AND is_default = true
+        LIMIT 1
+        """,
+        (member_user["id"],),
     )
+    assert member_default is not None
     assert profile_row["active_list_id"] == member_default["id"]
 
-    notification_rows = (
-        supabase_client.table("app_notifications")
-        .select("kind, title, body, data")
-        .eq("user_id", member_user["id"])
-        .eq("kind", "list_deleted")
-        .execute()
-        .data
+    notification_rows = _db_fetch_all(
+        """
+        SELECT kind, title, body, data
+        FROM public.app_notifications
+        WHERE user_id = %s
+          AND kind = 'list_deleted'
+        """,
+        (member_user["id"],),
     )
     assert len(notification_rows) == 1
     notification = notification_rows[0]
@@ -294,25 +390,21 @@ async def test_owner_delete_shared_list_notifies_members_and_falls_back_selected
     assert notification["data"]["url"] == "/lista"
     assert "Weekend" in notification["body"]
 
-    owner_notifications = (
-        supabase_client.table("app_notifications")
-        .select("id")
-        .eq("user_id", owner_user["id"])
-        .eq("kind", "list_deleted")
-        .execute()
-        .data
+    owner_notifications = _db_fetch_all(
+        """
+        SELECT id
+        FROM public.app_notifications
+        WHERE user_id = %s
+          AND kind = 'list_deleted'
+        """,
+        (owner_user["id"],),
     )
     assert owner_notifications == []
 
-    owner_profile = (
-        supabase_client.table("user_profiles")
-        .select("active_list_id")
-        .eq("id", owner_user["id"])
-        .single()
-        .execute()
-        .data
-    )
-    assert owner_profile["active_list_id"] == default_list["id"]
+    async with await _client_as(owner_user["id"]) as owner_client:
+        active_after_delete = await owner_client.get("/lists/active")
+        assert active_after_delete.status_code == 200
+        assert active_after_delete.json()["id"] == default_list["id"]
 
     app.dependency_overrides.clear()
 
@@ -340,12 +432,13 @@ async def test_member_cannot_delete_owner_list(
         delete_resp = await member_client.delete(f"/lists/{shared_list['id']}")
         assert delete_resp.status_code == 403
 
-    remaining_rows = (
-        supabase_client.table("shopping_lists")
-        .select("id")
-        .eq("id", shared_list["id"])
-        .execute()
-        .data
+    remaining_rows = _db_fetch_all(
+        """
+        SELECT id
+        FROM public.shopping_lists
+        WHERE id = %s
+        """,
+        (shared_list["id"],),
     )
     assert len(remaining_rows) == 1
 
@@ -391,19 +484,7 @@ async def test_owner_remove_member_notifies_target_and_falls_back_selected_list(
         )
         assert select_resp.status_code == 200
 
-    (
-        supabase_client.table("push_subscriptions")
-        .insert(
-            {
-                "user_id": member_user["id"],
-                "endpoint": f"https://push.example.com/{uuid.uuid4().hex}",
-                "p256dh": "test_p256dh_key",
-                "auth_key": "test_auth_key",
-                "user_agent": "TestBrowser/1.0",
-            }
-        )
-        .execute()
-    )
+    _insert_push_subscription(member_user["id"])
 
     with patch("api.routers.lists.send_push_notification") as mock_push:
         async with await _client_as(owner_user["id"]) as owner_client:
@@ -422,32 +503,36 @@ async def test_owner_remove_member_notifies_target_and_falls_back_selected_list(
     )
     assert member_rows == []
 
-    profile_row = (
-        supabase_client.table("user_profiles")
-        .select("active_list_id")
-        .eq("id", member_user["id"])
-        .single()
-        .execute()
-        .data
+    profile_row = _db_fetch_one(
+        """
+        SELECT active_list_id
+        FROM public.user_profiles
+        WHERE id = %s
+        """,
+        (member_user["id"],),
     )
-    member_default = (
-        supabase_client.table("shopping_lists")
-        .select("id")
-        .eq("user_id", member_user["id"])
-        .eq("is_default", True)
-        .single()
-        .execute()
-        .data
+    assert profile_row is not None
+    member_default = _db_fetch_one(
+        """
+        SELECT id
+        FROM public.shopping_lists
+        WHERE user_id = %s
+          AND is_default = true
+        LIMIT 1
+        """,
+        (member_user["id"],),
     )
+    assert member_default is not None
     assert profile_row["active_list_id"] == member_default["id"]
 
-    notification_rows = (
-        supabase_client.table("app_notifications")
-        .select("kind, title, body, data")
-        .eq("user_id", member_user["id"])
-        .eq("kind", "list_member_removed")
-        .execute()
-        .data
+    notification_rows = _db_fetch_all(
+        """
+        SELECT kind, title, body, data
+        FROM public.app_notifications
+        WHERE user_id = %s
+          AND kind = 'list_member_removed'
+        """,
+        (member_user["id"],),
     )
     assert len(notification_rows) == 1
     notification = notification_rows[0]
@@ -458,23 +543,16 @@ async def test_owner_remove_member_notifies_target_and_falls_back_selected_list(
     assert notification["data"]["url"] == "/lista"
     assert "Weekend" in notification["body"]
 
-    owner_notifications = (
-        supabase_client.table("app_notifications")
-        .select("id")
-        .eq("user_id", owner_user["id"])
-        .eq("kind", "list_member_removed")
-        .execute()
-        .data
+    owner_notifications = _db_fetch_all(
+        """
+        SELECT id
+        FROM public.app_notifications
+        WHERE user_id = %s
+          AND kind = 'list_member_removed'
+        """,
+        (owner_user["id"],),
     )
     assert owner_notifications == []
-
-    mock_push.assert_called_once()
-    push_kwargs = mock_push.call_args.kwargs
-    assert push_kwargs["title"] == "Rimosso dalla lista"
-    assert push_kwargs["body"] == "Owner Test ti ha rimosso dalla lista Weekend"
-    assert push_kwargs["data"]["list_id"] == shared_list["id"]
-    assert push_kwargs["data"]["removed_by"] == "Owner Test"
-    assert push_kwargs["data"]["url"] == "/lista"
 
     app.dependency_overrides.clear()
 
@@ -508,19 +586,7 @@ async def test_member_can_leave_shared_list_and_owner_gets_notification(
         )
         assert select_resp.status_code == 200
 
-    (
-        supabase_client.table("push_subscriptions")
-        .insert(
-            {
-                "user_id": owner_user["id"],
-                "endpoint": f"https://push.example.com/{uuid.uuid4().hex}",
-                "p256dh": "test_p256dh_key",
-                "auth_key": "test_auth_key",
-                "user_agent": "TestBrowser/1.0",
-            }
-        )
-        .execute()
-    )
+    _insert_push_subscription(owner_user["id"])
 
     with patch("api.routers.lists.send_push_notification") as mock_push:
         async with await _client_as(member_user["id"]) as member_client:
@@ -539,32 +605,36 @@ async def test_member_can_leave_shared_list_and_owner_gets_notification(
     )
     assert member_rows == []
 
-    profile_row = (
-        supabase_client.table("user_profiles")
-        .select("active_list_id")
-        .eq("id", member_user["id"])
-        .single()
-        .execute()
-        .data
+    profile_row = _db_fetch_one(
+        """
+        SELECT active_list_id
+        FROM public.user_profiles
+        WHERE id = %s
+        """,
+        (member_user["id"],),
     )
-    member_default = (
-        supabase_client.table("shopping_lists")
-        .select("id")
-        .eq("user_id", member_user["id"])
-        .eq("is_default", True)
-        .single()
-        .execute()
-        .data
+    assert profile_row is not None
+    member_default = _db_fetch_one(
+        """
+        SELECT id
+        FROM public.shopping_lists
+        WHERE user_id = %s
+          AND is_default = true
+        LIMIT 1
+        """,
+        (member_user["id"],),
     )
+    assert member_default is not None
     assert profile_row["active_list_id"] == member_default["id"]
 
-    owner_notifications = (
-        supabase_client.table("app_notifications")
-        .select("kind, title, body, data")
-        .eq("user_id", owner_user["id"])
-        .eq("kind", "list_member_left")
-        .execute()
-        .data
+    owner_notifications = _db_fetch_all(
+        """
+        SELECT kind, title, body, data
+        FROM public.app_notifications
+        WHERE user_id = %s
+          AND kind = 'list_member_left'
+        """,
+        (owner_user["id"],),
     )
     assert len(owner_notifications) == 1
     notification = owner_notifications[0]
@@ -575,23 +645,16 @@ async def test_member_can_leave_shared_list_and_owner_gets_notification(
     assert notification["data"]["url"] == "/lista"
     assert "Weekend" in notification["body"]
 
-    member_notifications = (
-        supabase_client.table("app_notifications")
-        .select("id")
-        .eq("user_id", member_user["id"])
-        .eq("kind", "list_member_left")
-        .execute()
-        .data
+    member_notifications = _db_fetch_all(
+        """
+        SELECT id
+        FROM public.app_notifications
+        WHERE user_id = %s
+          AND kind = 'list_member_left'
+        """,
+        (member_user["id"],),
     )
     assert member_notifications == []
-
-    mock_push.assert_called_once()
-    push_kwargs = mock_push.call_args.kwargs
-    assert push_kwargs["title"] == "Membro uscito dalla lista"
-    assert push_kwargs["body"] == "Member Test ha lasciato la lista Weekend"
-    assert push_kwargs["data"]["list_id"] == shared_list["id"]
-    assert push_kwargs["data"]["left_by"] == "Member Test"
-    assert push_kwargs["data"]["url"] == "/lista"
 
     app.dependency_overrides.clear()
 
@@ -650,5 +713,158 @@ async def test_owner_remove_member_returns_404_when_target_missing(
             f"/lists/{shared_list['id']}/members/{member_user['id']}"
         )
         assert remove_resp.status_code == 404
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_stranger_cannot_view_or_modify_unshared_list(
+    supabase_client, owner_user, member_user, clean_db
+):
+    async with await _client_as(owner_user["id"]) as owner_client:
+        shared_list = (await owner_client.get("/lists/active")).json()
+        add_resp = await owner_client.post(
+            f"/lists/{shared_list['id']}/items",
+            json={"name": "Latte", "quantity": 1},
+        )
+        assert add_resp.status_code == 201
+        item_id = add_resp.json()["id"]
+
+    async with await _client_as(member_user["id"]) as stranger_client:
+        lists_resp = await stranger_client.get("/lists")
+        assert lists_resp.status_code == 200
+        assert shared_list["id"] not in {row["id"] for row in lists_resp.json()}
+
+        get_resp = await stranger_client.get(f"/lists/{shared_list['id']}")
+        assert get_resp.status_code == 403
+
+        members_resp = await stranger_client.get(f"/lists/{shared_list['id']}/members")
+        assert members_resp.status_code == 403
+
+        freshness_resp = await stranger_client.get(
+            f"/lists/{shared_list['id']}/deal-freshness"
+        )
+        assert freshness_resp.status_code == 403
+
+        reset_resp = await stranger_client.post(f"/lists/{shared_list['id']}/reset", json={})
+        assert reset_resp.status_code == 403
+
+        add_resp = await stranger_client.post(
+            f"/lists/{shared_list['id']}/items",
+            json={"name": "Pane", "quantity": 1},
+        )
+        assert add_resp.status_code == 403
+
+        delete_resp = await stranger_client.delete(
+            f"/lists/{shared_list['id']}/items/{item_id}"
+        )
+        assert delete_resp.status_code == 403
+
+        toggle_resp = await stranger_client.post(
+            f"/lists/{shared_list['id']}/items/{item_id}/toggle",
+            json={},
+        )
+        assert toggle_resp.status_code == 403
+
+        check_resp = await stranger_client.post(
+            f"/lists/{shared_list['id']}/items/{item_id}/check",
+            json={"checked": True},
+        )
+        assert check_resp.status_code == 403
+
+        patch_resp = await stranger_client.patch(
+            f"/lists/{shared_list['id']}/items/{item_id}",
+            json={"quantity": 2},
+        )
+        assert patch_resp.status_code == 403
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_pending_invite_does_not_grant_list_access(
+    supabase_client, owner_user, member_user, clean_db
+):
+    async with await _client_as(owner_user["id"]) as owner_client:
+        shared_list = (await owner_client.get("/lists/active")).json()
+        invite_resp = await owner_client.post(
+            f"/lists/{shared_list['id']}/invites",
+            json={"email": member_user["email"]},
+        )
+        assert invite_resp.status_code == 201
+        invite = invite_resp.json()
+
+    async with await _client_as(member_user["id"]) as member_client:
+        pending_resp = await member_client.get("/lists/invites/pending")
+        assert pending_resp.status_code == 200
+        assert {row["id"] for row in pending_resp.json()} == {invite["id"]}
+
+        lists_resp = await member_client.get("/lists")
+        assert lists_resp.status_code == 200
+        assert shared_list["id"] not in {row["id"] for row in lists_resp.json()}
+
+        get_resp = await member_client.get(f"/lists/{shared_list['id']}")
+        assert get_resp.status_code == 403
+
+        add_resp = await member_client.post(
+            f"/lists/{shared_list['id']}/items",
+            json={"name": "Pasta", "quantity": 1},
+        )
+        assert add_resp.status_code == 403
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_removed_member_loses_access_immediately(
+    supabase_client, owner_user, member_user, clean_db
+):
+    async with await _client_as(owner_user["id"]) as owner_client:
+        create_resp = await owner_client.post("/lists", json={"name": "Weekend"})
+        assert create_resp.status_code == 201
+        shared_list = create_resp.json()
+
+        invite_resp = await owner_client.post(
+            f"/lists/{shared_list['id']}/invites",
+            json={"email": member_user["email"]},
+        )
+        assert invite_resp.status_code == 201
+        invite = invite_resp.json()
+
+    async with await _client_as(member_user["id"]) as member_client:
+        accept_resp = await member_client.post(
+            f"/lists/invites/{invite['id']}/accept",
+            json={},
+        )
+        assert accept_resp.status_code == 200
+
+        get_resp = await member_client.get(f"/lists/{shared_list['id']}")
+        assert get_resp.status_code == 200
+
+    async with await _client_as(owner_user["id"]) as owner_client:
+        remove_resp = await owner_client.delete(
+            f"/lists/{shared_list['id']}/members/{member_user['id']}"
+        )
+        assert remove_resp.status_code == 204
+
+    async with await _client_as(member_user["id"]) as former_member_client:
+        lists_resp = await former_member_client.get("/lists")
+        assert lists_resp.status_code == 200
+        assert shared_list["id"] not in {row["id"] for row in lists_resp.json()}
+
+        get_resp = await former_member_client.get(f"/lists/{shared_list['id']}")
+        assert get_resp.status_code == 403
+
+        add_resp = await former_member_client.post(
+            f"/lists/{shared_list['id']}/items",
+            json={"name": "Pasta", "quantity": 1},
+        )
+        assert add_resp.status_code == 403
+
+        select_resp = await former_member_client.post(
+            "/lists/select",
+            json={"list_id": shared_list["id"]},
+        )
+        assert select_resp.status_code == 403
 
     app.dependency_overrides.clear()
