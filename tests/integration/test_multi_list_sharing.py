@@ -258,6 +258,67 @@ async def test_email_invite_creates_notification_and_accept_flow(
     assert notification_rows
     assert notification_rows[0]["read_at"] is not None
 
+
+@pytest.mark.asyncio
+async def test_non_owner_member_cannot_manage_sharing(
+    supabase_client, owner_user, member_user, clean_db
+):
+    async with await _client_as(owner_user["id"]) as owner_client:
+        create_resp = await owner_client.post("/lists", json={"name": "Weekend"})
+        assert create_resp.status_code == 201
+        shared_list = create_resp.json()
+
+        invite_resp = await owner_client.post(
+            f"/lists/{shared_list['id']}/invites",
+            json={"email": member_user["email"]},
+        )
+        assert invite_resp.status_code == 201
+        invite = invite_resp.json()
+
+    async with await _client_as(member_user["id"]) as member_client:
+        accept_resp = await member_client.post(
+            f"/lists/invites/{invite['id']}/accept",
+            json={},
+        )
+        assert accept_resp.status_code == 200
+
+        create_direct_resp = await member_client.post(
+            f"/lists/{shared_list['id']}/invites",
+            json={"email": owner_user["email"]},
+        )
+        assert create_direct_resp.status_code == 403
+        assert (
+            create_direct_resp.json()["detail"]
+            == "Only the owner can perform this action"
+        )
+
+        create_legacy_resp = await member_client.post(
+            f"/lists/{shared_list['id']}/invite",
+            json={},
+        )
+        assert create_legacy_resp.status_code == 403
+        assert (
+            create_legacy_resp.json()["detail"]
+            == "Only the owner can perform this action"
+        )
+
+        list_invites_resp = await member_client.get(
+            f"/lists/{shared_list['id']}/invites"
+        )
+        assert list_invites_resp.status_code == 403
+        assert (
+            list_invites_resp.json()["detail"]
+            == "Only the owner can perform this action"
+        )
+
+        revoke_resp = await member_client.delete(
+            f"/lists/{shared_list['id']}/invites/{invite['id']}"
+        )
+        assert revoke_resp.status_code == 403
+        assert revoke_resp.json()["detail"] == "Only the owner can perform this action"
+
+    app.dependency_overrides.clear()
+
     app.dependency_overrides.clear()
 
 

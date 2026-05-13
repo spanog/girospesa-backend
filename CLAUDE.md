@@ -77,7 +77,7 @@
 - `POST /lists/{id}/items`, `DELETE /lists/{id}/items/{item_id}`, `POST /lists/{id}/items/{item_id}/toggle`, `POST /lists/{id}/items/{item_id}/check`, and purchase flows tied to `list_id` must verify list membership before any read/write using the service-role client.
 - Use RPC helpers for concurrent-safe item mutation (`update_list_item`, `append_list_item`, `remove_list_item`) instead of overwriting full `shopping_lists.items` arrays. These RPCs are `SECURITY INVOKER` and must keep `search_path = public` pinned.
 - When backend creates an owned list through direct Postgres right after `auth.admin.create_user`, guard against short auth/db propagation lag: wait for `auth.users` row visibility before retrying the insert instead of failing the request with an FK race.
-- Direct sharing flow is email-targeted: `POST /lists/{list_id}/invites` resolves an already-registered auth user, creates `list_invites` + `app_notifications`, and recipient accepts/declines via `/lists/invites/{invite_id}/accept|decline`. `DELETE /lists/{list_id}` on shared lists also emits `app_notifications` to active members with payload redirecting to `/lista`.
+- Direct sharing flow is email-targeted: `POST /lists/{list_id}/invites` resolves an already-registered auth user, creates `list_invites` + `app_notifications`, and recipient accepts/declines via `/lists/invites/{invite_id}/accept|decline`. Invite create/list/revoke and legacy token-share create are owner-only; shared members may not manage invites. `DELETE /lists/{list_id}` on shared lists also emits `app_notifications` to active members with payload redirecting to `/lista`.
 
 ## Push Favorites Webhook
 

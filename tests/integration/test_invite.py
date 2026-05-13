@@ -84,6 +84,19 @@ def pending_invite(supabase_client, owner_list, owner_user):
     return invite_row
 
 
+@pytest.fixture()
+def shared_member(supabase_client, owner_list, member_user, owner_user):
+    supabase_client.table("list_members").insert(
+        {
+            "list_id": owner_list["id"],
+            "user_id": member_user,
+            "role": "member",
+            "invited_by": owner_user,
+        }
+    ).execute()
+    return member_user
+
+
 # ---------------------------------------------------------------------------
 # Tests — POST /lists/{list_id}/invite
 # ---------------------------------------------------------------------------
@@ -149,6 +162,21 @@ class TestCreateInvite:
 
         assert resp.status_code == 200
         assert resp.json()["email"] == "invitato@example.com"
+
+    async def test_non_owner_member_cannot_create_invite(
+        self, supabase_client, owner_list, shared_member
+    ):
+        """Shared member gets owner-only 403 on legacy invite creation."""
+        app.dependency_overrides[get_current_user_id] = lambda: shared_member
+        try:
+            async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+                with patch("api.routers.lists.get_supabase", return_value=supabase_client):
+                    resp = await client.post(f"/lists/{owner_list['id']}/invite", json={})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Only the owner can perform this action"
 
 
 # ---------------------------------------------------------------------------
