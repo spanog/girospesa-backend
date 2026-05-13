@@ -388,41 +388,52 @@ async def _rpc_call(function_name: str, payload: dict, user_id: str) -> None:
 
 
 def _direct_rpc_call(function_name: str, payload: dict, user_id: str) -> None:
-    claims = json.dumps({
-        "sub": user_id,
-        "role": "authenticated",
-    })
+    # Membership was already verified by the caller via _verify_member.
+    # Run as postgres superuser (bypasses RLS) — no auth.uid() needed here.
     with get_postgres_cursor() as cursor:
-        cursor.execute("SET ROLE authenticated")
-        cursor.execute(
-            "SELECT set_config('request.jwt.claims', %s, false)",
-            (claims,),
-        )
-        if function_name == "update_list_item":
-            cursor.execute(
-                "SELECT public.update_list_item(%s::uuid, %s::text, %s::jsonb)",
-                (
-                    payload["p_list_id"],
-                    payload["p_item_id"],
-                    json.dumps(payload["p_patch"]),
-                ),
-            )
-            return
         if function_name == "append_list_item":
             cursor.execute(
-                "SELECT public.append_list_item(%s::uuid, %s::jsonb)",
-                (
-                    payload["p_list_id"],
-                    json.dumps(payload["p_item"]),
-                ),
+                """
+                UPDATE public.shopping_lists
+                SET items = COALESCE(items, '[]'::jsonb) || jsonb_build_array(%s::jsonb),
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (json.dumps(payload["p_item"]), payload["p_list_id"]),
             )
             return
         if function_name == "remove_list_item":
             cursor.execute(
-                "SELECT public.remove_list_item(%s::uuid, %s::text)",
+                """
+                UPDATE public.shopping_lists
+                SET items = COALESCE(
+                    (SELECT jsonb_agg(item)
+                     FROM jsonb_array_elements(items) AS item
+                     WHERE item->>'id' <> %s),
+                    '[]'::jsonb),
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (payload["p_item_id"], payload["p_list_id"]),
+            )
+            return
+        if function_name == "update_list_item":
+            cursor.execute(
+                """
+                UPDATE public.shopping_lists
+                SET items = (
+                    SELECT jsonb_agg(
+                        CASE WHEN item->>'id' = %s THEN item || %s::jsonb ELSE item END
+                    )
+                    FROM jsonb_array_elements(items) AS item
+                ),
+                updated_at = now()
+                WHERE id = %s
+                """,
                 (
-                    payload["p_list_id"],
                     payload["p_item_id"],
+                    json.dumps(payload["p_patch"]),
+                    payload["p_list_id"],
                 ),
             )
             return
@@ -964,6 +975,12 @@ async def add_item(
         "subcategory": None,
         "found_deals": [],
     }
+    if body.pinned_offer_id:
+        try:
+            offer_patch = _selected_offer_patch(sb, body.pinned_offer_id)
+            new_item.update(offer_patch)
+        except HTTPException:
+            pass
     new_item = _enrich_items_with_categories(sb, [new_item])[0]
     await _rpc_append_list_item(list_id, new_item, user_id)
     return new_item

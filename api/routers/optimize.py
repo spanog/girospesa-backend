@@ -350,7 +350,7 @@ async def optimize(
         .execute()
     )
     items: list[dict] = list_resp.data["items"]
-    unchecked = [i for i in items if not i.get("checked") and not i.get("purchased")]
+    unchecked = [i for i in items if not i.get("purchased")]
 
     if not unchecked:
         return OptimizationResult(
