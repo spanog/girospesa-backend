@@ -512,15 +512,15 @@ class TestUpsertProductFallback:
         sb = MagicMock()
         # upsert returns empty → triggers SELECT fallback
         sb.table.return_value.upsert.return_value.execute.return_value = MagicMock(data=[])
-        # For brand/format_key present: chain is .select().eq(name).eq(brand).eq(format_key).limit().execute()
+        # For brand present: chain is .select().eq(name).eq(brand).limit().execute()
         existing = MagicMock()
         existing.data = [{"id": "existing-prod-uuid"}]
-        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = existing
+        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = existing
 
         with patch("services.extraction.service.get_provider", return_value=MagicMock()):
             from services.extraction.service import ExtractionService
             svc = ExtractionService()
-            product_id = svc._upsert_product(sb, {"name": "Pasta", "brand": "Barilla", "format_key": "v1:500g"})
+            product_id = svc._upsert_product(sb, {"name": "Pasta", "brand": "Barilla"})
 
         assert product_id == "existing-prod-uuid"
 
@@ -528,16 +528,16 @@ class TestUpsertProductFallback:
         sb = MagicMock()
         # upsert returns empty
         sb.table.return_value.upsert.return_value.execute.return_value = MagicMock(data=[])
-        # For None brand: chain is .select().eq(name).is_(brand).eq(format_key).limit().execute()
+        # For None brand: chain is .select().eq(name).is_(brand).limit().execute()
         empty = MagicMock()
         empty.data = []
-        sb.table.return_value.select.return_value.eq.return_value.is_.return_value.eq.return_value.limit.return_value.execute.return_value = empty
+        sb.table.return_value.select.return_value.eq.return_value.is_.return_value.limit.return_value.execute.return_value = empty
 
         with patch("services.extraction.service.get_provider", return_value=MagicMock()):
             from services.extraction.service import ExtractionService
             svc = ExtractionService()
             with pytest.raises(ValueError, match="Product not found after upsert"):
-                svc._upsert_product(sb, {"name": "Pasta", "brand": None, "format_key": "v1:empty"})
+                svc._upsert_product(sb, {"name": "Pasta", "brand": None})
 
 
 class TestExtractionServiceSubcategoryPersisted:
@@ -563,10 +563,18 @@ class TestExtractionServiceSubcategoryPersisted:
         assert upsert_calls, "Expected at least one product upsert"
         product_row = upsert_calls[0][0][0][0]
         assert product_row.get("subcategory") == "Conserve Ittiche e di Carne"
-        assert product_row.get("format_key")
-        assert product_row.get("format_label") == "2x80 g"
+        # format fields live on offers, not products
+        assert "format_key" not in product_row
+        assert "format_label" not in product_row
         assert "discount_pct" not in product_row
         assert "price_offer" not in product_row
+
+        # Verify format is persisted on the offer row instead
+        insert_calls = sb.table.return_value.insert.call_args_list
+        assert insert_calls, "Expected at least one offer insert"
+        offer_row = insert_calls[0][0][0][0]
+        assert offer_row.get("format_key")
+        assert offer_row.get("format_label") == "2x80 g"
 
     def test_batch_upsert_is_used_for_multiple_products(self):
         sb = _make_sb(
@@ -886,10 +894,11 @@ class TestExtractionServiceSubcategoryPersisted:
         done_calls = [c for c in update_calls if c[0][0].get("status") == "done"]
         assert done_calls, "Expected flyer to complete despite incomplete format"
 
-        upsert_calls = sb.table.return_value.upsert.call_args_list
-        product_row = upsert_calls[0][0][0][0]
-        assert product_row["format"] == {"tipo": "confezione_singola"}
-        assert product_row["format_label"] == ""
+        # format lives on offers, not products
+        insert_calls = sb.table.return_value.insert.call_args_list
+        offer_row = insert_calls[0][0][0][0]
+        assert offer_row["format"] == {"tipo": "confezione_singola"}
+        assert offer_row["format_label"] == ""
 
     def test_provider_chunk_failure_is_exposed_in_error_message(self):
         sb = _make_sb(

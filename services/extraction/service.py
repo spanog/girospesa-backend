@@ -55,9 +55,6 @@ _PRODUCT_COLUMNS = (
     "brand",
     "category",
     "subcategory",
-    "format",
-    "format_key",
-    "format_label",
 )
 
 
@@ -479,8 +476,8 @@ class ExtractionService:
         runtime["products_saved_count"] += len(offer_rows)
         return len(offer_rows)
 
-    def _conflict_key(self, row: dict) -> tuple[str, str | None, str]:
-        return (row["name"], row.get("brand"), row["format_key"])
+    def _conflict_key(self, row: dict) -> tuple[str, str | None]:
+        return (row["name"], row.get("brand"))
 
     def _product_row_from_normalized(self, row: dict) -> dict:
         return {column: row.get(column) for column in _PRODUCT_COLUMNS}
@@ -492,23 +489,12 @@ class ExtractionService:
     ) -> str | None:
         """Return existing product_id if a candidate is similar enough to incoming, else None.
 
-        format_key must already match exactly (candidates are pre-filtered by format_key).
-        Brand uses ratio() on diacritic-normalized strings (catches Pomi/Pomì).
+        Candidates are pre-filtered by brand (exact citext match).
         Name uses partial_ratio() (catches "Miscela Forte" vs "Miscela Forte Macinatura Moka").
         """
         name_b = normalize_for_comparison(incoming["name"])
-        brand_b = normalize_for_comparison(incoming.get("brand") or "")
 
         for existing in candidates:
-            brand_a = normalize_for_comparison(existing.get("brand") or "")
-
-            if brand_a or brand_b:
-                if not brand_a or not brand_b:
-                    continue  # one branded, other not → different product
-                brand_score = fuzz.ratio(brand_a, brand_b) / 100
-                if brand_score < settings.product_brand_similarity_threshold:
-                    continue
-
             name_a = normalize_for_comparison(existing["name"])
             name_score = fuzz.partial_ratio(name_a, name_b) / 100
             if name_score >= settings.product_name_similarity_threshold:
@@ -520,30 +506,29 @@ class ExtractionService:
         self,
         sb: object,
         product_rows: list[dict],
-    ) -> dict[tuple[str, str | None, str], str]:
+    ) -> dict[tuple[str, str | None], str]:
         if not product_rows:
             return {}
         canonical_rows = [self._product_row_from_normalized(row) for row in product_rows]
 
         # --- Fuzzy pre-upsert deduplication against existing DB products ---
-        # Group by format_key and fetch candidates once per unique format_key.
-        # If a similar product already exists, reuse its id instead of inserting a duplicate.
-        by_conflict_key: dict[tuple[str, str | None, str], str] = {}
+        # Group by brand and fetch candidates once per unique brand value.
+        # If a similar product (by name fuzzy match) already exists, reuse its id.
+        by_conflict_key: dict[tuple[str, str | None], str] = {}
         to_upsert: list[dict] = []
-        candidates_cache: dict[str, list[dict]] = {}
+        candidates_cache: dict[str | None, list[dict]] = {}
 
         for row in canonical_rows:
-            fk = row["format_key"]
-            if fk not in candidates_cache:
-                res = (
-                    sb.table("products")  # type: ignore[union-attr]
-                    .select("id, name, brand, format_key")
-                    .eq("format_key", fk)
-                    .execute()
-                )
-                candidates_cache[fk] = res.data or []
+            brand = row.get("brand")
+            if brand not in candidates_cache:
+                q = sb.table("products").select("id, name, brand")  # type: ignore[union-attr]
+                if brand is None:
+                    q = q.is_("brand", "null")
+                else:
+                    q = q.eq("brand", brand)
+                candidates_cache[brand] = q.execute().data or []
 
-            existing_id = self._find_similar_product(row, candidates_cache[fk])
+            existing_id = self._find_similar_product(row, candidates_cache[brand])
             key = self._conflict_key(row)
             if existing_id:
                 by_conflict_key[key] = existing_id
@@ -554,7 +539,7 @@ class ExtractionService:
         if to_upsert:
             result = (
                 sb.table("products")  # type: ignore[union-attr]
-                .upsert(to_upsert, on_conflict="name,brand,format_key")
+                .upsert(to_upsert, on_conflict="name,brand")
                 .execute()
             )
 
@@ -566,7 +551,7 @@ class ExtractionService:
                         by_conflict_key[self._conflict_key(original)] = product_id
             else:
                 for row in returned_rows:
-                    if all(key in row for key in ("id", "name", "format_key")):
+                    if "id" in row and "name" in row:
                         by_conflict_key[self._conflict_key(row)] = row["id"]
 
             if len(by_conflict_key) == len(canonical_rows):
@@ -577,7 +562,7 @@ class ExtractionService:
             if names:
                 existing = (
                     sb.table("products")
-                    .select("id, name, brand, format_key")
+                    .select("id, name, brand")
                     .in_("name", names)
                     .execute()
                 )
@@ -597,7 +582,7 @@ class ExtractionService:
 
     def _build_offer_rows(
         self,
-        product_ids: dict[tuple[str, str | None, str], str],
+        product_ids: dict[tuple[str, str | None], str],
         normalized: list[dict],
         flyer: dict,
         supermarket_id: str | None,
@@ -832,7 +817,7 @@ class ExtractionService:
         """
         Upsert a canonical product row and return its stable UUID.
 
-        Uses ON CONFLICT (name, brand, format_key) DO UPDATE to always get the row
+        Uses ON CONFLICT (name, brand) DO UPDATE to always get the row
         back in the RETURNING clause, even when the product already existed.
         Falls back to a SELECT when the upsert returns an empty result set.
 
@@ -841,7 +826,7 @@ class ExtractionService:
         canonical_row = self._product_row_from_normalized(product_row)
         result = (
             sb.table("products")  # type: ignore[union-attr]
-            .upsert(canonical_row, on_conflict="name,brand,format_key")
+            .upsert(canonical_row, on_conflict="name,brand")
             .execute()
         )
         if result.data:
@@ -850,15 +835,12 @@ class ExtractionService:
         # Fallback: SELECT with conflict-key filters
         query = sb.table("products").select("id").eq("name", canonical_row["name"])  # type: ignore[union-attr]
         brand = canonical_row.get("brand")
-        format_key = canonical_row.get("format_key")
         query = query.is_("brand", "null") if brand is None else query.eq("brand", brand)
-        query = query.eq("format_key", format_key)
         existing = query.limit(1).execute()
 
         if not existing.data:
             raise ValueError(
-                f"Product not found after upsert: name={canonical_row['name']!r} "
-                f"brand={brand!r} format_key={format_key!r}"
+                f"Product not found after upsert: name={canonical_row['name']!r} brand={brand!r}"
             )
         return existing.data[0]["id"]
 
@@ -875,6 +857,9 @@ class ExtractionService:
             "supermarket_id": supermarket_id,
             "supermarket_name": supermarket_name,
             "flyer_id": flyer["id"],
+            "format": p.get("format", {}),
+            "format_key": p.get("format_key", "v1:{}"),
+            "format_label": p.get("format_label", ""),
             "price_offer": p["price_offer"],
             "price_original": p.get("price_original"),
             "unit_price": p.get("unit_price"),

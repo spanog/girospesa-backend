@@ -329,16 +329,15 @@ def calculate_discount_pct(price_original: float | None, price_offer: float | No
 def deduplicate_products(products: list[dict]) -> list[dict]:
     """
     Remove duplicate products extracted from multiple pages.
-    Deduplication key: (name, brand, format_key) — case-insensitive.
-    Keeps the first occurrence.
+    Deduplication key: (name, brand) — case-insensitive.
+    Keeps the first occurrence (preserves format from earliest extraction).
     """
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str]] = set()
     unique: list[dict] = []
     for p in products:
         key = (
             (p.get("name") or "").strip().lower(),
             (p.get("brand") or "").strip().lower(),
-            (p.get("format_key") or "").strip().lower(),
         )
         if key not in seen:
             seen.add(key)

@@ -25,7 +25,6 @@ from fastapi import FastAPI
 
 from api.routers.favorites import router as favorites_router
 from core.auth import get_current_user_id
-from services.product_format import build_format_bundle
 
 app = FastAPI()
 app.include_router(favorites_router, prefix="/favorites")
@@ -69,17 +68,11 @@ def supermarket(supabase_client, clean_db):
 
 @pytest.fixture()
 def product(supabase_client, supermarket):
-    bundle = build_format_bundle(
-        {"tipo": "confezione_singola", "peso_volume": 500, "unita_misura": "g"}
-    )
     row = (
         supabase_client.table("products")
         .insert({
             "name": "Pasta Barilla",
             "brand": "Barilla",
-            "format": bundle.format_compact,
-            "format_key": bundle.format_key,
-            "format_label": bundle.format_label,
         })
         .execute()
     ).data[0]

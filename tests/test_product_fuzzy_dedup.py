@@ -29,11 +29,6 @@ from services.extraction.normalizer import normalize_for_comparison
 from services.extraction.service import ExtractionService
 
 
-FORMAT_KEY = "v1:{\"tipo\":\"confezione_singola\",\"peso_volume\":1000,\"unita_misura\":\"g\"}"
-FORMAT_KEY_500G = "v1:{\"tipo\":\"confezione_singola\",\"peso_volume\":500,\"unita_misura\":\"g\"}"
-FORMAT_KEY_2X250 = "v1:{\"tipo\":\"multipack_omogeneo\",\"peso_volume\":250,\"quantita\":2,\"unita_misura\":\"g\"}"
-
-
 # ---------------------------------------------------------------------------
 # normalize_for_comparison
 # ---------------------------------------------------------------------------
@@ -57,6 +52,9 @@ class TestNormalizeForComparison:
 
 # ---------------------------------------------------------------------------
 # _find_similar_product
+#
+# Candidates are pre-filtered by brand (exact DB query) before being passed
+# to _find_similar_product. The function performs name fuzzy-matching only.
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
@@ -66,52 +64,45 @@ def service() -> ExtractionService:
 
 class TestFindSimilarProduct:
 
-    # --- Accent variation in brand (Pomi / Pomì) ---
+    # --- Name matches within same-brand candidates ---
 
-    def test_matches_brand_accent_variant(self, service):
-        existing = [{"id": "prod-1", "name": "Passata Di Pomodoro", "brand": "Pomì", "format_key": FORMAT_KEY}]
-        incoming = {"name": "Passata Di Pomodoro", "brand": "Pomi", "format_key": FORMAT_KEY}
+    def test_matches_exact_name(self, service):
+        existing = [{"id": "prod-1", "name": "Passata Di Pomodoro", "brand": "Pomì"}]
+        incoming = {"name": "Passata Di Pomodoro", "brand": "Pomì"}
         assert service._find_similar_product(incoming, existing) == "prod-1"
-
-    def test_matches_brand_accent_reversed(self, service):
-        existing = [{"id": "prod-1", "name": "Passata Di Pomodoro", "brand": "Pomi", "format_key": FORMAT_KEY}]
-        incoming = {"name": "Passata Di Pomodoro", "brand": "Pomì", "format_key": FORMAT_KEY}
-        assert service._find_similar_product(incoming, existing) == "prod-1"
-
-    # --- Name specificity variation (Caffè Aromadicasa) ---
 
     def test_matches_name_with_extra_specificity(self, service):
-        existing = [{"id": "prod-2", "name": "Caffè Aromadicasa Miscela Forte", "brand": "Caffè Vergnano", "format_key": FORMAT_KEY_2X250}]
-        incoming = {"name": "Caffè Aromadicasa Miscela Forte Macinatura Moka", "brand": "Caffè Vergnano", "format_key": FORMAT_KEY_2X250}
+        existing = [{"id": "prod-2", "name": "Caffè Aromadicasa Miscela Forte", "brand": "Caffè Vergnano"}]
+        incoming = {"name": "Caffè Aromadicasa Miscela Forte Macinatura Moka", "brand": "Caffè Vergnano"}
         assert service._find_similar_product(incoming, existing) == "prod-2"
 
     def test_matches_name_with_extra_specificity_reversed(self, service):
-        existing = [{"id": "prod-2", "name": "Caffè Aromadicasa Miscela Forte Macinatura Moka", "brand": "Caffè Vergnano", "format_key": FORMAT_KEY_2X250}]
-        incoming = {"name": "Caffè Aromadicasa Miscela Forte", "brand": "Caffè Vergnano", "format_key": FORMAT_KEY_2X250}
+        existing = [{"id": "prod-2", "name": "Caffè Aromadicasa Miscela Forte Macinatura Moka", "brand": "Caffè Vergnano"}]
+        incoming = {"name": "Caffè Aromadicasa Miscela Forte", "brand": "Caffè Vergnano"}
         assert service._find_similar_product(incoming, existing) == "prod-2"
 
-    # --- No match when format differs (candidates already filtered by format_key in real usage) ---
+    def test_matches_regardless_of_format(self, service):
+        # Same product different format → still matches (format is an offer attribute now)
+        existing = [{"id": "prod-7", "name": "Nutella", "brand": "Ferrero"}]
+        incoming = {"name": "Nutella", "brand": "Ferrero"}
+        assert service._find_similar_product(incoming, existing) == "prod-7"
 
-    def test_no_match_different_brand(self, service):
-        existing = [{"id": "prod-3", "name": "Passata Di Pomodoro", "brand": "Mutti", "format_key": FORMAT_KEY}]
-        incoming = {"name": "Passata Di Pomodoro", "brand": "Pomì", "format_key": FORMAT_KEY}
-        assert service._find_similar_product(incoming, existing) is None
-
-    def test_no_match_one_brand_null(self, service):
-        existing = [{"id": "prod-4", "name": "Passata Di Pomodoro", "brand": None, "format_key": FORMAT_KEY}]
-        incoming = {"name": "Passata Di Pomodoro", "brand": "Pomì", "format_key": FORMAT_KEY}
-        assert service._find_similar_product(incoming, existing) is None
+    # --- No match on different name ---
 
     def test_no_match_completely_different_name(self, service):
-        existing = [{"id": "prod-5", "name": "Latte Intero Fresco", "brand": "Granarolo", "format_key": FORMAT_KEY}]
-        incoming = {"name": "Passata Di Pomodoro", "brand": "Pomì", "format_key": FORMAT_KEY}
+        existing = [{"id": "prod-5", "name": "Latte Intero Fresco", "brand": "Granarolo"}]
+        incoming = {"name": "Passata Di Pomodoro", "brand": "Pomì"}
         assert service._find_similar_product(incoming, existing) is None
 
-    def test_empty_candidates(self, service):
-        incoming = {"name": "Passata Di Pomodoro", "brand": "Pomì", "format_key": FORMAT_KEY}
-        assert service._find_similar_product(incoming, []) is None
+    # --- Null brand candidates ---
 
     def test_both_brand_null_matches_on_name(self, service):
-        existing = [{"id": "prod-6", "name": "Passata Di Pomodoro", "brand": None, "format_key": FORMAT_KEY}]
-        incoming = {"name": "Passata Di Pomodoro", "brand": None, "format_key": FORMAT_KEY}
+        existing = [{"id": "prod-6", "name": "Passata Di Pomodoro", "brand": None}]
+        incoming = {"name": "Passata Di Pomodoro", "brand": None}
         assert service._find_similar_product(incoming, existing) == "prod-6"
+
+    # --- Empty candidates ---
+
+    def test_empty_candidates(self, service):
+        incoming = {"name": "Passata Di Pomodoro", "brand": "Pomì"}
+        assert service._find_similar_product(incoming, []) is None

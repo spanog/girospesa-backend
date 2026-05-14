@@ -25,7 +25,7 @@ async def list_favorites(
     sb = get_supabase()
     favs_resp = (
         sb.table("favorites")
-        .select("product_id, products(id, name, brand, format, format_label, image_url, category)")
+        .select("product_id, products(id, name, brand, image_url, category)")
         .eq("user_id", user_id)
         .execute()
     )
@@ -37,6 +37,7 @@ async def list_favorites(
             apply_current_offer_window(
                 sb.table("offers").select(
                     "id, price_offer, price_original, discount_pct, valid_to, created_at, "
+                    "format, format_label, "
                     "supermarket_name, supermarket_id, unit_price, unit_price_value, unit_price_unit, "
                     "supermarkets(logo_url)"
                 )
@@ -73,8 +74,8 @@ async def list_favorites(
                 "product_id": product_id,
                 "name": product.get("name"),
                 "brand": product.get("brand"),
-                "format": product.get("format"),
-                "format_label": product.get("format_label") or "",
+                "format": (active_offer or {}).get("format"),
+                "format_label": (active_offer or {}).get("format_label") or "",
                 "category": product.get("category"),
                 "image_url": product.get("image_url"),
                 "best_offer": best_offer,

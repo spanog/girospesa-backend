@@ -317,20 +317,14 @@ def test_search_products_catalog_still_returns_matches():
                   name,
                   brand,
                   category,
-                  subcategory,
-                  format,
-                  format_key,
-                  format_label
+                  subcategory
                 )
                 VALUES (
                   %s,
                   'Pasta Integrale',
                   'Barilla',
                   'dispensa',
-                  'Primi Piatti e Preparati',
-                  '{"tipo":"pezzo"}'::jsonb,
-                  'tipo:pezzo',
-                  'Pezzo'
+                  'Primi Piatti e Preparati'
                 )
                 ON CONFLICT (id) DO NOTHING
                 """,
@@ -377,20 +371,14 @@ def test_search_products_catalog_matches_prefix_fragments():
                   name,
                   brand,
                   category,
-                  subcategory,
-                  format,
-                  format_key,
-                  format_label
+                  subcategory
                 )
                 VALUES (
                   %s,
                   'Mozzarella',
                   'Vallelata',
                   'latticini-uova',
-                  'Formaggi Freschi',
-                  '{"tipo":"pezzo"}'::jsonb,
-                  'tipo:pezzo',
-                  'Pezzo'
+                  'Formaggi Freschi'
                 )
                 ON CONFLICT (id) DO NOTHING
                 """,

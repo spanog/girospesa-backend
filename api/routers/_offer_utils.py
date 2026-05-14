@@ -10,7 +10,7 @@ from services.extraction.normalizer import format_unit_price_label
 from services.product_format import build_format_bundle
 
 _OFFER_PRODUCT_SELECT = (
-    "*, products(id, name, brand, category, subcategory, format, format_label, image_url)"
+    "*, products(id, name, brand, category, subcategory, image_url)"
 )
 
 
@@ -18,13 +18,11 @@ def _flatten_draft_offer(offer: dict) -> dict:
     offer = dict(offer)
     product = offer.pop("products") or {}
     return {
-        **offer,
+        **offer,  # includes format, format_key, format_label from offers table
         "name": product.get("name", ""),
         "brand": product.get("brand"),
         "category": product.get("category"),
         "subcategory": product.get("subcategory"),
-        "format": product.get("format"),
-        "format_label": product.get("format_label") or "",
         "image_url": product.get("image_url"),
         "unit_price_label": offer.get("unit_price") or format_unit_price_label(
             offer.get("unit_price_value"),
@@ -34,13 +32,19 @@ def _flatten_draft_offer(offer: dict) -> dict:
 
 
 def build_product_row(payload) -> dict:
-    """Construct a product dict with format bundle from payload."""
-    format_bundle = build_format_bundle(payload.format.model_dump(mode="json"))
+    """Construct a product dict (no format — format lives in offers)."""
     return {
         "name": payload.name,
         "brand": payload.brand,
         "category": payload.category,
         "subcategory": payload.subcategory,
+    }
+
+
+def build_format_fields(payload) -> dict:
+    """Construct format fields from payload for use in offer rows."""
+    format_bundle = build_format_bundle(payload.format.model_dump(mode="json"))
+    return {
         "format": format_bundle.format_compact,
         "format_key": format_bundle.format_key,
         "format_label": format_bundle.format_label,
@@ -48,24 +52,23 @@ def build_product_row(payload) -> dict:
 
 
 def upsert_product(sb, product_row: dict) -> str:
-    """Upsert product on conflict (name, brand, format_key). Return product_id."""
-    upsert_result = sb.table("products").upsert(product_row, on_conflict="name,brand,format_key").execute()
+    """Upsert product on conflict (name, brand). Return product_id."""
+    upsert_result = sb.table("products").upsert(product_row, on_conflict="name,brand").execute()
     if upsert_result.data:
         return upsert_result.data[0]["id"]
     query = sb.table("products").select("id").eq("name", product_row["name"])
     brand = product_row.get("brand")
     query = query.is_("brand", "null") if brand is None else query.eq("brand", brand)
-    query = query.eq("format_key", product_row["format_key"])
     existing = query.limit(1).execute()
     if not existing.data:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upsert product")
     return existing.data[0]["id"]
 
 
-def build_offer_row(payload, product_id: str, supermarket_id: str, supermarket_name: str | None, flyer_id: str | None, normalized_unit: str | None) -> dict:
+def build_offer_row(payload, product_id: str, supermarket_id: str, supermarket_name: str | None, flyer_id: str | None, normalized_unit: str | None, format_fields: dict | None = None) -> dict:
     """Build offer dict for insert. valid_from/valid_to from payload only."""
     unit_price_label = format_unit_price_label(payload.unit_price_value, normalized_unit) if payload.unit_price_value else None
-    return {
+    row: dict = {
         "id": str(uuid.uuid4()),
         "product_id": product_id,
         "flyer_id": flyer_id,
@@ -81,6 +84,9 @@ def build_offer_row(payload, product_id: str, supermarket_id: str, supermarket_n
         "valid_to": payload.valid_to,
         "is_confirmed": False,
     }
+    if format_fields:
+        row.update(format_fields)
+    return row
 
 
 def insert_and_fetch_offer(sb, offer_row: dict) -> dict:

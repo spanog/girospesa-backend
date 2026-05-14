@@ -30,18 +30,19 @@
 
 ## Flyer Review
 
-- Manual draft-offer create/update endpoints on `/flyers/{flyer_id}/draft-offers` own canonical product fields too: `name`, `brand`, `category`, `subcategory`, `format`.
+- Manual draft-offer create/update endpoints on `/flyers/{flyer_id}/draft-offers` own canonical product fields: `name`, `brand`, `category`, `subcategory`. Format fields (`format`, `format_key`, `format_label`) belong to the offer, not the product.
 - `format` must be structured `ProductFormat` JSON. Plain text format is forbidden.
-- Canonical product identity is `name + brand + format_key`; `format_key` and `format_label` are always derived backend-side from normalized `format`.
-- Persist `products.format` in compact canonical form only: omit `null`, empty arrays, and default `false` flags when not semantically needed.
+- **Canonical product identity is `name + brand`** — products are uniquely keyed on `UNIQUE NULLS NOT DISTINCT (name, brand)`. Format is an attribute of the offer, not the product.
+- `format_key` and `format_label` are always derived backend-side from normalized `format` and stored on the `offers` row.
+- Persist `offers.format` in compact canonical form only: omit `null`, empty arrays, and default `false` flags when not semantically needed.
 - LLM/provider output should keep `format` sparse too: emit only `tipo` plus relevant fields. Backend canonicalization stays authoritative.
-- Extraction-only `format.varianti` must be exploded before persistence. Persisted products/offers always point to one concrete format.
-- Extraction pipeline should normalize each concrete format once, dedupe on `(name, brand, format_key)` before persistence, and batch-upsert unique products for the flyer.
+- Extraction-only `format.varianti` must be exploded before persistence. Each variant produces a separate offer row under the same canonical product.
+- Extraction pipeline should normalize each product once, dedupe on `(name, brand)` before persistence, and batch-upsert unique products per flyer. Format is written to each offer row.
 - For multi-page PDFs, Gemini extraction must split the document into rigid 3-page PDF chunks and process one chunk per request. After each successful chunk, persist draft offers immediately and update `flyers.extraction_metadata` with `pages_processed`, `current_chunk_start`, `current_chunk_end`, `progress_percent`, `chunks_completed`, `chunks_total`, `products_found`, `last_completed_chunk`, and `next_chunk_*`. If one chunk fails after retries, set flyer `status='error'`, keep already saved draft offers, and expose `resume_available` plus `failed_chunk_*` / `next_chunk_*` metadata so the same `POST /flyers/{flyer_id}/extract` call can resume from the first failed chunk. Resume detection must read persisted `extraction_metadata`, because router flips flyer back to `processing` before background task restarts.
 - Gemini retry/failure logs must preserve structured provider context when available: exception type, `code`, `status`, `message`, HTTP status/body, and request id. Keep same formatted string in app logs and `retry_errors` sent to `extraction_log`.
-- Before upserting, pipeline runs a fuzzy pre-check per `format_key` bucket: `_find_similar_product()` in `ExtractionService` uses `rapidfuzz.fuzz.partial_ratio` on names (≥0.85) and `fuzz.ratio` on diacritic-normalized brands (≥0.90). Thresholds configurable via `product_name_similarity_threshold` / `product_brand_similarity_threshold` in `core/config.py`. Matches reuse the existing `product_id` — no duplicate row is created. `format_key` is always an exact-match gate; never fuzzified.
+- Before upserting, pipeline runs a fuzzy pre-check per brand bucket: `_find_similar_product()` in `ExtractionService` uses `rapidfuzz.fuzz.partial_ratio` on names (≥0.85). Brand is used as an exact-match bucket for candidate retrieval; name fuzzy match determines whether to reuse an existing `product_id`. Thresholds configurable via `product_name_similarity_threshold` / `product_brand_similarity_threshold` in `core/config.py`.
 - Draft and confirmed offer payloads returned by flyer review endpoints must flatten `products.subcategory` alongside `category`.
-- Draft and confirmed offer payloads must expose both `format` and `format_label`.
+- Draft and confirmed offer payloads must expose both `format` and `format_label` (sourced from the offer row, not the product).
 - `GET /products` ordina default per `products.name`; `sort=expiry` ordina per `offers.valid_to` crescente con offerte senza scadenza dopo, poi per `products.name`.
 - `GET /products` search RPC `public.search_products_catalog` must preserve fuzzy `word_similarity` ranking but also match prefix/substring queries on product name and brand, so inputs like `mozza` still return `Mozzarella`.
 - `flyers.extraction_metadata` should keep live extraction progress during `processing`, then per-stage timing keys (`provider_seconds`, `variant_expansion_seconds`, `normalization_seconds`, `dedupe_seconds`, `product_upsert_seconds`, `offer_insert_seconds`, `total_seconds`) plus product-count and average-format-size telemetry at completion.

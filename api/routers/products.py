@@ -9,12 +9,12 @@ from services.offer_visibility import apply_current_offer_window
 
 _OFFER_PRODUCT_SELECT = (
     "*, "
-    "products(id, name, brand, category, subcategory, format, format_label, image_url), "
+    "products(id, name, brand, category, subcategory, image_url), "
     "supermarkets(name, slug, logo_url, color_hex)"
 )
 _OFFER_PRODUCT_LIST_SELECT = (
     "*, "
-    "products!inner(id, name, brand, category, subcategory, format, format_label, image_url), "
+    "products!inner(id, name, brand, category, subcategory, image_url), "
     "supermarkets(name, slug, logo_url, color_hex)"
 )
 
@@ -25,14 +25,12 @@ def _flatten_offer(offer: dict) -> dict:
     product = offer.pop("products") or {}
     supermarket = offer.pop("supermarkets") or {}
     return {
-        **offer,
+        **offer,  # includes format, format_key, format_label from offers table
         "product_id": product.get("id"),
         "name": product.get("name", ""),
         "brand": product.get("brand"),
         "category": product.get("category"),
         "subcategory": product.get("subcategory"),
-        "format": product.get("format"),
-        "format_label": product.get("format_label") or "",
         "image_url": product.get("image_url"),
         "supermarket_name": supermarket.get("name") or offer.get("supermarket_name", ""),
         "supermarket_logo_url": supermarket.get("logo_url"),

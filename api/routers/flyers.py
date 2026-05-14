@@ -18,6 +18,7 @@ from api.routers._offer_utils import (
     _OFFER_PRODUCT_SELECT,
     _flatten_draft_offer,
     build_product_row,
+    build_format_fields,
     upsert_product,
     build_offer_row,
     insert_and_fetch_offer,
@@ -495,7 +496,10 @@ async def create_draft_offer(
 
     product_id = upsert_product(sb, build_product_row(payload))
     normalized_unit = normalize_unit_price_measure(payload.unit_price_unit) if payload.unit_price_unit else None
-    offer_row = build_offer_row(payload, product_id, flyer["supermarket_id"], flyer.get("supermarket_name"), flyer_id, normalized_unit)
+    offer_row = build_offer_row(
+        payload, product_id, flyer["supermarket_id"], flyer.get("supermarket_name"),
+        flyer_id, normalized_unit, format_fields=build_format_fields(payload),
+    )
     # Apply flyer date fallback (flyers.py-specific concern)
     offer_row["valid_from"] = offer_row["valid_from"] or flyer.get("valid_from")
     offer_row["valid_to"] = offer_row["valid_to"] or flyer.get("valid_to")
@@ -549,6 +553,11 @@ async def update_draft_offer(
             offer_fields["unit_price_value"],
             offer_fields["unit_price_unit"],
         )
+    if "format" in sent and payload.format is not None:
+        format_bundle = build_format_bundle(payload.format.model_dump(mode="json"))
+        offer_fields["format"] = format_bundle.format_compact
+        offer_fields["format_key"] = format_bundle.format_key
+        offer_fields["format_label"] = format_bundle.format_label
     if offer_fields:
         sb.table("offers").update(offer_fields).eq("id", offer_id).execute()
 
@@ -558,15 +567,9 @@ async def update_draft_offer(
             "brand": payload.brand,
             "category": payload.category,
             "subcategory": payload.subcategory,
-            "format": payload.format.model_dump(mode="json") if payload.format is not None else None,
         }.items()
         if k in sent
     }
-    if "format" in product_fields:
-        format_bundle = build_format_bundle(product_fields["format"])
-        product_fields["format"] = format_bundle.format_compact
-        product_fields["format_key"] = format_bundle.format_key
-        product_fields["format_label"] = format_bundle.format_label
     if product_fields:
         sb.table("products").update(product_fields).eq("id", offer["product_id"]).execute()
 

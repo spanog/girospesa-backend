@@ -166,12 +166,12 @@ class TestCalculateDiscountPct:
 # ---------------------------------------------------------------------------
 
 class TestDeduplicateProducts:
-    def _p(self, name: str, brand: str = "", fmt_key: str = "") -> dict:
+    def _p(self, name: str, brand: str = "") -> dict:
         return {
             "name": name,
             "brand": brand,
             "format": _single_format(500),
-            "format_key": fmt_key or "v1:{}",
+            "format_key": "v1:{}",
             "price_offer": 1.0,
         }
 
@@ -184,8 +184,8 @@ class TestDeduplicateProducts:
         assert len(deduplicate_products(products)) == 1
 
     def test_keeps_first_occurrence(self):
-        p1 = {"name": "Latte", "brand": "Parmalat", "format": _single_format(1, "L"), "format_key": "v1:same", "price_offer": 1.0}
-        p2 = {"name": "Latte", "brand": "Parmalat", "format": _single_format(1, "L"), "format_key": "v1:same", "price_offer": 1.5}
+        p1 = {"name": "Latte", "brand": "Parmalat", "format": _single_format(1, "L"), "format_key": "v1:1L", "price_offer": 1.0}
+        p2 = {"name": "Latte", "brand": "Parmalat", "format": _single_format(1, "L"), "format_key": "v1:1L", "price_offer": 1.5}
         result = deduplicate_products([p1, p2])
         assert len(result) == 1
         assert result[0]["price_offer"] == 1.0
@@ -194,10 +194,11 @@ class TestDeduplicateProducts:
         products = [self._p("MELA"), self._p("mela")]
         assert len(deduplicate_products(products)) == 1
 
-    def test_different_format_not_deduped(self):
+    def test_same_name_brand_different_format_deduped(self):
+        # Format is an offer attribute — same name+brand = same product regardless of format
         p1 = {"name": "Latte", "brand": "Granarolo", "format": _single_format(1, "L"), "format_key": "v1:1L", "price_offer": 1.0}
         p2 = {"name": "Latte", "brand": "Granarolo", "format": _single_format(500, "ml"), "format_key": "v1:500ml", "price_offer": 0.6}
-        assert len(deduplicate_products([p1, p2])) == 2
+        assert len(deduplicate_products([p1, p2])) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -113,8 +113,9 @@ def _nearby_distances(sb, lat: float, lng: float, max_distance_km: float) -> dic
 def _offer_select() -> str:
     return (
         "id, product_id, price_original, price_offer, discount_pct, "
+        "format, format_label, "
         "unit_price, unit_price_value, unit_price_unit, valid_to,"
-        " products(id, name, brand, format, format_label),"
+        " products(id, name, brand),"
         " supermarkets(id, name, logo_url)"
     )
 

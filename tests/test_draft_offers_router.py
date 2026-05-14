@@ -281,11 +281,8 @@ class TestCreateDraftOffer:
                 "brand": None,
                 "category": "alimentari-freschi",
                 "subcategory": "Latticini e Formaggi",
-                "format": {},
-                "format_key": "v1:{}",
-                "format_label": "",
             },
-            on_conflict="name,brand,format_key",
+            on_conflict="name,brand",
         )
 
 

@@ -6,7 +6,6 @@ import os
 import uuid
 import pytest
 
-from services.product_format import build_format_bundle
 
 
 # ---------------------------------------------------------------------------
@@ -64,17 +63,9 @@ def _batch_insert(supabase_client, table: str, rows: list[dict], batch_size: int
 
 
 def _product_row(name: str, brand: str, grams: int) -> dict:
-    bundle = build_format_bundle({
-        "tipo": "confezione_singola",
-        "peso_volume": grams,
-        "unita_misura": "g",
-    })
     return {
         "name": name,
         "brand": brand,
-        "format": bundle.format_compact,
-        "format_key": bundle.format_key,
-        "format_label": bundle.format_label,
     }
 
 
