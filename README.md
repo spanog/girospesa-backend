@@ -436,7 +436,7 @@ Valori locali canonici:
 
 - `SUPABASE_URL=http://127.0.0.1:54321`
 - `FRONTEND_URL=http://127.0.0.1:3000`
-- `GEOCODING_PROVIDER=disabled` per evitare chiamate esterne in locale
+- `GEOCODING_PROVIDER=nominatim` in locale, così signup/profilo/seed admin riflettono comportamento reale durante sviluppo manuale
 - `GOOGLE_API_KEY` richiesto solo se si vuole usare estrazione AI Gemini
 - `SUPABASE_SERVICE_ROLE_KEY` e `SUPABASE_JWT_SECRET` si copiano da `supabase status -o env`
 - `ADMIN_EMAIL` e `ADMIN_PASSWORD` servono per seedare utente admin via API service-role
@@ -605,7 +605,7 @@ I CLI di valutazione e QA vivono in `scripts/extraction/`. Il runtime ufficiale 
 | Processo host | FastAPI backend | Sì | Porta `8000` |
 | Processo host | Next.js frontend | Sì | Repo separato, porta `3000` |
 | API esterna | Google Gemini | Solo per estrazione volantini | Unica dipendenza esterna richiesta per AI extraction |
-| Servizio esterno | Nominatim | No | Geocoding disabilitato di default in locale |
+| Servizio esterno | Nominatim | No | Geocoding attivo di default in locale per prove manuali end-to-end |
 | Servizio esterno | Resend | No | Email admin opzionali |
 
 ---
@@ -691,7 +691,7 @@ GOOGLE_API_KEY=<google-api-key>
 GEMINI_MODEL=gemma-4-31b-it
 
 # ── Servizi esterni opzionali in locale -------------------------------------
-GEOCODING_PROVIDER=disabled          # usa "nominatim" solo se vuoi geocoding reale
+GEOCODING_PROVIDER=nominatim         # default locale: allinea sviluppo manuale a produzione
 RESEND_API_KEY=
 ADMIN_NOTIFICATION_EMAIL=
 
@@ -724,7 +724,7 @@ Flow identica in locale, test, prod: cambia solo valore env.
 | Servizio | Scopo | Configurazione | Note |
 |----------|-------|----------------|------|
 | **Google Gemini** | Estrazione AI volantini | `GOOGLE_API_KEY` + `GEMINI_MODEL` | Unica dipendenza esterna richiesta quando usi AI extraction |
-| **Nominatim (OpenStreetMap)** | Geocoding indirizzi | `GEOCODING_PROVIDER=nominatim` | Opzionale, disabilitato di default in locale |
+| **Nominatim (OpenStreetMap)** | Geocoding indirizzi | `GEOCODING_PROVIDER=nominatim` | Default in locale per test manuali end-to-end; disabilitalo solo se vuoi evitare chiamate esterne |
 | **Resend** | Email transazionali (richieste volantini) | `RESEND_API_KEY` | Opzionale, fallisce gracefully |
 | **Web Push (VAPID)** | Notifiche browser | Coppia VAPID + `WEBHOOK_SECRET` | Standard W3C, nessun servizio proprietario |
 

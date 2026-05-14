@@ -59,7 +59,7 @@
 
 ## Admin Seed
 
-- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, one default empty owner shopping list named `Lista principale`, and `user_profiles.active_list_id` aligned to that default list.
+- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, populated `home_lat/home_lng` for that address, one default empty owner shopping list named `Lista principale`, and `user_profiles.active_list_id` aligned to that default list.
 - New auth users must get one default empty owner shopping list named `Lista principale` from the DB signup trigger, plus `user_profiles.active_list_id` pointing to it; keep this in sync with shared Supabase migrations.
 
 ## Optimizer
