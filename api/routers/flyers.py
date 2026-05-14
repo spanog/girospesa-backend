@@ -43,6 +43,7 @@ class DraftOfferUpdate(BaseModel):
     offer_notes: str | None = None
     valid_from: str | None = None
     valid_to: str | None = None
+    is_reviewed: bool | None = None
 
 
 class DraftOfferCreate(BaseModel):
@@ -545,6 +546,7 @@ async def update_draft_offer(
             "offer_notes": payload.offer_notes,
             "valid_from": payload.valid_from,
             "valid_to": payload.valid_to,
+            "is_reviewed": payload.is_reviewed,
         }.items()
         if k in sent
     }
