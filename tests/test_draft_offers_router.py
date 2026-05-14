@@ -484,3 +484,151 @@ class TestConfirmOffers:
             )
         assert resp.status_code == 200
         assert resp.json()["confirmed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# is_reviewed field — GET and PATCH
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_list_draft_offers_includes_is_reviewed():
+    """is_reviewed field is present in GET /draft-offers response."""
+    sb = MagicMock()
+    flyer_data = {"id": "flyer-1", "supermarket_id": "sup-1", "status": "done"}
+    flyer_result = MagicMock()
+    flyer_result.data = flyer_data
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+
+    offer_row = {
+        "id": "offer-1",
+        "flyer_id": "flyer-1",
+        "product_id": "prod-1",
+        "supermarket_id": "sup-1",
+        "supermarket_name": "Test",
+        "price_offer": 1.99,
+        "price_original": None,
+        "discount_pct": None,
+        "unit_price": None,
+        "unit_price_value": None,
+        "unit_price_unit": None,
+        "offer_notes": None,
+        "valid_from": None,
+        "valid_to": None,
+        "is_confirmed": False,
+        "is_reviewed": False,
+        "format": None,
+        "format_key": None,
+        "format_label": "",
+        "created_at": "2026-05-14T00:00:00Z",
+        "products": {
+            "id": "prod-1",
+            "name": "Latte",
+            "brand": None,
+            "category": None,
+            "subcategory": None,
+            "image_url": None,
+        },
+    }
+    offers_result = MagicMock()
+    offers_result.data = [offer_row]
+
+    call_count = 0
+
+    def select_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        chain = MagicMock()
+        if call_count == 1:
+            chain.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+        else:
+            chain.eq.return_value.eq.return_value.execute.return_value = offers_result
+        return chain
+
+    sb.table.return_value.select.side_effect = select_side_effect
+
+    with patch("api.routers.flyers.get_supabase", return_value=sb):
+        resp = await _get(
+            "/flyers/flyer-1/draft-offers",
+            {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert "is_reviewed" in data[0]
+    assert data[0]["is_reviewed"] is False
+
+
+@pytest.mark.anyio
+async def test_patch_draft_offer_sets_is_reviewed():
+    """PATCH /draft-offers/{id} with is_reviewed=true persists and returns the flag."""
+    sb = MagicMock()
+    flyer_data = {"id": "flyer-1", "supermarket_id": "sup-1", "supermarket_name": "Test"}
+    flyer_result = MagicMock()
+    flyer_result.data = flyer_data
+    offer_data = {
+        "id": "offer-1",
+        "product_id": "prod-1",
+        "flyer_id": "flyer-1",
+        "is_confirmed": False,
+    }
+    offer_result = MagicMock()
+    offer_result.data = offer_data
+
+    updated_offer = {
+        "id": "offer-1",
+        "flyer_id": "flyer-1",
+        "product_id": "prod-1",
+        "supermarket_id": "sup-1",
+        "supermarket_name": "Test",
+        "price_offer": 1.99,
+        "price_original": None,
+        "discount_pct": None,
+        "unit_price": None,
+        "unit_price_value": None,
+        "unit_price_unit": None,
+        "offer_notes": None,
+        "valid_from": None,
+        "valid_to": None,
+        "is_confirmed": False,
+        "is_reviewed": True,
+        "format": None,
+        "format_key": None,
+        "format_label": "",
+        "created_at": "2026-05-14T00:00:00Z",
+        "products": {
+            "id": "prod-1",
+            "name": "Latte",
+            "brand": None,
+            "category": None,
+            "subcategory": None,
+            "image_url": None,
+        },
+    }
+    final_result = MagicMock()
+    final_result.data = updated_offer
+
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+    sb.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = offer_result
+    sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+    sb.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = final_result
+
+    with patch("api.routers.flyers.get_supabase", return_value=sb):
+        resp = await _patch_req(
+            "/flyers/flyer-1/draft-offers/offer-1",
+            {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+            json={"is_reviewed": True},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["is_reviewed"] is True
+
+    update_calls = [
+        call
+        for call in sb.table.return_value.update.call_args_list
+    ]
+    assert any(
+        call.args and "is_reviewed" in call.args[0]
+        for call in update_calls
+    ), "is_reviewed must be passed to the DB update"
