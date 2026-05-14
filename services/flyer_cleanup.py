@@ -2,7 +2,7 @@
 FlyerCleanupService — nightly deletion of expired flyers.
 
 Scheduled daily at midnight (Europe/Rome) via APScheduler in main.py lifespan.
-Deletes: Supabase Storage file (best-effort) + DB row (CASCADE nullifies offers.flyer_id).
+Deletes: Supabase Storage file (best-effort) + DB row (CASCADE deletes all linked offers).
 Flyers with valid_to IS NULL are never auto-deleted.
 """
 from __future__ import annotations
