@@ -1,8 +1,9 @@
 """Push notification endpoints.
 
-- POST /push/subscribe   — register a Web Push subscription (auth required)
-- POST /push/unsubscribe — remove a Web Push subscription (auth required)
-- POST /push/notify-favorites — Supabase DB webhook: called on INSERT in offers
+- POST   /push/subscribe     — register a Web Push subscription (auth required)
+- POST   /push/unsubscribe   — remove a specific Web Push subscription (auth required)
+- DELETE /push/subscriptions — remove all Web Push subscriptions for caller (auth required, called on logout)
+- POST   /push/notify-favorites — Supabase DB webhook: called on INSERT in offers
 """
 from __future__ import annotations
 
@@ -59,6 +60,9 @@ async def subscribe(
 ) -> dict:
     """Register or update a Web Push subscription for the authenticated user."""
     sb = get_supabase()
+    # Remove any stale subscription with the same endpoint belonging to a different user.
+    # This prevents cross-user notification leaks when a device switches accounts.
+    sb.table("push_subscriptions").delete().eq("endpoint", body.endpoint).neq("user_id", user_id).execute()
     resp = (
         sb.table("push_subscriptions")
         .upsert(
@@ -81,9 +85,19 @@ async def unsubscribe(
     body: UnsubscribeBody,
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> Response:
-    """Remove a Web Push subscription for the authenticated user."""
+    """Remove a specific Web Push subscription for the authenticated user."""
     sb = get_supabase()
     sb.table("push_subscriptions").delete().eq("user_id", user_id).eq("endpoint", body.endpoint).execute()
+    return Response(status_code=204)
+
+
+@router.delete("/subscriptions", status_code=204)
+async def delete_all_subscriptions(
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> Response:
+    """Remove all Web Push subscriptions for the authenticated user. Called on explicit logout."""
+    sb = get_supabase()
+    sb.table("push_subscriptions").delete().eq("user_id", user_id).execute()
     return Response(status_code=204)
 
 
