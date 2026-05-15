@@ -10,6 +10,13 @@ def _read(relative_path: str) -> str:
     return (BACKEND_ROOT / relative_path).read_text()
 
 
+def _canonical_migrations_dir() -> Path:
+    frontend_dir = BACKEND_ROOT.parent / "girospesa-webapp/supabase/migrations"
+    if any(frontend_dir.glob("*.sql")):
+        return frontend_dir
+    return BACKEND_ROOT / "supabase/migrations"
+
+
 def test_compose_persists_database_and_storage_volumes():
     compose = _read("docker-compose.yml")
 
@@ -99,6 +106,22 @@ def test_local_supabase_exposes_only_public_and_storage_schemas():
     assert 'schemas = ["public"]' in frontend_config
 
 
+def test_local_auth_allows_email_confirmation_callback_redirects():
+    compose = _read("docker-compose.yml")
+    backend_config = _read("supabase/config.toml")
+    frontend_config = _read("../girospesa-webapp/supabase/config.toml")
+
+    expected_redirects = [
+        "http://127.0.0.1:3000/auth/callback?next=/email-verificata",
+        "http://localhost:3000/auth/callback?next=/email-verificata",
+    ]
+
+    for redirect_url in expected_redirects:
+        assert redirect_url in backend_config
+        assert redirect_url in frontend_config
+        assert redirect_url in compose
+
+
 def test_shared_backend_migration_copies_match_frontend_canonical_files():
     migrations_dir = BACKEND_ROOT / "supabase/migrations"
     expected_root = BACKEND_ROOT.parent / "girospesa-webapp/supabase/migrations"
@@ -125,7 +148,7 @@ def test_sql_seed_no_longer_owns_admin_user_bootstrap():
 def test_auth_user_trigger_creates_default_empty_owner_list():
     migrations = "\n".join(
         path.read_text()
-        for path in sorted((BACKEND_ROOT.parent / "girospesa-webapp/supabase/migrations").glob("*.sql"))
+        for path in sorted(_canonical_migrations_dir().glob("*.sql"))
     )
 
     assert "INSERT INTO shopping_lists (user_id, name, items, is_active)" in migrations

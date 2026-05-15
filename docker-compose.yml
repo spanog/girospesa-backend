@@ -31,6 +31,7 @@ services:
       GOTRUE_DB_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
       GOTRUE_JWT_SECRET: ${JWT_SECRET}
       GOTRUE_SITE_URL: http://localhost:3000
+      GOTRUE_URI_ALLOW_LIST: http://127.0.0.1:3000/auth/callback,http://127.0.0.1:3000/auth/callback?next=/email-verificata,http://localhost:3000/auth/callback,http://localhost:3000/auth/callback?next=/email-verificata,http://127.0.0.1:3000/reset-password,http://localhost:3000/reset-password
       API_EXTERNAL_URL: http://localhost:8001
 
   rest:
