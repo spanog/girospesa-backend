@@ -471,7 +471,11 @@ class ExtractionService:
             supermarket_name,
         )
         if offer_rows:
-            sb.table("offers").insert(offer_rows).execute()  # type: ignore[union-attr]
+            sb.table("offers").upsert(  # type: ignore[union-attr]
+                offer_rows,
+                on_conflict="product_id,flyer_id,format_key",
+                ignore_duplicates=True,
+            ).execute()
         runtime["offer_insert_seconds"] += time.perf_counter() - offer_insert_started_at
         runtime["products_saved_count"] += len(offer_rows)
         return len(offer_rows)
