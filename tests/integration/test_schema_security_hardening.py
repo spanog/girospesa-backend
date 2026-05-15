@@ -9,11 +9,12 @@ import psycopg2
 import psycopg2.extras
 
 
-DB_DSN = os.environ["DB_DSN"]
+def _db_dsn() -> str:
+    return os.environ["DB_DSN"]
 
 
 def _fetch_all(query: str) -> list[dict]:
-    conn = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(_db_dsn())
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(query)
@@ -228,7 +229,7 @@ def test_list_rpcs_are_not_security_definer():
 
 def test_auth_signup_trigger_creates_profile_and_default_list():
     user_id = str(uuid.uuid4())
-    conn = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(_db_dsn())
     try:
         conn.autocommit = False
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -254,7 +255,13 @@ def test_auth_signup_trigger_creates_profile_and_default_list():
                   NOW(),
                   NOW(),
                   '{}'::jsonb,
-                  '{"display_name":"Schema Test"}'::jsonb,
+                  '{
+                    "display_name":"Schema Test",
+                    "home_address":"Via Roma 1",
+                    "home_city":"Milano",
+                    "home_province":"MI",
+                    "home_postal_code":"20100"
+                  }'::jsonb,
                   'authenticated',
                   'authenticated'
                 )
@@ -265,7 +272,13 @@ def test_auth_signup_trigger_creates_profile_and_default_list():
 
             cur.execute(
                 """
-                SELECT id, display_name
+                SELECT
+                  id,
+                  display_name,
+                  home_address,
+                  home_city,
+                  home_province,
+                  home_postal_code
                 FROM public.user_profiles
                 WHERE id = %s
                 """,
@@ -286,7 +299,14 @@ def test_auth_signup_trigger_creates_profile_and_default_list():
             )
             shopping_list = cur.fetchone()
 
-        assert profile == {"id": user_id, "display_name": "Schema Test"}
+        assert profile == {
+            "id": user_id,
+            "display_name": "Schema Test",
+            "home_address": "Via Roma 1",
+            "home_city": "Milano",
+            "home_province": "MI",
+            "home_postal_code": "20100",
+        }
         assert shopping_list == {
             "user_id": user_id,
             "name": "Lista principale",
@@ -294,7 +314,7 @@ def test_auth_signup_trigger_creates_profile_and_default_list():
             "role": "owner",
         }
     finally:
-        cleanup = psycopg2.connect(DB_DSN)
+        cleanup = psycopg2.connect(_db_dsn())
         try:
             cleanup.autocommit = True
             with cleanup.cursor() as cur:
@@ -306,7 +326,7 @@ def test_auth_signup_trigger_creates_profile_and_default_list():
 
 def test_search_products_catalog_still_returns_matches():
     product_id = str(uuid.uuid4())
-    conn = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(_db_dsn())
     try:
         conn.autocommit = False
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -348,7 +368,7 @@ def test_search_products_catalog_still_returns_matches():
             "brand": "Barilla",
         }
     finally:
-        cleanup = psycopg2.connect(DB_DSN)
+        cleanup = psycopg2.connect(_db_dsn())
         try:
             cleanup.autocommit = True
             with cleanup.cursor() as cur:
@@ -360,7 +380,7 @@ def test_search_products_catalog_still_returns_matches():
 
 def test_search_products_catalog_matches_prefix_fragments():
     product_id = str(uuid.uuid4())
-    conn = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(_db_dsn())
     try:
         conn.autocommit = False
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -402,7 +422,7 @@ def test_search_products_catalog_matches_prefix_fragments():
             "brand": "Vallelata",
         }
     finally:
-        cleanup = psycopg2.connect(DB_DSN)
+        cleanup = psycopg2.connect(_db_dsn())
         try:
             cleanup.autocommit = True
             with cleanup.cursor() as cur:

@@ -283,6 +283,7 @@ curl -X POST http://localhost:8000/flyers/admin/cleanup \
 - Le richieste volantino guest e autenticate passano sempre da `POST /flyer-requests`. Non esiste piu un path supportato con insert diretto client -> Supabase.
 - Log estrazione canonico: `extraction_log`. Eventuali ambienti locali legacy con `scraping_log` vengono riallineati dalla migration di hardening.
 - PostGIS è abilitato nello schema `extensions`. `supermarkets.location`, `user_profiles.home_location` e `user_profiles.search_location` sono `geography(Point, 4326)` indicizzate GiST; la RPC `nearby_supermarkets` usa `ST_DWithin` e `ST_Distance`.
+- Il trigger DB di signup `public.handle_new_user()` crea `user_profiles` copiando `display_name` e campi indirizzo (`home_address`, `home_city`, `home_province`, `home_postal_code`) da `raw_user_meta_data`, poi crea la lista predefinita `Lista principale` e allinea `active_list_id`.
 
 ## Flussi principali
 
