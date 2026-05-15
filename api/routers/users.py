@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
@@ -157,9 +158,10 @@ async def upload_avatar(
         file_options={"content-type": file.content_type, "upsert": "true"},
     )
 
-    public_url = sb.storage.from_(_AVATAR_BUCKET).get_public_url(path)
-    sb.table("user_profiles").update({"avatar_url": public_url}).eq("id", user_id).execute()
-    return {"avatar_url": public_url}
+    raw_url = sb.storage.from_(_AVATAR_BUCKET).get_public_url(path)
+    avatar_url = f"{raw_url.rstrip('?')}?t={int(time.time())}"
+    sb.table("user_profiles").update({"avatar_url": avatar_url}).eq("id", user_id).execute()
+    return {"avatar_url": avatar_url}
 
 
 @router.delete("/me", status_code=204)
