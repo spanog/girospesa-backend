@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
+
+if "core.config" in sys.modules and not hasattr(sys.modules["core.config"], "Settings"):
+    sys.modules.pop("core.config")
 
 from services import admin_seed
 

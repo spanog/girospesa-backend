@@ -54,7 +54,7 @@ def test_integration_compose_mounts_bootstrap_inputs():
     compose = _read("docker-compose.integration.yml")
 
     assert "./supabase/init/001-bootstrap-local-db.sh:/docker-entrypoint-initdb.d/zzz-bootstrap-local-db.sh:ro" in compose
-    assert "../girospesa-webapp/supabase/migrations:/supabase-webapp-migrations:ro" in compose
+    assert "./supabase/migrations:/supabase-webapp-migrations:ro" in compose
     assert "./supabase/seed.sql:/supabase-backend/seed.sql:ro" in compose
 
 

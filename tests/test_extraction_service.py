@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 # ---------------------------------------------------------------------------
 # Stub infrastructure modules
 # ---------------------------------------------------------------------------
-for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders", "requests"):
+for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders", "geopy.exc", "requests"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
@@ -53,9 +53,9 @@ def _make_sb(
     upsert_result = MagicMock()
     upsert_result.data = upsert_data if upsert_data is not None else [{"id": "prod-uuid"}]
 
-    # offers.insert().execute()
+    # extraction_log insert
     insert_result = MagicMock()
-    insert_result.data = [{"id": "offer-uuid"}]
+    insert_result.data = [{"id": "log-uuid"}]
 
     # flyers.update().eq().execute()
     update_result = MagicMock()
@@ -67,14 +67,30 @@ def _make_sb(
 
     # .select(...).eq(...).single().execute() → flyer
     table_mock.select.return_value.eq.return_value.single.return_value.execute.return_value = flyer_result
-    # .upsert(...).execute() → product
+    # .upsert(...).execute() → products and offers
     table_mock.upsert.return_value.execute.return_value = upsert_result
-    # .insert(...).execute() → offers
+    # .insert(...).execute() → extraction log
     table_mock.insert.return_value.execute.return_value = insert_result
     # .update(...).eq(...).execute() → flyer status update
     table_mock.update.return_value.eq.return_value.execute.return_value = update_result
 
     return sb
+
+
+def _offer_upsert_calls(sb: MagicMock) -> list:
+    return [
+        call
+        for call in sb.table.return_value.upsert.call_args_list
+        if call.kwargs.get("on_conflict") == "product_id,flyer_id,format_key"
+    ]
+
+
+def _product_upsert_calls(sb: MagicMock) -> list:
+    return [
+        call
+        for call in sb.table.return_value.upsert.call_args_list
+        if call.kwargs.get("on_conflict") == "name,brand"
+    ]
 
 
 _EXTRACTED_PRODUCTS = [
@@ -136,14 +152,9 @@ class TestExtractionServiceRunSetsOfferAsUnconfirmed:
             svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
             svc.run("flyer-1")
 
-        # Find list-based insert call for offers, not extraction_log row inserts.
-        all_insert_calls = sb.table.return_value.insert.call_args_list
-        offer_inserts = [
-            c for c in all_insert_calls
-            if isinstance(c[0][0], list)
-        ]
-        assert len(offer_inserts) >= 1, "Expected at least one batch offer insert"
-        offer_rows = offer_inserts[0][0][0]
+        offer_upserts = _offer_upsert_calls(sb)
+        assert len(offer_upserts) >= 1, "Expected at least one batch offer upsert"
+        offer_rows = offer_upserts[0][0][0]
         assert isinstance(offer_rows, list)
         for row in offer_rows:
             assert row["is_confirmed"] is False
@@ -188,9 +199,7 @@ class TestExtractionServiceStatusTransitions:
             svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
             svc.run("flyer-1")
 
-        all_insert_calls = sb.table.return_value.insert.call_args_list
-        offer_inserts = [c for c in all_insert_calls if isinstance(c[0][0], list)]
-        offer_rows = offer_inserts[0][0][0]
+        offer_rows = _offer_upsert_calls(sb)[0][0][0]
         assert offer_rows[0]["unit_price_value"] == pytest.approx(31.19)
         assert offer_rows[0]["unit_price_unit"] == "kg"
         assert offer_rows[0]["unit_price"] == "31,19 €/kg"
@@ -312,10 +321,7 @@ class TestExtractionServiceErrorPath:
 
             ExtractionService(provider=mock_provider, supabase_factory=lambda: sb).run("flyer-1")
 
-        offer_inserts = [
-            c for c in sb.table.return_value.insert.call_args_list if isinstance(c[0][0], list)
-        ]
-        assert len(offer_inserts) == 1
+        assert len(_offer_upsert_calls(sb)) == 1
         error_payloads = [
             c[0][0] for c in sb.table.return_value.update.call_args_list if c[0][0].get("status") == "error"
         ]
@@ -406,10 +412,7 @@ class TestExtractionServiceErrorPath:
 
             ExtractionService(provider=mock_provider, supabase_factory=lambda: sb).run("flyer-1")
 
-        offer_inserts = [
-            c for c in sb.table.return_value.insert.call_args_list if isinstance(c[0][0], list)
-        ]
-        assert len(offer_inserts) == 1
+        assert len(_offer_upsert_calls(sb)) == 1
         done_payloads = [
             c[0][0] for c in sb.table.return_value.update.call_args_list if c[0][0].get("status") == "done"
         ]
@@ -494,10 +497,7 @@ class TestExtractionServiceErrorPath:
 
             ExtractionService(provider=mock_provider, supabase_factory=lambda: sb).run("flyer-1")
 
-        offer_inserts = [
-            c for c in sb.table.return_value.insert.call_args_list if isinstance(c[0][0], list)
-        ]
-        assert len(offer_inserts) == 1
+        assert len(_offer_upsert_calls(sb)) == 1
         done_payloads = [
             c[0][0] for c in sb.table.return_value.update.call_args_list if c[0][0].get("status") == "done"
         ]
@@ -559,7 +559,7 @@ class TestExtractionServiceSubcategoryPersisted:
             svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
             svc.run("flyer-1")
 
-        upsert_calls = sb.table.return_value.upsert.call_args_list
+        upsert_calls = _product_upsert_calls(sb)
         assert upsert_calls, "Expected at least one product upsert"
         product_row = upsert_calls[0][0][0][0]
         assert product_row.get("subcategory") == "Conserve Ittiche e di Carne"
@@ -570,11 +570,27 @@ class TestExtractionServiceSubcategoryPersisted:
         assert "price_offer" not in product_row
 
         # Verify format is persisted on the offer row instead
-        insert_calls = sb.table.return_value.insert.call_args_list
-        assert insert_calls, "Expected at least one offer insert"
-        offer_row = insert_calls[0][0][0][0]
+        offer_calls = _offer_upsert_calls(sb)
+        assert offer_calls, "Expected at least one offer upsert"
+        offer_row = offer_calls[0][0][0][0]
         assert offer_row.get("format_key")
         assert offer_row.get("format_label") == "2x80 g"
+
+    def test_duplicate_offer_conflict_keys_are_sent_once(self):
+        with patch("services.extraction.service.get_provider", return_value=MagicMock()):
+            from services.extraction.service import ExtractionService
+
+            svc = ExtractionService()
+
+        rows = [
+            {"product_id": "prod-1", "flyer_id": "flyer-1", "format_key": "v1:500g", "price_offer": 1.29},
+            {"product_id": "prod-1", "flyer_id": "flyer-1", "format_key": "v1:500g", "price_offer": 1.49},
+            {"product_id": "prod-1", "flyer_id": "flyer-1", "format_key": "v1:1kg", "price_offer": 2.49},
+        ]
+
+        unique_rows = svc._deduplicate_offer_rows(rows)
+
+        assert unique_rows == [rows[0], rows[2]]
 
     def test_batch_upsert_is_used_for_multiple_products(self):
         sb = _make_sb(
@@ -623,7 +639,7 @@ class TestExtractionServiceSubcategoryPersisted:
             svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
             svc.run("flyer-1")
 
-        upsert_calls = sb.table.return_value.upsert.call_args_list
+        upsert_calls = _product_upsert_calls(sb)
         assert len(upsert_calls) == 1
         batch_payload = upsert_calls[0][0][0]
         assert isinstance(batch_payload, list)
@@ -895,8 +911,7 @@ class TestExtractionServiceSubcategoryPersisted:
         assert done_calls, "Expected flyer to complete despite incomplete format"
 
         # format lives on offers, not products
-        insert_calls = sb.table.return_value.insert.call_args_list
-        offer_row = insert_calls[0][0][0][0]
+        offer_row = _offer_upsert_calls(sb)[0][0][0][0]
         assert offer_row["format"] == {"tipo": "confezione_singola"}
         assert offer_row["format_label"] == ""
 

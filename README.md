@@ -173,19 +173,19 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 
 ### Contratto formato prodotto
 
-- `products.format` non e più una stringa: è `JSONB` strutturato.
-- Ogni prodotto canonico salva:
+- `format` non è più una stringa: è un JSON strutturato salvato sulle righe `offers`.
+- Ogni offerta salva:
   - `format`: oggetto canonico compatto, senza campi `null` o default inutili
   - `format_key`: chiave canonica deterministica derivata da `format`
   - `format_label`: label leggibile derivata da `format`
-- Identità prodotto canonico: `name + brand + format_key`.
+- Identità prodotto canonico: `name + brand`.
 - `format_label` è solo display/search aid. Non definisce unicità.
 - Le API pubbliche e admin restituiscono sempre sia `format` sia `format_label`.
 - Le API admin e draft-offer accettano solo `format` strutturato. Il backend rifiuta `format` testuale legacy.
 - Il provider LLM deve emettere un `format` strutturato sparso: solo `tipo` e campi pertinenti, senza `null` superflui. Il backend resta source of truth per canonicalizzazione e compattazione.
 - `format.varianti` è consentito solo in input estrazione LLM: il backend lo espande in prodotti/offerte distinti prima dell'upsert. Nessun prodotto persistito rappresenta un parent con varianti miste.
 - Matching fuzzy/optimizer usa `name`, `brand`, `format_label`; mai JSON raw.
-- Durante l'estrazione il backend deduplica prima in memoria su `(name, brand, format_key)`, fa batch upsert dei prodotti unici del volantino e registra timing per `provider`, `varianti`, `normalizzazione`, `dedupe`, `upsert prodotti`, `insert offerte`.
+- Durante l'estrazione il backend deduplica prima in memoria su `(name, brand)`, fa batch upsert dei prodotti unici del volantino, deduplica le offerte su `(product_id, flyer_id, format_key)` e fa upsert idempotente delle draft offers. Registra timing per `provider`, `varianti`, `normalizzazione`, `dedupe`, `upsert prodotti`, `upsert offerte`.
 - Per PDF multipagina il backend divide il file in chunk PDF rigidi da 3 pagine e invia un chunk per volta a Gemini. Dopo ogni chunk riuscito persiste subito le draft offers di quel chunk e aggiorna `flyers.extraction_metadata` con pagina corrente, percentuale, `last_completed_chunk` e `next_chunk_*`, così il frontend può mostrare avanzamento live durante il polling e review parziale.
 - Se un chunk fallisce dopo i retry, il flyer passa a `status='error'`, ma le draft offers dei chunk già riusciti restano salvate. `flyers.extraction_metadata` espone `resume_available`, `failed_chunk_*`, `next_chunk_*` e `partial_products_count`; una nuova `POST /flyers/{flyer_id}/extract` riparte dal primo chunk non completato correttamente senza duplicare le offerte già persistite. La ripresa si basa su `extraction_metadata` persistito, non sullo `status` transitorio del flyer mentre il retry è già tornato a `processing`.
 - Quando Gemini fallisce o va in retry, backend logga anche contesto strutturato se disponibile: tipo eccezione, `code`, `status`, `message`, HTTP status/body e request id. Stesso dettaglio finisce in `retry_errors` dentro `extraction_log`.
@@ -336,7 +336,7 @@ Frontend
     → scarica file
     → Gemini estrae prodotti
     → normalizza prodotti
-    → upsert products + insert offers con is_confirmed=false
+    → upsert products + upsert draft offers con is_confirmed=false
     → aggiorna status → 'done'
                          │
                          ▼

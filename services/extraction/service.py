@@ -470,15 +470,16 @@ class ExtractionService:
             supermarket_id,
             supermarket_name,
         )
-        if offer_rows:
+        unique_offer_rows = self._deduplicate_offer_rows(offer_rows)
+        if unique_offer_rows:
             sb.table("offers").upsert(  # type: ignore[union-attr]
-                offer_rows,
+                unique_offer_rows,
                 on_conflict="product_id,flyer_id,format_key",
                 ignore_duplicates=True,
             ).execute()
         runtime["offer_insert_seconds"] += time.perf_counter() - offer_insert_started_at
-        runtime["products_saved_count"] += len(offer_rows)
-        return len(offer_rows)
+        runtime["products_saved_count"] += len(unique_offer_rows)
+        return len(unique_offer_rows)
 
     def _conflict_key(self, row: dict) -> tuple[str, str | None]:
         return (row["name"], row.get("brand"))
@@ -598,6 +599,16 @@ class ExtractionService:
             product_id = product_ids[key]
             offer_rows.append(self._build_offer_row(product_id, p, flyer, supermarket_id, supermarket_name))
         return offer_rows
+
+    def _deduplicate_offer_rows(self, offer_rows: list[dict]) -> list[dict]:
+        seen: set[tuple[str, str | None, str]] = set()
+        unique: list[dict] = []
+        for row in offer_rows:
+            key = (row["product_id"], row.get("flyer_id"), row["format_key"])
+            if key not in seen:
+                seen.add(key)
+                unique.append(row)
+        return unique
 
     def _format_metric_totals(self, expanded_products: list[dict]) -> tuple[float, float, int]:
         compact_total = 0.0

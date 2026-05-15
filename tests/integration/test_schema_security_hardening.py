@@ -227,6 +227,32 @@ def test_list_rpcs_are_not_security_definer():
     ]
 
 
+def test_offers_product_flyer_format_unique_index_is_not_partial():
+    rows = _fetch_all(
+        """
+        SELECT
+          i.indisunique AS is_unique,
+          pg_get_indexdef(i.indexrelid) AS index_def,
+          pg_get_expr(i.indpred, i.indrelid) AS predicate
+        FROM pg_index i
+        JOIN pg_class idx ON idx.oid = i.indexrelid
+        JOIN pg_class tbl ON tbl.oid = i.indrelid
+        JOIN pg_namespace n ON n.oid = tbl.relnamespace
+        WHERE n.nspname = 'public'
+          AND tbl.relname = 'offers'
+          AND idx.relname = 'idx_offers_product_flyer_format'
+        """
+    )
+
+    assert rows == [
+        {
+            "is_unique": True,
+            "index_def": "CREATE UNIQUE INDEX idx_offers_product_flyer_format ON public.offers USING btree (product_id, flyer_id, format_key)",
+            "predicate": None,
+        }
+    ]
+
+
 def test_auth_signup_trigger_creates_profile_and_default_list():
     user_id = str(uuid.uuid4())
     conn = psycopg2.connect(_db_dsn())
