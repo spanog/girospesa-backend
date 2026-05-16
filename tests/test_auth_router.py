@@ -103,3 +103,48 @@ def test_logout_clears_cookie(client):
     assert response.status_code == 204
     set_cookie = response.headers.get("set-cookie", "")
     assert "girospesa_session" in set_cookie
+
+
+# ---------------------------------------------------------------------------
+# signup
+# ---------------------------------------------------------------------------
+
+_SIGNUP_BODY = {
+    "first_name": "Mario",
+    "last_name": "Rossi",
+    "email": "mario@example.com",
+    "password": "Password123!",
+    "home_address": "Via Roma 1",
+    "home_city": "Milano",
+    "home_province": "MI",
+    "home_postal_code": "20100",
+}
+
+
+def test_signup_calls_backend_only_flow(client, monkeypatch):
+    signup_calls: list[object] = []
+    monkeypatch.setattr(
+        _auth_router,
+        "signup_user",
+        lambda body: signup_calls.append(body),
+    )
+
+    response = client.post("/auth/signup", json=_SIGNUP_BODY)
+
+    assert response.status_code == 201
+    assert len(signup_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# reset-password
+# ---------------------------------------------------------------------------
+
+def test_reset_password_requires_backend_recovery_token(client):
+    _session_mod.read_session_token.return_value = None  # bad token → None
+
+    response = client.post("/auth/reset-password", json={
+        "recovery_token": "bad-token",
+        "password": "Password123!",
+    })
+
+    assert response.status_code == 400

@@ -1,8 +1,9 @@
-"""Backend auth router — BFF for frontend login/logout/session."""
+"""Backend auth router — BFF for frontend login/logout/session/signup/reset."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from core.config import settings
@@ -13,6 +14,8 @@ from core.session import (
     read_session_token,
     set_session_cookie,
 )
+
+_PASSWORD_RESET_TTL_SECONDS = 15 * 60  # 15-minute recovery window
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -85,3 +88,135 @@ async def session(request: Request) -> dict:
 @router.post("/logout", status_code=204, response_model=None)
 async def logout(response: Response) -> None:
     clear_session_cookie(response)
+
+
+# ---------------------------------------------------------------------------
+# Signup
+# ---------------------------------------------------------------------------
+
+class SignupBody(BaseModel):
+    first_name: str
+    last_name: str
+    email: str
+    password: str
+    home_address: str
+    home_city: str
+    home_province: str
+    home_postal_code: str
+
+
+def signup_user(body: SignupBody) -> None:
+    """Register a new user via Supabase Auth and trigger profile DB setup."""
+    sb = get_supabase()
+    try:
+        sb.auth.sign_up(
+            {
+                "email": body.email,
+                "password": body.password,
+                "options": {
+                    "data": {
+                        "first_name": body.first_name,
+                        "last_name": body.last_name,
+                        "home_address": body.home_address,
+                        "home_city": body.home_city,
+                        "home_province": body.home_province,
+                        "home_postal_code": body.home_postal_code,
+                    }
+                },
+            }
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Signup failed") from exc
+
+
+@router.post("/signup", status_code=201)
+async def signup(body: SignupBody) -> dict:
+    signup_user(body)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Forgot password
+# ---------------------------------------------------------------------------
+
+class ForgotPasswordBody(BaseModel):
+    email: str
+
+
+def send_password_reset(email: str) -> None:
+    """Send a password-reset email via Supabase — never leaks whether email exists."""
+    sb = get_supabase()
+    try:
+        redirect_to = f"{settings.frontend_url}/auth/callback"
+        sb.auth.reset_password_email(email, {"redirect_to": redirect_to})
+    except Exception:
+        pass
+
+
+@router.post("/forgot-password", status_code=204, response_model=None)
+async def forgot_password(body: ForgotPasswordBody) -> None:
+    send_password_reset(body.email)
+
+
+# ---------------------------------------------------------------------------
+# Auth callback (Supabase → backend recovery token)
+# ---------------------------------------------------------------------------
+
+@router.get("/callback")
+async def auth_callback(
+    token_hash: str,
+    type: str,
+    next: str | None = None,
+) -> RedirectResponse:
+    """Exchange a Supabase token_hash for a short-lived backend recovery token.
+
+    Only the 'recovery' type is supported.  For other types, redirect to the
+    home page without issuing a recovery token.
+    """
+    if type != "recovery":
+        return RedirectResponse(url=settings.frontend_url, status_code=302)
+
+    sb = get_supabase()
+    try:
+        result = sb.auth.verify_otp({"token_hash": token_hash, "type": "recovery"})
+        user = result.user
+        if not user:
+            raise ValueError("No user returned from OTP verification")
+    except Exception:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/link-scaduto",
+            status_code=302,
+        )
+
+    recovery_token = create_session_token(
+        {"sub": user.id, "purpose": "password_reset"},
+        lifetime_seconds=_PASSWORD_RESET_TTL_SECONDS,
+    )
+    redirect_to = next or f"{settings.frontend_url}/reimposta-password"
+    return RedirectResponse(
+        url=f"{redirect_to}?token={recovery_token}",
+        status_code=302,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reset password
+# ---------------------------------------------------------------------------
+
+class ResetPasswordBody(BaseModel):
+    recovery_token: str
+    password: str
+
+
+@router.post("/reset-password", status_code=204, response_model=None)
+async def reset_password(body: ResetPasswordBody) -> None:
+    payload = read_session_token(body.recovery_token)
+    if not payload or payload.get("purpose") != "password_reset":
+        raise HTTPException(status_code=400, detail="Invalid or expired recovery token")
+
+    user_id: str = payload["sub"]
+    sb = get_supabase()
+    try:
+        sb.auth.admin.update_user_by_id(user_id, {"password": body.password})
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Password reset failed") from exc
