@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import importlib
 import os
 import sys
+from unittest.mock import MagicMock
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# Restore real jose and reimport core.session if another test file installed
+# module-level mocks (e.g. test_auth_manager.py stubs jose globally).
+for _jose_key in ["jose", "jose.jwt", "jose.exceptions", "jose.backends"]:
+    if isinstance(sys.modules.get(_jose_key), MagicMock):
+        del sys.modules[_jose_key]
+for _sess_key in [k for k in list(sys.modules) if k.startswith("core.session")]:
+    del sys.modules[_sess_key]
 
 import core.session as session
 

@@ -22,6 +22,14 @@ _config_mod.settings = MagicMock()  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
 
+# Stub core.session so it is never imported with mocked jose (which would
+# pollute test_backend_session.py when both files run in the same session).
+_session_mod = types.ModuleType("core.session")
+_session_mod.read_session_token = MagicMock(return_value=None)  # type: ignore[attr-defined]
+_session_mod.set_session_cookie = MagicMock()  # type: ignore[attr-defined]
+_session_mod.clear_session_cookie = MagicMock()  # type: ignore[attr-defined]
+sys.modules["core.session"] = _session_mod
+
 # Force reload core.auth so we always get the real module, not a stub
 # placed by another test file earlier in the session.
 if "core.auth" in sys.modules:
@@ -117,3 +125,53 @@ class TestAssertFlyerAccess:
         with pytest.raises(HTTPException) as exc_info:
             _auth_module.assert_flyer_access(profile, flyer)
         assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Cookie session auth
+# ---------------------------------------------------------------------------
+
+class TestCookieAuth:
+    def test_cookie_session_authenticates_user(self, monkeypatch):
+        from fastapi import FastAPI, Depends
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(
+            _auth_module,
+            "read_session_token",
+            lambda token: {"sub": "user-1", "email": "mario@example.com", "role": "customer"},
+        )
+
+        app = FastAPI()
+
+        @app.get("/protected")
+        async def protected(user_id: str = Depends(_auth_module.get_current_user_id)):
+            return {"user_id": user_id}
+
+        client = TestClient(app)
+        response = client.get("/protected", cookies={"girospesa_session": "any-token"})
+
+        assert response.status_code == 200
+        assert response.json() == {"user_id": "user-1"}
+
+    def test_bearer_compatibility_still_works(self, monkeypatch):
+        _config_mod.settings.supabase_jwt_secret = "secret"
+        decode = MagicMock(return_value={"sub": "bearer-user"})
+        header = MagicMock(return_value={"alg": "HS256"})
+        monkeypatch.setattr(_auth_module.jwt, "decode", decode)
+        monkeypatch.setattr(_auth_module.jwt, "get_unverified_header", header)
+
+        from fastapi import FastAPI, Depends
+        from fastapi.testclient import TestClient
+
+        app = FastAPI()
+
+        @app.get("/protected")
+        async def protected(user_id: str = Depends(_auth_module.get_current_user_id)):
+            return {"user_id": user_id}
+
+        client = TestClient(app)
+        response = client.get("/protected", headers={"Authorization": "Bearer test-token"})
+
+        assert response.status_code == 200
+        assert response.json() == {"user_id": "bearer-user"}

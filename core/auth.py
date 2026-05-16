@@ -1,6 +1,6 @@
 """
 JWT authentication for FastAPI routes.
-Verifies Supabase-issued JWTs using the project's JWT secret.
+Verifies backend session cookies first, then falls back to Supabase-issued JWTs.
 """
 
 from __future__ import annotations
@@ -10,11 +10,14 @@ import time
 from urllib.request import urlopen
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from core.config import settings
+from core.session import read_session_token
+
+_COOKIE_NAME = "girospesa_session"
 
 _bearer = HTTPBearer()
 _optional_bearer = HTTPBearer(auto_error=False)
@@ -58,9 +61,21 @@ def _decode_token(token: str) -> dict:
 
 
 async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)],
+    session_cookie: Annotated[str | None, Cookie(alias=_COOKIE_NAME)] = None,
 ) -> dict:
-    """Dependency: resolves to the decoded JWT payload (user_id at payload['sub'])."""
+    """Dependency: resolves to the decoded JWT payload (user_id at payload['sub']).
+
+    Checks backend session cookie first; falls back to Supabase Bearer JWT.
+    """
+    if session_cookie:
+        payload = read_session_token(session_cookie)
+        if payload:
+            return payload
+
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
     return _decode_token(credentials.credentials)
 
 
