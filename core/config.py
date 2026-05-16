@@ -1,3 +1,4 @@
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,9 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_service_role_key: str
     supabase_jwt_secret: str
+    app_session_secret: str
+    app_session_cookie_name: str = "girospesa_session"
+    app_session_ttl_seconds: int = Field(default=60 * 60 * 24 * 7, gt=0)
     database_url: str = ""
     db_dsn: str = ""
     admin_email: str = ""
@@ -33,6 +37,14 @@ class Settings(BaseSettings):
     # Product fuzzy deduplication thresholds (pre-upsert similarity check)
     product_name_similarity_threshold: float = 0.85   # rapidfuzz partial_ratio / 100
     product_brand_similarity_threshold: float = 0.90  # rapidfuzz ratio / 100 (after diacritic normalization)
+
+    @field_validator("app_session_secret")
+    @classmethod
+    def validate_app_session_secret(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("app_session_secret must not be empty")
+        return normalized
 
 
 
