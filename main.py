@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routers import (
     admin_products,
     analytics,
+    auth,
     favorites,
     flyer_requests,
     flyers,
@@ -70,6 +71,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(favorites.router, prefix="/favorites", tags=["favorites"])
 app.include_router(flyers.router, prefix="/flyers", tags=["flyers"])
 app.include_router(products.router, prefix="/products", tags=["products"])
