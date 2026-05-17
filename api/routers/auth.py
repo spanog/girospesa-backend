@@ -15,7 +15,7 @@ from core.session import (
     set_session_cookie,
 )
 
-_PASSWORD_RESET_TTL_SECONDS = 15 * 60  # 15-minute recovery window
+_PASSWORD_RESET_TTL_SECONDS = 60 * 60  # 1-hour recovery window
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -78,10 +78,21 @@ async def session(request: Request) -> dict:
     if not payload:
         return {"authenticated": False}
 
+    user_id: str = payload["sub"]
+    sb = get_supabase()
+    profile_resp = (
+        sb.table("user_profiles")
+        .select("*")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    profile = profile_resp.data if profile_resp else None
+
     return {
         "authenticated": True,
         "user": {"id": payload["sub"], "email": payload["email"]},
-        "profile": {"role": payload["role"]},
+        "profile": profile,
     }
 
 
@@ -147,7 +158,7 @@ def send_password_reset(email: str) -> None:
     """Send a password-reset email via Supabase — never leaks whether email exists."""
     sb = get_supabase()
     try:
-        redirect_to = f"{settings.frontend_url}/auth/callback"
+        redirect_to = f"{settings.backend_url}/auth/callback"
         sb.auth.reset_password_email(email, {"redirect_to": redirect_to})
     except Exception:
         pass
@@ -187,12 +198,21 @@ async def auth_callback(
             url=f"{settings.frontend_url}/link-scaduto",
             status_code=302,
         )
+    finally:
+        # verify_otp stores a user session on the singleton client, which would
+        # cause subsequent service-role admin calls to fail with 403.
+        # Sign out to clear the cached session so the client reverts to the
+        # service-role key for all future requests.
+        try:
+            sb.auth.sign_out()
+        except Exception:
+            pass
 
     recovery_token = create_session_token(
         {"sub": user.id, "purpose": "password_reset"},
         lifetime_seconds=_PASSWORD_RESET_TTL_SECONDS,
     )
-    redirect_to = next or f"{settings.frontend_url}/reimposta-password"
+    redirect_to = next or f"{settings.frontend_url}/reset-password"
     return RedirectResponse(
         url=f"{redirect_to}?token={recovery_token}",
         status_code=302,

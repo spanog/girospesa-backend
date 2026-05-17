@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
+    backend_url: str = "http://localhost:8000"
 
     # Product fuzzy deduplication thresholds (pre-upsert similarity check)
     product_name_similarity_threshold: float = 0.85   # rapidfuzz partial_ratio / 100

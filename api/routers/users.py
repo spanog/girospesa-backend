@@ -164,6 +164,20 @@ async def upload_avatar(
     return {"avatar_url": avatar_url}
 
 
+class UpdatePasswordBody(BaseModel):
+    password: str = Field(min_length=8)
+
+
+@router.post("/me/password", status_code=204)
+async def update_password(
+    body: UpdatePasswordBody,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> Response:
+    sb = get_supabase()
+    sb.auth.admin.update_user_by_id(user_id, {"password": body.password})
+    return Response(status_code=204)
+
+
 @router.delete("/me", status_code=204)
 async def delete_account(user_id: Annotated[str, Depends(get_current_user_id)]) -> Response:
     """Permanently delete the authenticated user's account and all their data."""

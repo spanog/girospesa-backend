@@ -94,6 +94,28 @@ def test_session_returns_guest_without_cookie(client):
     assert response.json() == {"authenticated": False}
 
 
+def test_session_with_cookie_fetches_full_profile(client, monkeypatch):
+    _session_mod.read_session_token.return_value = {
+        "sub": "user-1",
+        "email": "mario@example.com",
+        "role": "customer",
+    }
+    fake_profile = {"id": "user-1", "display_name": "Mario Rossi", "role": "customer"}
+    fake_sb = MagicMock()
+    fake_sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = fake_profile
+    monkeypatch.setattr(_auth_router, "get_supabase", lambda: fake_sb)
+
+    response = client.get("/auth/session", cookies={"girospesa_session": "valid-token"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["authenticated"] is True
+    assert body["user"] == {"id": "user-1", "email": "mario@example.com"}
+    assert body["profile"]["display_name"] == "Mario Rossi"
+
+    _session_mod.read_session_token.return_value = None  # restore default
+
+
 # ---------------------------------------------------------------------------
 # logout
 # ---------------------------------------------------------------------------

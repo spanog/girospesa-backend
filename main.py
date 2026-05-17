@@ -3,6 +3,7 @@ from core.runtime import ensure_supported_python
 ensure_supported_python()
 
 import logging
+import socket
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -35,6 +36,19 @@ from services.purchased_items_cleanup import PurchasedItemsCleanupService
 logger = logging.getLogger(__name__)
 
 
+def _dev_extra_origins(frontend_port: int = 3000) -> list[str]:
+    extras = [f"http://127.0.0.1:{frontend_port}"]
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            lan_ip = s.getsockname()[0]
+        if not lan_ip.startswith("127."):
+            extras.append(f"http://{lan_ip}:{frontend_port}")
+    except Exception:
+        pass
+    return extras
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler()
@@ -63,9 +77,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_allow_origins = ["http://localhost:3000", settings.frontend_url]
+if settings.environment != "production":
+    _allow_origins.extend(_dev_extra_origins())
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", settings.frontend_url],
+    allow_origins=list(dict.fromkeys(_allow_origins)),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
