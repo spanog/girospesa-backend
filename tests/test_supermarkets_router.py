@@ -357,3 +357,82 @@ async def test_update_logo_deletes_old_file_when_present():
 
     assert resp.status_code == 200
     sb.storage.from_.return_value.remove.assert_called_once_with(["sm-1.jpg"])
+
+
+# ---------------------------------------------------------------------------
+# PATCH /supermarkets/{id} (info update) helpers
+# ---------------------------------------------------------------------------
+
+async def _patch_info(url: str, data: dict) -> httpx.Response:
+    test_app.dependency_overrides = {_DEP_REQUIRE_ADMIN: _admin_dep}
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.patch(url, json=data)
+
+
+async def _patch_info_denied(url: str, data: dict) -> httpx.Response:
+    test_app.dependency_overrides = {_DEP_REQUIRE_ADMIN: _deny_dep}
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.patch(url, json=data)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /supermarkets/{id} (info update) tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_update_supermarket_requires_admin():
+    resp = await _patch_info_denied("/supermarkets/sm-1", {"name": "Nuovo Nome"})
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_supermarket_not_found():
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=None)
+    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+        resp = await _patch_info("/supermarkets/nonexistent", {"name": "X"})
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_supermarket_success():
+    existing = {"id": "sm-1"}
+    updated_row = {"id": "sm-1", "name": "Nuovo Nome", "address": "Via Nuova 1", "city": "Roma", "province": "RM", "postal_code": "00100", "logo_url": None}
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=existing)
+    sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[updated_row])
+    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+        resp = await _patch_info("/supermarkets/sm-1", {"name": "Nuovo Nome", "address": "Via Nuova 1", "city": "Roma", "province": "RM", "postal_code": "00100"})
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Nuovo Nome"
+
+
+@pytest.mark.asyncio
+async def test_update_supermarket_empty_body_returns_current():
+    current_row = {"id": "sm-1", "name": "Esistente", "logo_url": None}
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=current_row)
+    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+        resp = await _patch_info("/supermarkets/sm-1", {})
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Esistente"
+
+
+@pytest.mark.asyncio
+async def test_update_supermarket_geocodes_when_address_changes():
+    existing = {"id": "sm-1"}
+    updated_row = {"id": "sm-1", "name": "Test", "lat": 41.9, "lng": 12.5}
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=existing)
+    sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[updated_row])
+    _settings_obj.geocoding_provider = "nominatim"
+    try:
+        with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+            with patch("api.routers.supermarkets.geocode_address", return_value=(41.9, 12.5)) as mock_geo:
+                resp = await _patch_info("/supermarkets/sm-1", {"address": "Via Roma 1", "city": "Roma"})
+    finally:
+        _settings_obj.geocoding_provider = "disabled"
+    assert resp.status_code == 200
+    mock_geo.assert_called_once()

@@ -2,6 +2,7 @@ import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from pydantic import BaseModel
 
 from core.auth import require_admin
 from core.config import settings
@@ -10,6 +11,16 @@ from services.geocoding import geocode_address
 from services.offer_visibility import apply_current_offer_window
 
 router = APIRouter()
+
+
+class SupermarketUpdate(BaseModel):
+    name: str | None = None
+    address: str | None = None
+    city: str | None = None
+    province: str | None = None
+    postal_code: str | None = None
+    lat: float | None = None
+    lng: float | None = None
 
 ALLOWED_LOGO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_LOGO_SIZE = 2 * 1024 * 1024  # 2 MB
@@ -162,6 +173,54 @@ async def create_supermarket(
         sb.table("supermarkets")
         .update({"logo_url": logo_url})
         .eq("id", sm_id)
+        .execute()
+    )
+    return updated.data[0]
+
+
+@router.patch("/{supermarket_id}")
+async def update_supermarket(
+    supermarket_id: str,
+    body: SupermarketUpdate,
+    _admin: Annotated[dict, Depends(require_admin)] = None,
+) -> dict:
+    """Update supermarket info fields. Admin only."""
+    sb = get_supabase()
+    result = (
+        sb.table("supermarkets")
+        .select("id")
+        .eq("id", supermarket_id)
+        .maybe_single()
+        .execute()
+    )
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Supermarket not found")
+
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        current = (
+            sb.table("supermarkets")
+            .select("*")
+            .eq("id", supermarket_id)
+            .maybe_single()
+            .execute()
+        )
+        return current.data
+
+    if "address" in updates and updates.get("lat") is None and settings.geocoding_provider == "nominatim":
+        address = updates.get("address", "")
+        city = updates.get("city", "")
+        province = updates.get("province", "")
+        postal_code = updates.get("postal_code", "")
+        full_addr = ", ".join(p for p in [address, postal_code, city, province] if p)
+        coords = geocode_address(full_addr)
+        if coords:
+            updates["lat"], updates["lng"] = coords
+
+    updated = (
+        sb.table("supermarkets")
+        .update(updates)
+        .eq("id", supermarket_id)
         .execute()
     )
     return updated.data[0]
