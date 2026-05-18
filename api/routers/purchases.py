@@ -48,6 +48,7 @@ class PurchaseRecord(BaseModel):
 
 class SavingsSummary(BaseModel):
     total_savings: float
+    total_spend: float
     total_purchases: int
     period_days: int
     records: list[PurchaseRecord]
@@ -239,6 +240,7 @@ async def get_history(
 
     return SavingsSummary(
         total_savings=round(sum(r.savings for r in records), 2),
+        total_spend=round(sum(r.price_paid for r in records), 2),
         total_purchases=len(records),
         period_days=days,
         records=records,
