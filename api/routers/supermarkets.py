@@ -13,7 +13,7 @@ router = APIRouter()
 
 ALLOWED_LOGO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_LOGO_SIZE = 2 * 1024 * 1024  # 2 MB
-_LOGO_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+LOGO_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 
 
 def _nearby_supermarkets(sb, lat: float, lng: float, max_distance_km: float) -> list[dict]:
@@ -86,6 +86,24 @@ async def list_supermarkets(
     return resp.data
 
 
+def _upload_logo(sb, sm_id: str, logo_content: bytes, content_type: str) -> str:
+    """Upload logo to storage and return public URL. Raises HTTP 500 on failure."""
+    ext = LOGO_EXT[content_type]
+    storage_path = f"{sm_id}.{ext}"
+    try:
+        sb.storage.from_("logos").upload(
+            path=storage_path,
+            file=logo_content,
+            file_options={"content-type": content_type},
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Logo upload failed",
+        )
+    return sb.storage.from_("logos").get_public_url(storage_path)
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_supermarket(
     name: Annotated[str, Form()],
@@ -99,7 +117,7 @@ async def create_supermarket(
     _admin: Annotated[dict, Depends(require_admin)] = None,
 ) -> dict:
     """Create a new supermarket branch with required logo. Admin only."""
-    if logo.content_type not in ALLOWED_LOGO_TYPES:
+    if not logo.content_type or logo.content_type not in ALLOWED_LOGO_TYPES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Unsupported logo type: {logo.content_type}",
@@ -108,11 +126,11 @@ async def create_supermarket(
     if len(logo_content) > MAX_LOGO_SIZE:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Logo exceeds 2 MB limit",
+            detail=f"Logo exceeds {MAX_LOGO_SIZE // (1024 * 1024)} MB limit",
         )
 
     if lat is None and address and settings.geocoding_provider == "nominatim":
-        full_addr = f"{address}, {postal_code} {city} {province}".strip()
+        full_addr = ", ".join(p for p in [address, postal_code, city, province] if p)
         coords = geocode_address(full_addr)
         if coords:
             lat, lng = coords
@@ -134,22 +152,12 @@ async def create_supermarket(
     sm = resp.data[0]
     sm_id = sm["id"]
 
-    ext = _LOGO_EXT[logo.content_type]
-    storage_path = f"{sm_id}.{ext}"
     try:
-        sb.storage.from_("logos").upload(
-            path=storage_path,
-            file=logo_content,
-            file_options={"content-type": logo.content_type},
-        )
-    except Exception:
+        logo_url = _upload_logo(sb, sm_id, logo_content, logo.content_type)
+    except HTTPException:
         sb.table("supermarkets").delete().eq("id", sm_id).execute()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Logo upload failed; supermarket creation rolled back",
-        )
+        raise
 
-    logo_url = sb.storage.from_("logos").get_public_url(storage_path)
     updated = (
         sb.table("supermarkets")
         .update({"logo_url": logo_url})
