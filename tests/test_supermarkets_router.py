@@ -89,6 +89,22 @@ async def _post_form_denied(url: str, data: dict) -> httpx.Response:
         return await client.post(url, data=data, files=files)
 
 
+async def _patch_logo(url: str, logo: tuple | None = None) -> httpx.Response:
+    test_app.dependency_overrides = {_DEP_REQUIRE_ADMIN: _admin_dep}
+    files = {"logo": logo or _logo_file()}
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.patch(url, files=files)
+
+
+async def _patch_logo_denied(url: str) -> httpx.Response:
+    test_app.dependency_overrides = {_DEP_REQUIRE_ADMIN: _deny_dep}
+    files = {"logo": _logo_file()}
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.patch(url, files=files)
+
+
 # ---------------------------------------------------------------------------
 # GET tests
 # ---------------------------------------------------------------------------
@@ -259,3 +275,85 @@ async def test_create_supermarket_logo_upload_failure_rolls_back():
 
     assert resp.status_code == 500
     sb.table.return_value.delete.return_value.eq.return_value.execute.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# PATCH /supermarkets/{id}/logo tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_update_logo_requires_admin():
+    resp = await _patch_logo_denied("/supermarkets/sm-1/logo")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_logo_not_found():
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=None)
+
+    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+        resp = await _patch_logo("/supermarkets/nonexistent/logo")
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_logo_wrong_type_rejected():
+    resp = await _patch_logo(
+        "/supermarkets/sm-1/logo",
+        logo=("logo.gif", io.BytesIO(b"GIF89a"), "image/gif"),
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_logo_too_large_rejected():
+    big_content = b"\xff\xd8\xff" + b"x" * (2 * 1024 * 1024 + 1)
+    resp = await _patch_logo(
+        "/supermarkets/sm-1/logo",
+        logo=("logo.jpg", io.BytesIO(big_content), "image/jpeg"),
+    )
+    assert resp.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_update_logo_success():
+    existing = {"id": "sm-1", "logo_url": None}
+    updated_row = {"id": "sm-1", "name": "Test", "logo_url": "https://example.com/logos/sm-1.jpg"}
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=existing)
+    sb.storage.from_.return_value.upload.return_value = None
+    sb.storage.from_.return_value.get_public_url.return_value = "https://example.com/logos/sm-1.jpg"
+    sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[updated_row])
+
+    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+        resp = await _patch_logo("/supermarkets/sm-1/logo")
+
+    assert resp.status_code == 200
+    assert resp.json()["logo_url"] == "https://example.com/logos/sm-1.jpg"
+
+
+@pytest.mark.asyncio
+async def test_update_logo_deletes_old_file_when_present():
+    old_url = "https://proj.supabase.co/storage/v1/object/public/logos/sm-1.jpg"
+    existing = {"id": "sm-1", "logo_url": old_url}
+    updated_row = {"id": "sm-1", "logo_url": "https://proj.supabase.co/storage/v1/object/public/logos/sm-1.png"}
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=existing)
+    sb.storage.from_.return_value.upload.return_value = None
+    sb.storage.from_.return_value.get_public_url.return_value = updated_row["logo_url"]
+    sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[updated_row])
+
+    _settings_obj.supabase_url = "https://proj.supabase.co"
+    try:
+        with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+            resp = await _patch_logo(
+                "/supermarkets/sm-1/logo",
+                logo=("logo.png", io.BytesIO(b"\x89PNG"), "image/png"),
+            )
+    finally:
+        _settings_obj.supabase_url = MagicMock()
+
+    assert resp.status_code == 200
+    sb.storage.from_.return_value.remove.assert_called_once_with(["sm-1.jpg"])
