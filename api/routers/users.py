@@ -76,13 +76,11 @@ async def update_profile(
             update_data["search_lng"],
         )
 
-    resp = (
-        sb.table("user_profiles")
-        .update(update_data)
-        .eq("id", user_id)
-        .execute()
-    )
-    return resp.data[0]
+    sb.table("user_profiles").update(update_data).eq("id", user_id).execute()
+    profile = sb.table("user_profiles").select("*").eq("id", user_id).single().execute()
+    if not profile.data:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile.data
 
 
 @router.post("/geocode")
