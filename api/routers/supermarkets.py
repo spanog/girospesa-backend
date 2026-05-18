@@ -94,7 +94,7 @@ def _upload_logo(sb, sm_id: str, logo_content: bytes, content_type: str) -> str:
         sb.storage.from_("logos").upload(
             path=storage_path,
             file=logo_content,
-            file_options={"content-type": content_type},
+            file_options={"content-type": content_type, "upsert": "true"},
         )
     except Exception:
         raise HTTPException(
@@ -162,6 +162,56 @@ async def create_supermarket(
         sb.table("supermarkets")
         .update({"logo_url": logo_url})
         .eq("id", sm_id)
+        .execute()
+    )
+    return updated.data[0]
+
+
+@router.patch("/{supermarket_id}/logo")
+async def update_supermarket_logo(
+    supermarket_id: str,
+    logo: Annotated[UploadFile, File()],
+    _admin: Annotated[dict, Depends(require_admin)] = None,
+) -> dict:
+    """Update the logo for an existing supermarket. Admin only."""
+    if not logo.content_type or logo.content_type not in ALLOWED_LOGO_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported logo type: {logo.content_type}",
+        )
+    logo_content = await logo.read()
+    if len(logo_content) > MAX_LOGO_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Logo exceeds {MAX_LOGO_SIZE // (1024 * 1024)} MB limit",
+        )
+
+    sb = get_supabase()
+    result = (
+        sb.table("supermarkets")
+        .select("id, logo_url")
+        .eq("id", supermarket_id)
+        .maybe_single()
+        .execute()
+    )
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Supermarket not found")
+
+    old_logo_url = result.data.get("logo_url")
+    if old_logo_url:
+        prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/logos/"
+        old_path = old_logo_url.removeprefix(prefix)
+        if old_path != old_logo_url:
+            try:
+                sb.storage.from_("logos").remove([old_path])
+            except Exception:
+                pass
+
+    logo_url = _upload_logo(sb, supermarket_id, logo_content, logo.content_type)
+    updated = (
+        sb.table("supermarkets")
+        .update({"logo_url": logo_url})
+        .eq("id", supermarket_id)
         .execute()
     )
     return updated.data[0]
