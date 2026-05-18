@@ -422,7 +422,7 @@ async def test_update_supermarket_empty_body_returns_current():
 
 @pytest.mark.asyncio
 async def test_update_supermarket_geocodes_when_address_changes():
-    existing = {"id": "sm-1"}
+    existing = {"id": "sm-1", "address": "Via Vecchia 1", "city": "Roma", "province": "RM", "postal_code": "00100"}
     updated_row = {"id": "sm-1", "name": "Test", "lat": 41.9, "lng": 12.5}
     sb = MagicMock()
     sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=existing)
@@ -436,3 +436,24 @@ async def test_update_supermarket_geocodes_when_address_changes():
         _settings_obj.geocoding_provider = "disabled"
     assert resp.status_code == 200
     mock_geo.assert_called_once()
+    call_args = mock_geo.call_args[0][0]
+    assert "Via Roma 1" in call_args
+    assert "Roma" in call_args
+
+
+@pytest.mark.asyncio
+async def test_update_supermarket_no_geocode_when_lat_explicitly_provided():
+    existing = {"id": "sm-1", "address": "Via Vecchia 1", "city": "Milano", "province": "MI", "postal_code": "20100"}
+    updated_row = {**existing, "address": "Via Nuova 1", "lat": None, "lng": None}
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=existing)
+    sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[updated_row])
+    _settings_obj.geocoding_provider = "nominatim"
+    try:
+        with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+            with patch("api.routers.supermarkets.geocode_address") as mock_geo:
+                resp = await _patch_info("/supermarkets/sm-1", {"address": "Via Nuova 1", "lat": None})
+    finally:
+        _settings_obj.geocoding_provider = "disabled"
+    assert resp.status_code == 200
+    mock_geo.assert_not_called()

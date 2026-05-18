@@ -188,7 +188,7 @@ async def update_supermarket(
     sb = get_supabase()
     result = (
         sb.table("supermarkets")
-        .select("id")
+        .select("*")
         .eq("id", supermarket_id)
         .maybe_single()
         .execute()
@@ -196,22 +196,16 @@ async def update_supermarket(
     if not result or not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Supermarket not found")
 
+    existing_row = result.data
     updates = body.model_dump(exclude_unset=True)
     if not updates:
-        current = (
-            sb.table("supermarkets")
-            .select("*")
-            .eq("id", supermarket_id)
-            .maybe_single()
-            .execute()
-        )
-        return current.data
+        return existing_row
 
-    if "address" in updates and updates.get("lat") is None and settings.geocoding_provider == "nominatim":
-        address = updates.get("address", "")
-        city = updates.get("city", "")
-        province = updates.get("province", "")
-        postal_code = updates.get("postal_code", "")
+    if "address" in updates and "lat" not in updates and settings.geocoding_provider == "nominatim":
+        address = updates.get("address") or existing_row.get("address", "")
+        city = updates.get("city") or existing_row.get("city", "")
+        province = updates.get("province") or existing_row.get("province", "")
+        postal_code = updates.get("postal_code") or existing_row.get("postal_code", "")
         full_addr = ", ".join(p for p in [address, postal_code, city, province] if p)
         coords = geocode_address(full_addr)
         if coords:
