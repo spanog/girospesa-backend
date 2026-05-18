@@ -17,6 +17,8 @@ from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
 from services.repositories import lists_repository as repo
 from services.extraction.normalizer import format_unit_price_label
 from services.deal_freshness import classify_deal_freshness
+from services.offer_visibility import apply_current_offer_window
+from services.location import load_nearby_distances
 from services.push_notify import PushEndpointGoneError, PushSubscription, send_push_notification
 
 router = APIRouter()
@@ -1263,7 +1265,210 @@ async def get_deal_freshness(
         ).data
         offers_by_id = {row["id"]: row for row in rows}
 
-    return [dict(entry) for entry in classify_deal_freshness(items, offers_by_id)]
+    return [
+        {
+            "item_id": entry["list_item_id"],
+            "item_name": entry["list_item_name"],
+            "staleness": entry["status"],
+            "current_price": entry["current_price"],
+            "snapshot_price": entry["pinned_price"],
+            "pinned_offer_id": entry.get("pinned_offer_id"),
+            "pinned_product_id": entry.get("pinned_product_id"),
+        }
+        for entry in classify_deal_freshness(items, offers_by_id)
+    ]
+
+
+@router.post("/{list_id}/clear-stale-offers")
+async def clear_stale_offers(
+    list_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    """Clear pinned_offer_id and found_deals for expired or unavailable items."""
+    sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
+
+    list_row = (
+        sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
+    )
+    items: list[dict] = list_row.data.get("items") or []
+
+    offer_ids = [item["pinned_offer_id"] for item in items if item.get("pinned_offer_id")]
+    offers_by_id: dict[str, dict] = {}
+    if offer_ids:
+        rows = (
+            sb.table("offers")
+            .select("id, price_offer, valid_to, is_active")
+            .in_("id", offer_ids)
+            .execute()
+        ).data
+        offers_by_id = {row["id"]: row for row in rows}
+
+    freshness = classify_deal_freshness(items, offers_by_id)
+    stale = [f for f in freshness if f["status"] in ("expired", "unavailable")]
+
+    cleared_names: list[str] = []
+    for entry in stale:
+        sb.rpc(
+            "update_list_item",
+            {
+                "p_list_id": list_id,
+                "p_item_id": entry["list_item_id"],
+                "p_updates": {"pinned_offer_id": None, "found_deals": []},
+            },
+        ).execute()
+        cleared_names.append(entry["list_item_name"])
+
+    return {"cleared": len(stale), "cleared_names": cleared_names}
+
+
+@router.get("/{list_id}/savings-suggestions")
+async def get_savings_suggestions(
+    list_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> list[dict]:
+    """Return cheaper alternatives for currently pinned offers."""
+    sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
+
+    list_row = (
+        sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
+    )
+    items: list[dict] = list_row.data.get("items") or []
+
+    candidates = [
+        i for i in items
+        if not i.get("purchased")
+        and i.get("pinned_product_id")
+        and i.get("found_deals")
+    ]
+    if not candidates:
+        return []
+
+    nearby = load_nearby_distances(sb, user_id)
+
+    product_ids = list({i["pinned_product_id"] for i in candidates})
+    offers_q = apply_current_offer_window(
+        sb.table("offers").select(
+            "id, product_id, supermarket_id, price_offer, price_original, "
+            "discount_pct, unit_price, unit_price_value, unit_price_unit, "
+            "valid_to, products(name), supermarkets(name)"
+        )
+    ).eq("is_confirmed", True).in_("product_id", product_ids)
+    all_offers: list[dict] = offers_q.execute().data or []
+
+    suggestions: list[dict] = []
+    for item in candidates:
+        current_deal = item["found_deals"][0]
+        current_price: float = float(current_deal["price_offer"])
+        current_sup_id: str = current_deal["supermarket_id"]
+        product_id: str = item["pinned_product_id"]
+
+        cheaper = [
+            o for o in all_offers
+            if o["product_id"] == product_id
+            and o["supermarket_id"] != current_sup_id
+            and float(o["price_offer"]) < current_price - 0.01
+            and (nearby is None or o["supermarket_id"] in nearby)
+        ]
+        if not cheaper:
+            continue
+
+        best = min(cheaper, key=lambda o: float(o["price_offer"]))
+        store = best.get("supermarkets") or {}
+        suggestions.append({
+            "item_id": item["id"],
+            "item_name": item["name"],
+            "current_offer_id": current_deal["offer_id"],
+            "current_price": current_price,
+            "current_supermarket_name": current_deal.get("supermarket_name", ""),
+            "cheaper_offer_id": best["id"],
+            "cheaper_price": float(best["price_offer"]),
+            "cheaper_supermarket_name": store.get("name", ""),
+            "savings": round(current_price - float(best["price_offer"]), 2),
+        })
+
+    return sorted(suggestions, key=lambda s: s["savings"], reverse=True)
+
+
+@router.get("/{list_id}/items/{item_id}/alternatives")
+async def get_item_alternatives(
+    list_id: str,
+    item_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> list[dict]:
+    """Return alternative active offers for a single list item (on-demand)."""
+    sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
+
+    list_row = (
+        sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
+    )
+    all_items: list[dict] = list_row.data.get("items") or []
+    item = next((i for i in all_items if i["id"] == item_id), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    nearby = load_nearby_distances(sb, user_id)
+
+    _offer_cols = (
+        "id, product_id, supermarket_id, price_offer, price_original, "
+        "discount_pct, unit_price, unit_price_value, unit_price_unit, "
+        "valid_to, format, format_label, "
+        "products(name, brand), supermarkets(name)"
+    )
+
+    if item.get("pinned_product_id"):
+        offers_q = apply_current_offer_window(
+            sb.table("offers").select(_offer_cols)
+        ).eq("is_confirmed", True).eq("product_id", item["pinned_product_id"])
+        raw_offers: list[dict] = offers_q.execute().data or []
+    else:
+        name = item.get("name") or ""
+        if not name:
+            return []
+        rows = sb.rpc("search_products_catalog", {"query": name, "lim": 12}).execute().data or []
+        scores = {row["id"]: float(row.get("score") or 0) for row in rows}
+        if not scores:
+            return []
+        offers_q = apply_current_offer_window(
+            sb.table("offers").select(_offer_cols)
+        ).eq("is_confirmed", True).in_("product_id", list(scores.keys()))
+        raw_offers = offers_q.execute().data or []
+
+    current_offer_id = item.get("pinned_offer_id")
+    filtered = [
+        o for o in raw_offers
+        if o["id"] != current_offer_id
+        and (nearby is None or o["supermarket_id"] in nearby)
+    ]
+
+    filtered.sort(key=lambda o: float(o["price_offer"]))
+
+    return [
+        {
+            "offer_id": o["id"],
+            "product_id": o["product_id"],
+            "brand": (o.get("products") or {}).get("brand"),
+            "name": (o.get("products") or {}).get("name", ""),
+            "format": o.get("format") or {},
+            "format_label": o.get("format_label") or "",
+            "price_offer": float(o["price_offer"]),
+            "price_original": float(o["price_original"]) if o.get("price_original") else None,
+            "discount_pct": o.get("discount_pct"),
+            "unit_price": o.get("unit_price"),
+            "unit_price_value": o.get("unit_price_value"),
+            "unit_price_unit": o.get("unit_price_unit"),
+            "unit_price_label": o.get("unit_price") or format_unit_price_label(
+                o.get("unit_price_value"), o.get("unit_price_unit")
+            ),
+            "supermarket_id": o["supermarket_id"],
+            "supermarket_name": (o.get("supermarkets") or {}).get("name", ""),
+            "valid_to": str(o.get("valid_to") or ""),
+            "is_same_store": False,
+        }
+        for o in filtered[:10]
+    ]
 
 
 @router.delete("/{list_id}/members/{member_user_id}")
