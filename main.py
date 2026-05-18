@@ -22,7 +22,7 @@ from api.routers import (
     lists,
     notifications,
     offers,
-    optimize,
+
     products,
     purchases,
     push,
@@ -97,7 +97,7 @@ app.include_router(supermarkets.router, prefix="/supermarkets", tags=["supermark
 app.include_router(lists.router, prefix="/lists", tags=["lists"])
 app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 app.include_router(invite.router, prefix="/invite", tags=["invite"])
-app.include_router(optimize.router, prefix="/optimize", tags=["optimize"])
+
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 app.include_router(push.router, prefix="/push", tags=["push"])
