@@ -1,8 +1,7 @@
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from core.auth import require_admin
 from core.config import settings
@@ -11,6 +10,10 @@ from services.geocoding import geocode_address
 from services.offer_visibility import apply_current_offer_window
 
 router = APIRouter()
+
+ALLOWED_LOGO_TYPES = {"image/jpeg", "image/png", "image/webp"}
+MAX_LOGO_SIZE = 2 * 1024 * 1024  # 2 MB
+_LOGO_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 
 
 def _nearby_supermarkets(sb, lat: float, lng: float, max_distance_km: float) -> list[dict]:
@@ -45,16 +48,6 @@ def _unique_slug(sb, base: str) -> str:
     while sb.table("supermarkets").select("id").eq("slug", slug).execute().data:
         slug, i = f"{base}-{i}", i + 1
     return slug
-
-
-class SupermarketCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    address: str | None = None
-    city: str | None = None
-    province: str | None = None
-    postal_code: str | None = None
-    lat: float | None = None
-    lng: float | None = None
 
 
 @router.get("")
@@ -95,28 +88,72 @@ async def list_supermarkets(
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_supermarket(
-    body: SupermarketCreate,
-    _admin: Annotated[dict, Depends(require_admin)],
+    name: Annotated[str, Form()],
+    logo: Annotated[UploadFile, File()],
+    address: Annotated[str | None, Form()] = None,
+    city: Annotated[str | None, Form()] = None,
+    province: Annotated[str | None, Form()] = None,
+    postal_code: Annotated[str | None, Form()] = None,
+    lat: Annotated[float | None, Form()] = None,
+    lng: Annotated[float | None, Form()] = None,
+    _admin: Annotated[dict, Depends(require_admin)] = None,
 ) -> dict:
-    """Create a new supermarket branch. Admin only."""
-    sb = get_supabase()
-    lat, lng = body.lat, body.lng
-    if lat is None and body.address and settings.geocoding_provider == "nominatim":
-        full_addr = f"{body.address}, {body.postal_code} {body.city} {body.province}".strip()
+    """Create a new supermarket branch with required logo. Admin only."""
+    if logo.content_type not in ALLOWED_LOGO_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported logo type: {logo.content_type}",
+        )
+    logo_content = await logo.read()
+    if len(logo_content) > MAX_LOGO_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Logo exceeds 2 MB limit",
+        )
+
+    if lat is None and address and settings.geocoding_provider == "nominatim":
+        full_addr = f"{address}, {postal_code} {city} {province}".strip()
         coords = geocode_address(full_addr)
         if coords:
             lat, lng = coords
-    slug = _unique_slug(sb, _make_slug(body.name))
+
+    sb = get_supabase()
+    slug = _unique_slug(sb, _make_slug(name))
     row = {
-        "name": body.name,
+        "name": name,
         "slug": slug,
-        "address": body.address,
-        "city": body.city,
-        "province": body.province,
-        "postal_code": body.postal_code,
+        "address": address,
+        "city": city,
+        "province": province,
+        "postal_code": postal_code,
         "lat": lat,
         "lng": lng,
         "is_active": True,
     }
     resp = sb.table("supermarkets").insert(row).execute()
-    return resp.data[0]
+    sm = resp.data[0]
+    sm_id = sm["id"]
+
+    ext = _LOGO_EXT[logo.content_type]
+    storage_path = f"{sm_id}.{ext}"
+    try:
+        sb.storage.from_("logos").upload(
+            path=storage_path,
+            file=logo_content,
+            file_options={"content-type": logo.content_type},
+        )
+    except Exception:
+        sb.table("supermarkets").delete().eq("id", sm_id).execute()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Logo upload failed; supermarket creation rolled back",
+        )
+
+    logo_url = sb.storage.from_("logos").get_public_url(storage_path)
+    updated = (
+        sb.table("supermarkets")
+        .update({"logo_url": logo_url})
+        .eq("id", sm_id)
+        .execute()
+    )
+    return updated.data[0]

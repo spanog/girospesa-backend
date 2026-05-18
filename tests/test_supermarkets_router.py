@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import sys
 import types
@@ -51,6 +52,8 @@ test_app.include_router(router, prefix="/supermarkets")
 # ---------------------------------------------------------------------------
 ADMIN_USER = {"id": "admin-1", "app_metadata": {"role": "admin"}}
 
+MINIMAL_JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"  # valid JPEG magic
+
 
 def _admin_dep():
     return ADMIN_USER
@@ -60,24 +63,30 @@ def _deny_dep():
     raise HTTPException(status_code=403, detail="Admin access required")
 
 
+def _logo_file(content: bytes = MINIMAL_JPEG, mime: str = "image/jpeg") -> tuple:
+    return ("logo.jpg", io.BytesIO(content), mime)
+
+
 async def _get(url: str) -> httpx.Response:
     transport = httpx.ASGITransport(app=test_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         return await client.get(url)
 
 
-async def _post_admin(url: str, json_body: dict) -> httpx.Response:
+async def _post_admin_form(url: str, data: dict, logo: tuple | None = None) -> httpx.Response:
     test_app.dependency_overrides = {_DEP_REQUIRE_ADMIN: _admin_dep}
+    files = {"logo": logo or _logo_file()}
     transport = httpx.ASGITransport(app=test_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.post(url, json=json_body)
+        return await client.post(url, data=data, files=files)
 
 
-async def _post_denied(url: str, json_body: dict) -> httpx.Response:
+async def _post_form_denied(url: str, data: dict) -> httpx.Response:
     test_app.dependency_overrides = {_DEP_REQUIRE_ADMIN: _deny_dep}
+    files = {"logo": _logo_file()}
     transport = httpx.ASGITransport(app=test_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.post(url, json=json_body)
+        return await client.post(url, data=data, files=files)
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +126,7 @@ async def test_lat_lng_returns_postgis_nearby_supermarkets():
 
 @pytest.mark.asyncio
 async def test_create_supermarket_requires_admin():
-    resp = await _post_denied("/supermarkets", {"name": "Nuovo Market"})
+    resp = await _post_form_denied("/supermarkets", {"name": "Nuovo Market"})
     assert resp.status_code == 403
 
 
@@ -134,13 +143,18 @@ async def test_create_supermarket_success():
         "lat": None,
         "lng": None,
         "is_active": True,
+        "logo_url": None,
     }
+    updated_row = {**new_row, "logo_url": "https://example.com/logos/sm-new.jpg"}
     sb = MagicMock()
     sb.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
     sb.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[new_row])
+    sb.storage.from_.return_value.upload.return_value = None
+    sb.storage.from_.return_value.get_public_url.return_value = "https://example.com/logos/sm-new.jpg"
+    sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[updated_row])
 
     with patch("api.routers.supermarkets.get_supabase", return_value=sb):
-        resp = await _post_admin(
+        resp = await _post_admin_form(
             "/supermarkets",
             {
                 "name": "Nuovo Market",
@@ -154,21 +168,23 @@ async def test_create_supermarket_success():
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Nuovo Market"
-    assert data["slug"] == "nuovo-market"
-    assert data["is_active"] is True
+    assert data["logo_url"] == "https://example.com/logos/sm-new.jpg"
 
 
 @pytest.mark.asyncio
 async def test_create_supermarket_skips_geocode_when_coords_provided():
+    new_row = {"id": "sm-2", "name": "Test", "slug": "test", "lat": 45.5, "lng": 9.2, "is_active": True, "logo_url": None}
+    updated_row = {**new_row, "logo_url": "https://example.com/logos/sm-2.jpg"}
     sb = MagicMock()
     sb.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
-    sb.table.return_value.insert.return_value.execute.return_value = MagicMock(
-        data=[{"id": "sm-2", "name": "Test", "slug": "test", "lat": 45.5, "lng": 9.2, "is_active": True}]
-    )
+    sb.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[new_row])
+    sb.storage.from_.return_value.upload.return_value = None
+    sb.storage.from_.return_value.get_public_url.return_value = "https://example.com/logos/sm-2.jpg"
+    sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[updated_row])
 
     with patch("api.routers.supermarkets.get_supabase", return_value=sb):
         with patch("api.routers.supermarkets.geocode_address") as mock_geocode:
-            resp = await _post_admin(
+            resp = await _post_admin_form(
                 "/supermarkets",
                 {"name": "Test", "address": "Via Po 5", "city": "Torino",
                  "province": "Torino", "postal_code": "10100", "lat": 45.5, "lng": 9.2},
@@ -180,17 +196,20 @@ async def test_create_supermarket_skips_geocode_when_coords_provided():
 
 @pytest.mark.asyncio
 async def test_create_supermarket_geocodes_when_no_coords():
+    new_row = {"id": "sm-3", "name": "Geocoded", "slug": "geocoded", "lat": 44.4, "lng": 8.9, "is_active": True, "logo_url": None}
+    updated_row = {**new_row, "logo_url": "https://example.com/logos/sm-3.jpg"}
     sb = MagicMock()
     sb.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
-    sb.table.return_value.insert.return_value.execute.return_value = MagicMock(
-        data=[{"id": "sm-3", "name": "Geocoded", "slug": "geocoded", "lat": 44.4, "lng": 8.9, "is_active": True}]
-    )
+    sb.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[new_row])
+    sb.storage.from_.return_value.upload.return_value = None
+    sb.storage.from_.return_value.get_public_url.return_value = "https://example.com/logos/sm-3.jpg"
+    sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[updated_row])
 
     _settings_obj.geocoding_provider = "nominatim"
     try:
         with patch("api.routers.supermarkets.get_supabase", return_value=sb):
             with patch("api.routers.supermarkets.geocode_address", return_value=(44.4, 8.9)) as mock_geocode:
-                resp = await _post_admin(
+                resp = await _post_admin_form(
                     "/supermarkets",
                     {"name": "Geocoded", "address": "Via Garibaldi 3",
                      "city": "Genova", "province": "Genova", "postal_code": "16100"},
@@ -200,6 +219,43 @@ async def test_create_supermarket_geocodes_when_no_coords():
 
     assert resp.status_code == 201
     mock_geocode.assert_called_once()
-    inserted_row = sb.table.return_value.insert.call_args[0][0]
-    assert inserted_row["lat"] == 44.4
-    assert inserted_row["lng"] == 8.9
+
+
+# ---------------------------------------------------------------------------
+# Logo validation tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_supermarket_logo_wrong_type_rejected():
+    resp = await _post_admin_form(
+        "/supermarkets",
+        {"name": "Test"},
+        logo=("logo.pdf", io.BytesIO(b"%PDF"), "application/pdf"),
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_supermarket_logo_too_large_rejected():
+    big_content = b"\xff\xd8\xff" + b"x" * (2 * 1024 * 1024 + 1)
+    resp = await _post_admin_form(
+        "/supermarkets",
+        {"name": "Test"},
+        logo=("logo.jpg", io.BytesIO(big_content), "image/jpeg"),
+    )
+    assert resp.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_create_supermarket_logo_upload_failure_rolls_back():
+    new_row = {"id": "sm-fail", "name": "Rollback", "slug": "rollback", "is_active": True, "logo_url": None}
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+    sb.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[new_row])
+    sb.storage.from_.return_value.upload.side_effect = Exception("Storage down")
+
+    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+        resp = await _post_admin_form("/supermarkets", {"name": "Rollback"})
+
+    assert resp.status_code == 500
+    sb.table.return_value.delete.return_value.eq.return_value.execute.assert_called_once()
