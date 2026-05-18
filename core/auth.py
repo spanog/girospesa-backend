@@ -90,8 +90,13 @@ async def get_current_user_id(
 
 async def get_optional_user_id(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)],
+    session_cookie: Annotated[str | None, Cookie(alias=_COOKIE_NAME)] = None,
 ) -> str | None:
-    """Dependency: returns the user_id (sub) if a valid JWT is present, else None."""
+    """Dependency: returns the user_id (sub) from session cookie or Bearer JWT, else None."""
+    if session_cookie:
+        payload = read_session_token(session_cookie)
+        if payload and payload.get("sub"):
+            return payload["sub"]
     if credentials is None:
         return None
     try:
@@ -104,8 +109,8 @@ async def get_optional_user_id(
 async def require_admin(
     user: Annotated[dict, Depends(get_current_user)],
 ) -> dict:
-    """Dependency: requires the user to have admin role in app_metadata."""
-    role = user.get("app_metadata", {}).get("role")
+    """Dependency: requires admin role. Checks top-level 'role' (session cookie JWT) and 'app_metadata.role' (Supabase JWT)."""
+    role = user.get("role") or user.get("app_metadata", {}).get("role")
     if role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user
