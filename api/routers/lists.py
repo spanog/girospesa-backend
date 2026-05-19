@@ -253,6 +253,7 @@ def _deal_snapshot_from_offer(offer: dict) -> dict:
             offer.get("unit_price_value"),
             offer.get("unit_price_unit"),
         ),
+        "format_label": offer.get("format_label") or None,
         "valid_to": offer.get("valid_to"),
         "captured_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -264,7 +265,7 @@ def _offer_row(sb: object, offer_id: str) -> dict:
         .select(
             "id, product_id, supermarket_id, price_offer, price_original, "
             "discount_pct, unit_price, unit_price_value, unit_price_unit, "
-            "valid_to"
+            "valid_to, format_label"
         )
         .eq("id", offer_id)
         .limit(1)
