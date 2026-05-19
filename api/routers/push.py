@@ -204,7 +204,7 @@ async def notify_favorites(request: Request) -> Response:
                     subscription=subscription,
                     title=f"Nuova offerta: {product_name}",
                     body=notification_body,
-                    data={"url": f"/offerte?product={product_id}"},
+                    data={"kind": "favorite_offer", "url": f"/offerte?product={product_id}", "product_id": product_id},
                 )
             except PushEndpointGoneError:
                 stale_endpoints.append((uid, sub["endpoint"]))
