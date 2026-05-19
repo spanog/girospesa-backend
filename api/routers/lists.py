@@ -1005,8 +1005,12 @@ async def remove_item(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> Response:
     sb = get_supabase()
-    # Verify user is a member of the list before modifying
     _verify_member(sb, list_id, user_id)
+    current = sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
+    items = current.data["items"] or []
+    target = next((i for i in items if i["id"] == item_id), None)
+    if target and target.get("purchased") and target.get("purchased_by"):
+        sb.table("purchase_history").delete().eq("list_item_id", item_id).eq("user_id", target["purchased_by"]).execute()
     await _rpc_remove_list_item(list_id, item_id, user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
