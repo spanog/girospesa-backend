@@ -55,7 +55,8 @@ def _make_sb(items: list[dict]) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_remove_purchased_item_deletes_purchase_history():
+async def test_remove_purchased_item_is_blocked():
+    """purchased item removal is rejected — 409, rpc never called."""
     _test_app.dependency_overrides = _deps("user-1")
     transport = httpx.ASGITransport(app=_test_app)
 
@@ -70,18 +71,16 @@ async def test_remove_purchased_item_deletes_purchase_history():
         }
     ]
     sb = _make_sb(items)
-    purchase_history_table = sb.table("purchase_history")
+    rpc_mock = AsyncMock(return_value=None)
 
     with patch.object(_lists_module, "get_supabase", return_value=sb), \
          patch.object(_lists_module, "_verify_member", return_value=None), \
-         patch.object(_lists_module, "_rpc_remove_list_item", new=AsyncMock(return_value=None)):
+         patch.object(_lists_module, "_rpc_remove_list_item", new=rpc_mock):
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.delete("/lists/list-1/items/item-1")
 
-    assert resp.status_code == 204
-    purchase_history_table.delete.assert_called_once()
-    purchase_history_table.delete.return_value.eq.assert_called_once_with("list_item_id", "item-1")
-    purchase_history_table.delete.return_value.eq.return_value.eq.assert_called_once_with("user_id", "buyer-42")
+    assert resp.status_code == 409
+    rpc_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -110,6 +109,34 @@ async def test_remove_unpurchased_item_skips_purchase_history():
 
     assert resp.status_code == 204
     purchase_history_table.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_remove_purchased_item_returns_409():
+    """Removing a purchased item must be rejected with 409."""
+    _test_app.dependency_overrides = _deps("user-1")
+    transport = httpx.ASGITransport(app=_test_app)
+
+    items = [
+        {
+            "id": "item-1",
+            "name": "Latte",
+            "quantity": 1,
+            "purchased": True,
+            "purchased_by": "buyer-42",
+            "purchased_at": "2026-05-19T10:00:00+00:00",
+        }
+    ]
+    sb = _make_sb(items)
+    rpc_mock = AsyncMock(return_value=None)
+    with patch.object(_lists_module, "get_supabase", return_value=sb), \
+         patch.object(_lists_module, "_verify_member", return_value=None), \
+         patch.object(_lists_module, "_rpc_remove_list_item", new=rpc_mock):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete("/lists/list-1/items/item-1")
+
+    assert resp.status_code == 409
+    rpc_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

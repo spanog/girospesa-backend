@@ -6,7 +6,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
+from supabase import create_client
+
 from core.auth import get_current_user_id
+from core.config import settings
 from core.database import get_supabase
 from services.geocoding import geocode_address
 
@@ -163,6 +166,7 @@ async def upload_avatar(
 
 
 class UpdatePasswordBody(BaseModel):
+    current_password: str = Field(min_length=1)
     password: str = Field(min_length=8)
 
 
@@ -172,7 +176,17 @@ async def update_password(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> Response:
     sb = get_supabase()
-    sb.auth.admin.update_user_by_id(user_id, {"password": body.password})
+    try:
+        user_resp = sb.auth.admin.get_user_by_id(user_id)
+        email = user_resp.user.email
+        verify_client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        verify_client.auth.sign_in_with_password({"email": email, "password": body.current_password})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Password attuale non corretta.")
+    try:
+        sb.auth.admin.update_user_by_id(user_id, {"password": body.password})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Aggiornamento password fallito.")
     return Response(status_code=204)
 
 
