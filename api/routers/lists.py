@@ -315,6 +315,7 @@ def _selected_offer_patch(sb: object, offer_id: str) -> dict:
     product = offer.get("products") or {}
     return {
         "source": "offer",
+        "name": product.get("name", ""),
         "pinned_product_id": offer["product_id"],
         "pinned_offer_id": offer["id"],
         "category": product.get("category"),
