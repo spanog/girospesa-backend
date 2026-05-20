@@ -189,3 +189,88 @@ async def test_returns_404_for_missing_item():
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get(f"/lists/{_LIST}/items/nonexistent/alternatives")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_returns_supermarket_logo_url():
+    items = [
+        {
+            "id": "item-1",
+            "name": "Actimel",
+            "quantity": 1,
+            "purchased": False,
+            "pinned_product_id": "prod-1",
+            "pinned_offer_id": "off-1",
+            "found_deals": [],
+        }
+    ]
+    offers = [
+        {
+            "id": "off-2",
+            "product_id": "prod-1",
+            "supermarket_id": "sup-2",
+            "price_offer": 2.10,
+            "price_original": None,
+            "discount_pct": None,
+            "unit_price": None,
+            "unit_price_value": None,
+            "unit_price_unit": None,
+            "valid_to": "2026-05-31",
+            "format": {},
+            "format_label": "",
+            "products": {"name": "Actimel", "brand": None},
+            "supermarkets": {"name": "Diper", "logo_url": "https://cdn.example.com/diper.png"},
+        },
+    ]
+    sb = _make_sb(items, offers)
+    with patch.object(_lists_module, "get_supabase", return_value=sb):
+        with patch.object(_lists_module, "load_nearby_distances", return_value=None):
+            transport = httpx.ASGITransport(app=_app())
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get(f"/lists/{_LIST}/items/item-1/alternatives")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["supermarket_logo_url"] == "https://cdn.example.com/diper.png"
+
+
+@pytest.mark.asyncio
+async def test_returns_null_logo_url_when_missing():
+    items = [
+        {
+            "id": "item-1",
+            "name": "Actimel",
+            "quantity": 1,
+            "purchased": False,
+            "pinned_product_id": "prod-1",
+            "pinned_offer_id": "off-1",
+            "found_deals": [],
+        }
+    ]
+    offers = [
+        {
+            "id": "off-2",
+            "product_id": "prod-1",
+            "supermarket_id": "sup-2",
+            "price_offer": 2.10,
+            "price_original": None,
+            "discount_pct": None,
+            "unit_price": None,
+            "unit_price_value": None,
+            "unit_price_unit": None,
+            "valid_to": "2026-05-31",
+            "format": {},
+            "format_label": "",
+            "products": {"name": "Actimel", "brand": None},
+            "supermarkets": {"name": "Diper", "logo_url": None},
+        },
+    ]
+    sb = _make_sb(items, offers)
+    with patch.object(_lists_module, "get_supabase", return_value=sb):
+        with patch.object(_lists_module, "load_nearby_distances", return_value=None):
+            transport = httpx.ASGITransport(app=_app())
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get(f"/lists/{_LIST}/items/item-1/alternatives")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data[0]["supermarket_logo_url"] is None

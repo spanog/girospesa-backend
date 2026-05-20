@@ -1422,7 +1422,7 @@ async def get_item_alternatives(
         "id, product_id, supermarket_id, price_offer, price_original, "
         "discount_pct, unit_price, unit_price_value, unit_price_unit, "
         "valid_to, format, format_label, "
-        "products(name, brand), supermarkets(name)"
+        "products(name, brand), supermarkets(name, logo_url)"
     )
 
     if item.get("pinned_product_id"):
@@ -1471,6 +1471,7 @@ async def get_item_alternatives(
             ),
             "supermarket_id": o["supermarket_id"],
             "supermarket_name": (o.get("supermarkets") or {}).get("name", ""),
+            "supermarket_logo_url": (o.get("supermarkets") or {}).get("logo_url"),
             "valid_to": str(o.get("valid_to") or ""),
             "is_same_store": False,
         }
