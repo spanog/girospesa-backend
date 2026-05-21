@@ -14,16 +14,38 @@ _OFFER_PRODUCT_SELECT = (
 )
 
 
+def draft_product_key(name: str | None, brand: str | None) -> str:
+    normalized_name = " ".join((name or "").split()).strip().lower()
+    normalized_brand = " ".join((brand or "").split()).strip().lower()
+    return f"{normalized_name}|{normalized_brand}"
+
+
 def _flatten_draft_offer(offer: dict) -> dict:
     offer = dict(offer)
     product = offer.pop("products") or {}
+    linked_product = None
+    if product:
+        linked_product = {
+            "id": product.get("id"),
+            "name": product.get("name", ""),
+            "brand": product.get("brand"),
+            "category": product.get("category"),
+            "subcategory": product.get("subcategory"),
+            "image_url": product.get("image_url"),
+        }
+    name = offer.get("draft_name") or product.get("name", "")
+    brand = offer.get("draft_brand") if "draft_brand" in offer else product.get("brand")
+    category = offer.get("draft_category") if "draft_category" in offer else product.get("category")
+    subcategory = offer.get("draft_subcategory") if "draft_subcategory" in offer else product.get("subcategory")
     return {
         **offer,  # includes format, format_key, format_label from offers table
-        "name": product.get("name", ""),
-        "brand": product.get("brand"),
-        "category": product.get("category"),
-        "subcategory": product.get("subcategory"),
+        "name": name,
+        "brand": brand,
+        "category": category,
+        "subcategory": subcategory,
         "image_url": product.get("image_url"),
+        "linked_product": linked_product,
+        "binding_status": "existing" if linked_product else "new_on_confirm",
         "unit_price_label": offer.get("unit_price") or format_unit_price_label(
             offer.get("unit_price_value"),
             offer.get("unit_price_unit"),
@@ -65,12 +87,17 @@ def upsert_product(sb, product_row: dict) -> str:
     return existing.data[0]["id"]
 
 
-def build_offer_row(payload, product_id: str, supermarket_id: str, supermarket_name: str | None, flyer_id: str | None, normalized_unit: str | None, format_fields: dict | None = None) -> dict:
+def build_offer_row(payload, product_id: str | None, supermarket_id: str, supermarket_name: str | None, flyer_id: str | None, normalized_unit: str | None, format_fields: dict | None = None) -> dict:
     """Build offer dict for insert. valid_from/valid_to from payload only."""
     unit_price_label = format_unit_price_label(payload.unit_price_value, normalized_unit) if payload.unit_price_value else None
     row: dict = {
         "id": str(uuid.uuid4()),
         "product_id": product_id,
+        "draft_name": payload.name,
+        "draft_brand": payload.brand,
+        "draft_category": payload.category,
+        "draft_subcategory": payload.subcategory,
+        "draft_product_key": draft_product_key(payload.name, payload.brand),
         "flyer_id": flyer_id,
         "supermarket_id": supermarket_id,
         "supermarket_name": supermarket_name,

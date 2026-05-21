@@ -19,6 +19,7 @@ from api.routers._offer_utils import (
     _flatten_draft_offer,
     build_product_row,
     build_format_fields,
+    draft_product_key,
     upsert_product,
     build_offer_row,
     insert_and_fetch_offer,
@@ -44,6 +45,7 @@ class DraftOfferUpdate(BaseModel):
     valid_from: str | None = None
     valid_to: str | None = None
     is_reviewed: bool | None = None
+    detach_product: bool | None = None
 
 
 class DraftOfferCreate(BaseModel):
@@ -495,10 +497,9 @@ async def create_draft_offer(
     flyer = flyer_result.data
     _assert_flyer_access(sb, profile, flyer)
 
-    product_id = upsert_product(sb, build_product_row(payload))
     normalized_unit = normalize_unit_price_measure(payload.unit_price_unit) if payload.unit_price_unit else None
     offer_row = build_offer_row(
-        payload, product_id, flyer["supermarket_id"], flyer.get("supermarket_name"),
+        payload, None, flyer["supermarket_id"], flyer.get("supermarket_name"),
         flyer_id, normalized_unit, format_fields=build_format_fields(payload),
     )
     # Apply flyer date fallback (flyers.py-specific concern)
@@ -535,6 +536,11 @@ async def update_draft_offer(
 
     offer = offer_result.data
     sent = payload.model_fields_set
+    if payload.detach_product and offer.get("is_confirmed"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Confirmed offers must stay linked to a product",
+        )
 
     offer_fields = {
         k: (normalize_unit_price_measure(v) if k == "unit_price_unit" else v)
@@ -547,8 +553,9 @@ async def update_draft_offer(
             "valid_from": payload.valid_from,
             "valid_to": payload.valid_to,
             "is_reviewed": payload.is_reviewed,
+            "product_id": None if payload.detach_product else None,
         }.items()
-        if k in sent
+        if k in sent or (k == "product_id" and payload.detach_product)
     }
     if "unit_price_value" in offer_fields and "unit_price_unit" in offer_fields:
         offer_fields["unit_price"] = format_unit_price_label(
@@ -563,17 +570,38 @@ async def update_draft_offer(
     if offer_fields:
         sb.table("offers").update(offer_fields).eq("id", offer_id).execute()
 
-    product_fields = {
-        k: v for k, v in {
-            "name": payload.name,
-            "brand": payload.brand,
-            "category": payload.category,
-            "subcategory": payload.subcategory,
-        }.items()
-        if k in sent
+    product_payload = {
+        "name": payload.name,
+        "brand": payload.brand,
+        "category": payload.category,
+        "subcategory": payload.subcategory,
     }
-    if product_fields:
+    product_fields = {k: v for k, v in product_payload.items() if k in sent}
+    if product_fields and offer.get("is_confirmed"):
         sb.table("products").update(product_fields).eq("id", offer["product_id"]).execute()
+    elif product_fields:
+        draft_fields = {
+            f"draft_{k}": v
+            for k, v in product_fields.items()
+        }
+        draft_fields["draft_product_key"] = draft_product_key(
+            payload.name if "name" in sent else None,
+            payload.brand if "brand" in sent else None,
+        )
+        if "name" not in sent or "brand" not in sent:
+            current = (
+                sb.table("offers")
+                .select("draft_name, draft_brand")
+                .eq("id", offer_id)
+                .single()
+                .execute()
+            )
+            current_data = current.data or {}
+            draft_fields["draft_product_key"] = draft_product_key(
+                payload.name if "name" in sent else current_data.get("draft_name"),
+                payload.brand if "brand" in sent else current_data.get("draft_brand"),
+            )
+        sb.table("offers").update(draft_fields).eq("id", offer_id).execute()
 
     updated = (
         sb.table("offers")
@@ -633,14 +661,28 @@ async def confirm_offers(
             detail=f"Cannot confirm offers: flyer status is '{flyer.get('status')}' (must be 'done')",
         )
 
-    updated = (
+    drafts = (
         sb.table("offers")
-        .update({"is_confirmed": True}, returning="representation")
+        .select("id, product_id, draft_name, draft_brand, draft_category, draft_subcategory")
         .eq("flyer_id", flyer_id)
         .eq("is_confirmed", False)
         .execute()
     )
-    confirmed_count = len(updated.data) if updated.data else 0
+    draft_rows = drafts.data or []
+    for draft in draft_rows:
+        if draft.get("product_id"):
+            continue
+        product_id = upsert_product(sb, {
+            "name": draft.get("draft_name"),
+            "brand": draft.get("draft_brand"),
+            "category": draft.get("draft_category"),
+            "subcategory": draft.get("draft_subcategory"),
+        })
+        sb.table("offers").update({"product_id": product_id}).eq("id", draft["id"]).execute()
+
+    if draft_rows:
+        sb.table("offers").update({"is_confirmed": True}).eq("flyer_id", flyer_id).eq("is_confirmed", False).execute()
+    confirmed_count = len(draft_rows)
 
     total_confirmed = (
         sb.table("offers")

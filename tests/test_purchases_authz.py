@@ -234,6 +234,7 @@ async def test_get_history_returns_summary_records():
     assert resp.status_code == 200
     assert resp.json() == {
         "total_savings": 0.9,
+        "total_spend": 2.7,
         "total_purchases": 2,
         "period_days": 90,
         "records": rows,

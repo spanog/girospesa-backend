@@ -81,7 +81,7 @@ def _offer_upsert_calls(sb: MagicMock) -> list:
     return [
         call
         for call in sb.table.return_value.upsert.call_args_list
-        if call.kwargs.get("on_conflict") == "product_id,flyer_id,format_key"
+        if call.kwargs.get("on_conflict") == "flyer_id,draft_product_key,format_key"
     ]
 
 
@@ -541,7 +541,7 @@ class TestUpsertProductFallback:
 
 
 class TestExtractionServiceSubcategoryPersisted:
-    """Subcategory from LLM response must reach the product upsert."""
+    """Subcategory from LLM response must reach draft offers."""
 
     def test_subcategory_written_to_upsert(self):
         sb = _make_sb()
@@ -559,20 +559,13 @@ class TestExtractionServiceSubcategoryPersisted:
             svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
             svc.run("flyer-1")
 
-        upsert_calls = _product_upsert_calls(sb)
-        assert upsert_calls, "Expected at least one product upsert"
-        product_row = upsert_calls[0][0][0][0]
-        assert product_row.get("subcategory") == "Conserve Ittiche e di Carne"
-        # format fields live on offers, not products
-        assert "format_key" not in product_row
-        assert "format_label" not in product_row
-        assert "discount_pct" not in product_row
-        assert "price_offer" not in product_row
+        assert _product_upsert_calls(sb) == []
 
-        # Verify format is persisted on the offer row instead
         offer_calls = _offer_upsert_calls(sb)
         assert offer_calls, "Expected at least one offer upsert"
         offer_row = offer_calls[0][0][0][0]
+        assert offer_row.get("product_id") is None
+        assert offer_row.get("draft_subcategory") == "Conserve Ittiche e di Carne"
         assert offer_row.get("format_key")
         assert offer_row.get("format_label") == "2x80 g"
 
@@ -583,16 +576,16 @@ class TestExtractionServiceSubcategoryPersisted:
             svc = ExtractionService()
 
         rows = [
-            {"product_id": "prod-1", "flyer_id": "flyer-1", "format_key": "v1:500g", "price_offer": 1.29},
-            {"product_id": "prod-1", "flyer_id": "flyer-1", "format_key": "v1:500g", "price_offer": 1.49},
-            {"product_id": "prod-1", "flyer_id": "flyer-1", "format_key": "v1:1kg", "price_offer": 2.49},
+            {"draft_product_key": "pasta|barilla", "flyer_id": "flyer-1", "format_key": "v1:500g", "price_offer": 1.29},
+            {"draft_product_key": "pasta|barilla", "flyer_id": "flyer-1", "format_key": "v1:500g", "price_offer": 1.49},
+            {"draft_product_key": "pasta|barilla", "flyer_id": "flyer-1", "format_key": "v1:1kg", "price_offer": 2.49},
         ]
 
         unique_rows = svc._deduplicate_offer_rows(rows)
 
         assert unique_rows == [rows[0], rows[2]]
 
-    def test_batch_upsert_is_used_for_multiple_products(self):
+    def test_batch_offer_upsert_is_used_for_multiple_draft_products(self):
         sb = _make_sb(
             upsert_data=[
                 {"id": "prod-1"},
@@ -639,13 +632,17 @@ class TestExtractionServiceSubcategoryPersisted:
             svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
             svc.run("flyer-1")
 
-        upsert_calls = _product_upsert_calls(sb)
-        assert len(upsert_calls) == 1
-        batch_payload = upsert_calls[0][0][0]
+        assert _product_upsert_calls(sb) == []
+        offer_calls = _offer_upsert_calls(sb)
+        assert len(offer_calls) == 1
+        batch_payload = offer_calls[0][0][0]
         assert isinstance(batch_payload, list)
         assert len(batch_payload) == 2
-        assert all("discount_pct" not in row for row in batch_payload)
-        assert all("price_offer" not in row for row in batch_payload)
+        assert all(row["product_id"] is None for row in batch_payload)
+        assert {row["draft_product_key"] for row in batch_payload} == {
+            "pasta barilla|barilla",
+            "latte berna|berna",
+        }
 
     def test_done_metadata_includes_stage_timings_and_format_sizes(self):
         sb = _make_sb(

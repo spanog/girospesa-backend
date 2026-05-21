@@ -157,8 +157,8 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 | `POST` | `/flyers/upload` | ✅ admin/manager | Upload volantino (PDF/JPG/PNG/WebP, max 50 MB); crea riga `status='pending'` |
 | `POST` | `/flyers/{flyer_id}/extract` | ✅ admin/manager | Avvia estrazione AI per un volantino `pending` oppure riprende da chunk fallito se `status='error'` e `resume_available=true` |
 | `GET` | `/flyers/{flyer_id}/draft-offers` | ✅ admin/manager | Lista offerte estratte ma non confermate |
-| `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline di una draft offer e dei campi prodotto collegati |
-| `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma tutte le offerte draft e le rende pubbliche |
+| `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline di una draft offer; `detach_product=true` rimuove il binding catalogo senza creare prodotti |
+| `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma tutte le offerte draft, crea/upserta i prodotti canonici solo per bozze non agganciate e rende pubbliche le offerte |
 | `POST` | `/flyers/admin/cleanup` | 👑 admin | Trigger manuale pulizia volantini scaduti (eseguita automaticamente ogni mezzanotte) |
 
 ### Contratto prezzi estrazione
@@ -185,7 +185,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 - Il provider LLM deve emettere un `format` strutturato sparso: solo `tipo` e campi pertinenti, senza `null` superflui. Il backend resta source of truth per canonicalizzazione e compattazione.
 - `format.varianti` è consentito solo in input estrazione LLM: il backend lo espande in prodotti/offerte distinti prima dell'upsert. Nessun prodotto persistito rappresenta un parent con varianti miste.
 - Matching fuzzy/optimizer usa `name`, `brand`, `format_label`; mai JSON raw.
-- Durante l'estrazione il backend deduplica prima in memoria su `(name, brand)`, fa batch upsert dei prodotti unici del volantino, deduplica le offerte su `(product_id, flyer_id, format_key)` e fa upsert idempotente delle draft offers. Registra timing per `provider`, `varianti`, `normalizzazione`, `dedupe`, `upsert prodotti`, `upsert offerte`.
+- Durante l'estrazione il backend deduplica prima in memoria su `(name, brand)`, cerca match fuzzy nel catalogo esistente per agganciare le bozze quando possibile, deduplica le offerte su `(flyer_id, draft_product_key, format_key)` e fa upsert idempotente delle draft offers. Non crea nuovi prodotti canonici finché le offerte restano in bozza; li crea/upserta solo alla conferma finale.
 - Per PDF multipagina il backend divide il file in chunk PDF rigidi da 3 pagine e invia un chunk per volta a Gemini. Dopo ogni chunk riuscito persiste subito le draft offers di quel chunk e aggiorna `flyers.extraction_metadata` con pagina corrente, percentuale, `last_completed_chunk` e `next_chunk_*`, così il frontend può mostrare avanzamento live durante il polling e review parziale.
 - Se un chunk fallisce dopo i retry, il flyer passa a `status='error'`, ma le draft offers dei chunk già riusciti restano salvate. `flyers.extraction_metadata` espone `resume_available`, `failed_chunk_*`, `next_chunk_*` e `partial_products_count`; una nuova `POST /flyers/{flyer_id}/extract` riparte dal primo chunk non completato correttamente senza duplicare le offerte già persistite. La ripresa si basa su `extraction_metadata` persistito, non sullo `status` transitorio del flyer mentre il retry è già tornato a `processing`.
 - Quando Gemini fallisce o va in retry, backend logga anche contesto strutturato se disponibile: tipo eccezione, `code`, `status`, `message`, HTTP status/body e request id. Stesso dettaglio finisce in `retry_errors` dentro `extraction_log`.
@@ -336,14 +336,14 @@ Frontend
     → scarica file
     → Gemini estrae prodotti
     → normalizza prodotti
-    → upsert products + upsert draft offers con is_confirmed=false
+    → match prodotti esistenti + upsert draft offers con is_confirmed=false
     → aggiorna status → 'done'
                          │
                          ▼
   Admin / manager:
     GET /flyers/{id}/draft-offers
     PATCH draft offers
-    POST /flyers/{id}/offers/confirm
+    POST /flyers/{id}/offers/confirm (crea prodotti nuovi se necessari)
                          │
                          ▼
   Frontend pubblico: GET /products / GET /flyers/public

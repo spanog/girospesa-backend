@@ -10,13 +10,23 @@ from services.offer_visibility import apply_current_offer_window
 _OFFER_PRODUCT_SELECT = (
     "*, "
     "products(id, name, brand, category, subcategory, image_url), "
-    "supermarkets(name, slug, logo_url, color_hex)"
+    "supermarkets(name, slug, logo_url, color_hex, address, city)"
 )
 _OFFER_PRODUCT_LIST_SELECT = (
     "*, "
     "products!inner(id, name, brand, category, subcategory, image_url), "
-    "supermarkets(name, slug, logo_url, color_hex)"
+    "supermarkets(name, slug, logo_url, color_hex, address, city)"
 )
+
+
+def _format_supermarket_address(supermarket: dict) -> str | None:
+    parts = [part for part in (supermarket.get("address"), supermarket.get("city")) if part]
+    return ", ".join(parts) if parts else None
+
+
+def _first_row(response) -> dict | None:
+    rows = response.data or []
+    return rows[0] if rows else None
 
 
 def _flatten_offer(offer: dict) -> dict:
@@ -35,6 +45,7 @@ def _flatten_offer(offer: dict) -> dict:
         "supermarket_name": supermarket.get("name") or offer.get("supermarket_name", ""),
         "supermarket_logo_url": supermarket.get("logo_url"),
         "supermarket_slug": supermarket.get("slug"),
+        "supermarket_address": _format_supermarket_address(supermarket),
         "unit_price_label": offer.get("unit_price") or format_unit_price_label(
             offer.get("unit_price_value"),
             offer.get("unit_price_unit"),
@@ -223,12 +234,13 @@ async def get_product(product_id: str) -> dict:
             .eq("id", product_id)
             .eq("is_confirmed", True)
         )
-        .single()
+        .limit(1)
         .execute()
     )
-    if not resp.data:
+    offer = _first_row(resp)
+    if not offer:
         raise HTTPException(status_code=404, detail="Offerta non trovata")
-    return _flatten_offer(resp.data)
+    return _flatten_offer(offer)
 
 
 @router.get("/{product_id}/similar")
@@ -241,17 +253,21 @@ async def get_similar_products(product_id: str) -> list[dict]:
 
     # Resolve the canonical product_id and current supermarket
     ref_resp = (
-        sb.table("offers")
-        .select("product_id, supermarket_id")
-        .eq("id", product_id)
-        .single()
+        apply_current_offer_window(
+            sb.table("offers")
+            .select("product_id, supermarket_id")
+            .eq("id", product_id)
+            .eq("is_confirmed", True)
+        )
+        .limit(1)
         .execute()
     )
-    if not ref_resp.data:
+    reference_offer = _first_row(ref_resp)
+    if not reference_offer:
         return []
 
-    canonical_product_id: str = ref_resp.data["product_id"]
-    current_supermarket_id: str = ref_resp.data["supermarket_id"]
+    canonical_product_id: str = reference_offer["product_id"]
+    current_supermarket_id: str = reference_offer["supermarket_id"]
 
     similar_resp = (
         apply_current_offer_window(

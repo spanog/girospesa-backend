@@ -259,7 +259,7 @@ class TestCreateDraftOffer:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_create_persists_subcategory_on_product_upsert(self):
+    async def test_create_persists_subcategory_on_draft_offer(self):
         sb = self._make_sb()
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post(
@@ -274,16 +274,12 @@ class TestCreateDraftOffer:
             )
 
         assert resp.status_code == 201
-        dispatch_table = sb.table("products")
-        dispatch_table.upsert.assert_called_once_with(
-            {
-                "name": "Mozzarella",
-                "brand": None,
-                "category": "alimentari-freschi",
-                "subcategory": "Latticini e Formaggi",
-            },
-            on_conflict="name,brand",
-        )
+        offer_insert = sb.table("offers").insert.call_args.args[0]
+        assert offer_insert["product_id"] is None
+        assert offer_insert["draft_name"] == "Mozzarella"
+        assert offer_insert["draft_category"] == "alimentari-freschi"
+        assert offer_insert["draft_subcategory"] == "Latticini e Formaggi"
+        sb.table("products").upsert.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +421,17 @@ class TestUpdateDraftOffer:
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
+    async def test_confirmed_offer_cannot_be_detached(self):
+        sb = self._make_sb(is_confirmed=True)
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _patch_req(
+                "/flyers/flyer-1/draft-offers/offer-1",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+                json={"detach_product": True},
+            )
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
     async def test_update_subcategory_updates_product_fields(self):
         sb = self._make_sb(is_confirmed=False)
         with patch("api.routers.flyers.get_supabase", return_value=sb):
@@ -437,7 +444,7 @@ class TestUpdateDraftOffer:
         assert resp.status_code == 200
         update_calls = sb.table.return_value.update.call_args_list
         assert any(
-            c.args[0].get("subcategory") == "Snack Salati e Dolciumi"
+            c.args[0].get("draft_subcategory") == "Snack Salati e Dolciumi"
             for c in update_calls
         )
 
@@ -457,6 +464,10 @@ class TestConfirmOffers:
         updated_result.data = [{"id": f"offer-{i}"} for i in range(confirmed_count)]
         sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = updated_result
         total_confirmed_result = MagicMock()
+        total_confirmed_result.data = [
+            {"id": f"offer-{i}", "product_id": f"prod-{i}"}
+            for i in range(confirmed_count)
+        ]
         total_confirmed_result.count = confirmed_count
         sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value = total_confirmed_result
         return sb
@@ -560,6 +571,71 @@ async def test_list_draft_offers_includes_is_reviewed():
 
 
 @pytest.mark.anyio
+async def test_list_draft_offers_exposes_existing_product_binding():
+    """Draft response tells reviewers when offer is bound to catalog product."""
+    sb = MagicMock()
+    flyer_result = MagicMock()
+    flyer_result.data = {"id": "flyer-1", "supermarket_id": "sup-1"}
+    offers_result = MagicMock()
+    offers_result.data = [
+        {
+            "id": "offer-1",
+            "flyer_id": "flyer-1",
+            "product_id": "prod-1",
+            "draft_name": "Latte alta digeribilita",
+            "draft_brand": "Berna",
+            "draft_category": "freschi",
+            "draft_subcategory": "Latte",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Coop",
+            "price_offer": 1.49,
+            "price_original": None,
+            "discount_pct": None,
+            "unit_price": None,
+            "unit_price_value": None,
+            "unit_price_unit": None,
+            "offer_notes": None,
+            "valid_from": None,
+            "valid_to": None,
+            "is_confirmed": False,
+            "is_reviewed": False,
+            "format": None,
+            "format_key": "v1:1l",
+            "format_label": "1 L",
+            "created_at": "2026-05-14T00:00:00Z",
+            "products": {
+                "id": "prod-1",
+                "name": "Latte Alta Digeribilita",
+                "brand": "Berna",
+                "category": "freschi",
+                "subcategory": "Latte",
+                "image_url": None,
+            },
+        }
+    ]
+
+    def select_side_effect(*args, **kwargs):
+        chain = MagicMock()
+        if "supermarket_id" in args[0]:
+            chain.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+        else:
+            chain.eq.return_value.eq.return_value.execute.return_value = offers_result
+        return chain
+
+    sb.table.return_value.select.side_effect = select_side_effect
+
+    with patch("api.routers.flyers.get_supabase", return_value=sb):
+        resp = await _get("/flyers/flyer-1/draft-offers", {_DEP_PROFILE: lambda: ADMIN_PROFILE})
+
+    assert resp.status_code == 200
+    draft = resp.json()[0]
+    assert draft["name"] == "Latte alta digeribilita"
+    assert draft["linked_product"]["id"] == "prod-1"
+    assert draft["linked_product"]["name"] == "Latte Alta Digeribilita"
+    assert draft["binding_status"] == "existing"
+
+
+@pytest.mark.anyio
 async def test_patch_draft_offer_sets_is_reviewed():
     """PATCH /draft-offers/{id} with is_reviewed=true persists and returns the flag."""
     sb = MagicMock()
@@ -624,11 +700,55 @@ async def test_patch_draft_offer_sets_is_reviewed():
     data = resp.json()
     assert data["is_reviewed"] is True
 
-    update_calls = [
-        call
-        for call in sb.table.return_value.update.call_args_list
-    ]
-    assert any(
-        call.args and "is_reviewed" in call.args[0]
-        for call in update_calls
-    ), "is_reviewed must be passed to the DB update"
+
+@pytest.mark.anyio
+async def test_patch_draft_offer_detaches_existing_product_without_creating_one():
+    """Detaching removes product_id only; product creation is deferred to confirmation."""
+    sb = MagicMock()
+    flyer_result = MagicMock(data={"id": "flyer-1", "supermarket_id": "sup-1"})
+    offer_result = MagicMock(data={"id": "offer-1", "product_id": "prod-1", "flyer_id": "flyer-1", "is_confirmed": False})
+    updated_result = MagicMock(data={
+        "id": "offer-1",
+        "flyer_id": "flyer-1",
+        "product_id": None,
+        "draft_name": "Latte",
+        "draft_brand": "Berna",
+        "draft_category": "freschi",
+        "draft_subcategory": None,
+        "supermarket_id": "sup-1",
+        "supermarket_name": "Test",
+        "price_offer": 1.99,
+        "price_original": None,
+        "discount_pct": None,
+        "unit_price": None,
+        "unit_price_value": None,
+        "unit_price_unit": None,
+        "offer_notes": None,
+        "valid_from": None,
+        "valid_to": None,
+        "is_confirmed": False,
+        "is_reviewed": False,
+        "format": None,
+        "format_key": "",
+        "format_label": "",
+        "created_at": "2026-05-14T00:00:00Z",
+        "products": None,
+    })
+
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+    sb.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = offer_result
+    sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+    sb.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = updated_result
+
+    with patch("api.routers.flyers.get_supabase", return_value=sb):
+        resp = await _patch_req(
+            "/flyers/flyer-1/draft-offers/offer-1",
+            {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+            json={"detach_product": True},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["product_id"] is None
+    assert resp.json()["binding_status"] == "new_on_confirm"
+    assert any(call.args[0]["product_id"] is None for call in sb.table.return_value.update.call_args_list)
+    assert not any(call.args[0].get("name") == "Latte" for call in sb.table.return_value.upsert.call_args_list)

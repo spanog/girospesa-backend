@@ -8,8 +8,8 @@ Pipeline:
   2. Download file bytes
   3. Extract products via configured LLM provider
   4. Normalize + deduplicate
-  5. Upsert canonical products
-  6. Insert draft offers (is_confirmed=False)
+  5. Match existing canonical products when confidence is high
+  6. Insert draft offers (is_confirmed=False); new products are created on confirmation
   7. Update flyer status to 'done'
 
 For PDFs, chunk results are persisted incrementally. If one chunk fails after
@@ -459,7 +459,7 @@ class ExtractionService:
             return 0
 
         product_upsert_started_at = time.perf_counter()
-        product_ids = self._upsert_products_batch(sb, normalized)
+        product_ids = self._match_existing_products_batch(sb, normalized)
         runtime["product_upsert_seconds"] += time.perf_counter() - product_upsert_started_at
 
         offer_insert_started_at = time.perf_counter()
@@ -474,7 +474,7 @@ class ExtractionService:
         if unique_offer_rows:
             sb.table("offers").upsert(  # type: ignore[union-attr]
                 unique_offer_rows,
-                on_conflict="product_id,flyer_id,format_key",
+                on_conflict="flyer_id,draft_product_key,format_key",
                 ignore_duplicates=True,
             ).execute()
         runtime["offer_insert_seconds"] += time.perf_counter() - offer_insert_started_at
@@ -507,20 +507,23 @@ class ExtractionService:
 
         return None
 
-    def _upsert_products_batch(
+    def _draft_product_key(self, row: dict) -> str:
+        name = " ".join((row.get("name") or "").split()).strip().lower()
+        brand = " ".join((row.get("brand") or "").split()).strip().lower()
+        return f"{name}|{brand}"
+
+    def _match_existing_products_batch(
         self,
         sb: object,
         product_rows: list[dict],
-    ) -> dict[tuple[str, str | None], str]:
+    ) -> dict[tuple[str, str | None], str | None]:
         if not product_rows:
             return {}
         canonical_rows = [self._product_row_from_normalized(row) for row in product_rows]
 
-        # --- Fuzzy pre-upsert deduplication against existing DB products ---
-        # Group by brand and fetch candidates once per unique brand value.
-        # If a similar product (by name fuzzy match) already exists, reuse its id.
-        by_conflict_key: dict[tuple[str, str | None], str] = {}
-        to_upsert: list[dict] = []
+        # Group by brand and fetch candidates once per unique brand value. If a
+        # similar product exists, reuse its id; otherwise keep draft unbound.
+        by_conflict_key: dict[tuple[str, str | None], str | None] = {}
         candidates_cache: dict[str | None, list[dict]] = {}
 
         for row in canonical_rows:
@@ -535,59 +538,12 @@ class ExtractionService:
 
             existing_id = self._find_similar_product(row, candidates_cache[brand])
             key = self._conflict_key(row)
-            if existing_id:
-                by_conflict_key[key] = existing_id
-            else:
-                to_upsert.append(row)
-
-        # --- Upsert only products with no fuzzy match ---
-        if to_upsert:
-            result = (
-                sb.table("products")  # type: ignore[union-attr]
-                .upsert(to_upsert, on_conflict="name,brand")
-                .execute()
-            )
-
-            returned_rows = result.data or []
-            if len(returned_rows) == len(to_upsert):
-                for original, returned in zip(to_upsert, returned_rows, strict=False):
-                    product_id = returned.get("id")
-                    if product_id:
-                        by_conflict_key[self._conflict_key(original)] = product_id
-            else:
-                for row in returned_rows:
-                    if "id" in row and "name" in row:
-                        by_conflict_key[self._conflict_key(row)] = row["id"]
-
-            if len(by_conflict_key) == len(canonical_rows):
-                return by_conflict_key
-
-            # Fallback: fetch by name for any still-missing products
-            names = sorted({row["name"] for row in to_upsert if self._conflict_key(row) not in by_conflict_key})
-            if names:
-                existing = (
-                    sb.table("products")
-                    .select("id, name, brand")
-                    .in_("name", names)
-                    .execute()
-                )
-                for row in existing.data or []:
-                    key = self._conflict_key(row)
-                    if key not in by_conflict_key:
-                        by_conflict_key[key] = row["id"]
-
-        missing = [
-            self._conflict_key(row)
-            for row in canonical_rows
-            if self._conflict_key(row) not in by_conflict_key
-        ]
-        if missing:
-            raise ValueError(f"Product(s) not found after batch upsert: {missing!r}")
+            by_conflict_key[key] = existing_id
         return by_conflict_key
 
     def _build_offer_rows(
         self,
-        product_ids: dict[tuple[str, str | None], str],
+        product_ids: dict[tuple[str, str | None], str | None],
         normalized: list[dict],
         flyer: dict,
         supermarket_id: str | None,
@@ -596,15 +552,15 @@ class ExtractionService:
         offer_rows: list[dict] = []
         for p in normalized:
             key = self._conflict_key(p)
-            product_id = product_ids[key]
+            product_id = product_ids.get(key)
             offer_rows.append(self._build_offer_row(product_id, p, flyer, supermarket_id, supermarket_name))
         return offer_rows
 
     def _deduplicate_offer_rows(self, offer_rows: list[dict]) -> list[dict]:
-        seen: set[tuple[str, str | None, str]] = set()
+        seen: set[tuple[str | None, str | None, str]] = set()
         unique: list[dict] = []
         for row in offer_rows:
-            key = (row["product_id"], row.get("flyer_id"), row["format_key"])
+            key = (row.get("flyer_id"), row.get("draft_product_key"), row["format_key"])
             if key not in seen:
                 seen.add(key)
                 unique.append(row)
@@ -861,7 +817,7 @@ class ExtractionService:
 
     def _build_offer_row(
         self,
-        product_id: str,
+        product_id: str | None,
         p: dict,
         flyer: dict,
         supermarket_id: str | None,
@@ -869,6 +825,11 @@ class ExtractionService:
     ) -> dict:
         return {
             "product_id": product_id,
+            "draft_name": p.get("name"),
+            "draft_brand": p.get("brand"),
+            "draft_category": p.get("category"),
+            "draft_subcategory": p.get("subcategory"),
+            "draft_product_key": self._draft_product_key(p),
             "supermarket_id": supermarket_id,
             "supermarket_name": supermarket_name,
             "flyer_id": flyer["id"],

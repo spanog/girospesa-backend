@@ -13,14 +13,14 @@ from __future__ import annotations
 import sys
 import os
 import types
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # ---------------------------------------------------------------------------
 # Stub infrastructure modules
 # ---------------------------------------------------------------------------
-for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders"):
+for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders", "rapidfuzz"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
@@ -28,6 +28,20 @@ _config_mod = types.ModuleType("core.config")
 _config_mod.settings = MagicMock()  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
+
+_extraction_pkg = types.ModuleType("services.extraction")
+_normalizer_mod = types.ModuleType("services.extraction.normalizer")
+
+
+def _format_unit_price_label(value, unit):
+    if value is None or not unit:
+        return None
+    return f"{value:.2f} €/{unit}".replace(".", ",")
+
+
+_normalizer_mod.format_unit_price_label = _format_unit_price_label  # type: ignore[attr-defined]
+sys.modules["services.extraction"] = _extraction_pkg
+sys.modules["services.extraction.normalizer"] = _normalizer_mod
 
 from fastapi import FastAPI
 import httpx
@@ -76,6 +90,8 @@ _OFFER_ROW = {
         "slug": "lidl",
         "logo_url": "https://storage.example.com/logos/lidl.png",
         "color_hex": "#0050AA",
+        "address": "Via Roma 12",
+        "city": "Milano",
     },
 }
 
@@ -94,6 +110,8 @@ _SIMILAR_ROW = {
         "slug": "esselunga",
         "logo_url": "https://storage.example.com/logos/esselunga.png",
         "color_hex": "#E30613",
+        "address": "Via Roma 12",
+        "city": "Milano",
     },
 }
 
@@ -109,9 +127,9 @@ def _make_sb(offer_row=None, similar_rows=None, ref_row=None):
     sb = MagicMock()
     chain = sb.table.return_value.select.return_value
 
-    # get_product: .select().eq(id).eq(is_confirmed).single().execute()
-    chain.eq.return_value.eq.return_value.single.return_value.execute.return_value = MagicMock(
-        data=offer_row
+    # get_product: .select().eq(id).eq(is_confirmed).limit(1).execute()
+    chain.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+        data=[offer_row] if offer_row is not None else []
     )
 
     return sb
@@ -179,11 +197,20 @@ class TestListProducts:
             count=0,
         )
 
-        with patch("api.routers.products.get_supabase", return_value=sb):
+        with (
+            patch("api.routers.products.get_supabase", return_value=sb),
+            patch(
+                "api.routers.products.apply_current_offer_window",
+                side_effect=lambda query, today=None: query,
+            ) as apply_window,
+        ):
             resp = await _get("/products")
 
         assert resp.status_code == 200
         order_mock.range.assert_called_once()
+        apply_window.assert_any_call(order_mock)
+        apply_window.assert_any_call(eq_mock)
+        apply_window.assert_any_call(eq_mock, today=ANY)
 
     @pytest.mark.asyncio
     async def test_expiry_sort_orders_by_valid_to_then_product_name(self):
@@ -356,11 +383,66 @@ class TestGetProduct:
         assert data["supermarket_name"] == "Lidl"
         assert data["supermarket_logo_url"] == "https://storage.example.com/logos/lidl.png"
         assert data["supermarket_slug"] == "lidl"
+        assert data["supermarket_address"] == "Via Roma 12, Milano"
         assert data["product_id"] == "prod-1"
         assert data["unit_price_label"] is None
         # Nested dicts should NOT be in the response
         assert "products" not in data
         assert "supermarkets" not in data
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_supermarket_address_missing(self):
+        row = {
+            **_OFFER_ROW,
+            "supermarkets": {
+                **_OFFER_ROW["supermarkets"],  # type: ignore[dict-item]
+                "address": None,
+                "city": None,
+            },
+        }
+        sb = _make_sb(offer_row=row)
+
+        with patch("api.routers.products.get_supabase", return_value=sb):
+            resp = await _get("/products/offer-1")
+
+        assert resp.status_code == 200
+        assert resp.json()["supermarket_address"] is None
+
+    @pytest.mark.asyncio
+    async def test_returns_address_only_when_city_missing(self):
+        row = {
+            **_OFFER_ROW,
+            "supermarkets": {
+                **_OFFER_ROW["supermarkets"],  # type: ignore[dict-item]
+                "address": "Via Roma 12",
+                "city": None,
+            },
+        }
+        sb = _make_sb(offer_row=row)
+
+        with patch("api.routers.products.get_supabase", return_value=sb):
+            resp = await _get("/products/offer-1")
+
+        assert resp.status_code == 200
+        assert resp.json()["supermarket_address"] == "Via Roma 12"
+
+    @pytest.mark.asyncio
+    async def test_returns_city_only_when_address_missing(self):
+        row = {
+            **_OFFER_ROW,
+            "supermarkets": {
+                **_OFFER_ROW["supermarkets"],  # type: ignore[dict-item]
+                "address": None,
+                "city": "Milano",
+            },
+        }
+        sb = _make_sb(offer_row=row)
+
+        with patch("api.routers.products.get_supabase", return_value=sb):
+            resp = await _get("/products/offer-1")
+
+        assert resp.status_code == 200
+        assert resp.json()["supermarket_address"] == "Milano"
 
     @pytest.mark.asyncio
     async def test_returns_structured_unit_price_fields(self):
@@ -401,31 +483,56 @@ class TestGetSimilarProducts:
     @pytest.mark.asyncio
     async def test_returns_similar_offers(self):
         sb = MagicMock()
-        # ref query: .select("product_id, supermarket_id").eq("id", ...).single().execute()
-        ref_execute = MagicMock(data={"product_id": "prod-1", "supermarket_id": "sm-1"})
-        sb.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = ref_execute
+        ref_select = MagicMock()
+        similar_select = MagicMock()
+        sb.table.return_value.select.side_effect = [ref_select, similar_select]
 
-        # similar query: .select().eq(product_id).eq(is_confirmed).neq(id).neq(supermarket_id).order().limit().execute()
-        similar_execute = MagicMock(data=[_SIMILAR_ROW])
-        (
-            sb.table.return_value.select.return_value
-            .eq.return_value.eq.return_value
-            .neq.return_value.neq.return_value
-            .order.return_value.limit.return_value.execute.return_value
-        ) = similar_execute
+        ref_id_query = ref_select.eq.return_value
+        ref_confirmed_query = ref_id_query.eq.return_value
+        ref_confirmed_query.limit.return_value.execute.return_value = MagicMock(
+            data=[{"product_id": "prod-1", "supermarket_id": "sm-1"}]
+        )
 
-        with patch("api.routers.products.get_supabase", return_value=sb):
+        similar_product_query = similar_select.eq.return_value
+        similar_confirmed_query = similar_product_query.eq.return_value
+        similar_offer_exclusion_query = similar_confirmed_query.neq.return_value
+        similar_market_exclusion_query = similar_offer_exclusion_query.neq.return_value
+        similar_market_exclusion_query.order.return_value.limit.return_value.execute.return_value = MagicMock(
+            data=[_SIMILAR_ROW]
+        )
+
+        with (
+            patch("api.routers.products.get_supabase", return_value=sb),
+            patch(
+                "api.routers.products.apply_current_offer_window",
+                side_effect=lambda query, today=None: query,
+            ) as apply_window,
+        ):
             resp = await _get("/products/offer-1/similar")
 
         assert resp.status_code == 200
         results = resp.json()
         assert isinstance(results, list)
+        assert results[0]["supermarket_address"] == "Via Roma 12, Milano"
+        ref_select.eq.assert_called_once_with("id", "offer-1")
+        ref_id_query.eq.assert_called_once_with("is_confirmed", True)
+        ref_confirmed_query.limit.assert_called_once_with(1)
+        similar_select.eq.assert_called_once_with("product_id", "prod-1")
+        similar_product_query.eq.assert_called_once_with("is_confirmed", True)
+        similar_confirmed_query.neq.assert_called_once_with("id", "offer-1")
+        similar_offer_exclusion_query.neq.assert_called_once_with("supermarket_id", "sm-1")
+        apply_window.assert_has_calls(
+            [
+                call(ref_confirmed_query),
+                call(similar_market_exclusion_query.order.return_value),
+            ]
+        )
 
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_offer_not_found(self):
         sb = MagicMock()
-        sb.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = MagicMock(
-            data=None
+        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+            data=[]
         )
 
         with patch("api.routers.products.get_supabase", return_value=sb):
