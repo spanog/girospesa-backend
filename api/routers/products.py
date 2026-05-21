@@ -54,11 +54,13 @@ def _nearby_supermarket_ids(sb, lat: float, lng: float, max_distance_km: float) 
     return [row["id"] for row in (response.data or [])]
 
 
-def _search_product_ids(sb, q: str | None, limit: int = 200) -> list[str] | None:
+def _search_product_scores(sb, q: str | None, limit: int = 200) -> dict[str, float] | None:
     if not q:
         return None
     rows = sb.rpc("search_products_catalog", {"query": q, "lim": limit}).execute().data or []
-    return [row["id"] for row in rows]
+    if not rows:
+        return {}
+    return {row["id"]: row["score"] for row in rows}
 
 
 router = APIRouter()
@@ -137,9 +139,10 @@ async def list_products(
         if not nearby_ids:
             return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0, "expiring_soon_count": 0}
 
-    product_ids = _search_product_ids(sb, q)
-    if product_ids == []:
+    score_map = _search_product_scores(sb, q)
+    if score_map == {}:
         return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0, "expiring_soon_count": 0}
+    product_ids = list(score_map.keys()) if score_map is not None else None
 
     filter_kwargs = dict(
         product_ids=product_ids,
@@ -155,16 +158,26 @@ async def list_products(
         .select(_OFFER_PRODUCT_LIST_SELECT, count="exact")
         .eq("is_confirmed", True)
     )
-    base_query = _apply_offer_sort(base_query, sort=sort)
+    if score_map is None:
+        # Apply DB sort early (original chain order preserved for non-search path)
+        base_query = _apply_offer_sort(base_query, sort=sort)
     base_query = apply_current_offer_window(base_query)
     filtered_query = _apply_offer_filters(base_query, **filter_kwargs)
     if expiring_soon:
         filtered_query = _apply_expiring_soon_filter(filtered_query, today=today)
-    query = filtered_query.range(offset, offset + limit - 1)
-    response = query.execute()
 
-    items = [_flatten_offer(offer) for offer in (response.data or [])]
-    total = response.count or 0
+    if score_map is not None:
+        # Fetch all matching offers (up to 200 products × ~10 supermarkets), sort by search score in Python, then paginate
+        response = filtered_query.limit(2000).execute()
+        items = [_flatten_offer(offer) for offer in (response.data or [])]
+        items.sort(key=lambda item: (-score_map.get(item.get("product_id") or "", 0), item.get("name") or ""))
+        total = len(items)
+        items = items[offset: offset + limit]
+    else:
+        response = filtered_query.range(offset, offset + limit - 1).execute()
+        items = [_flatten_offer(offer) for offer in (response.data or [])]
+        total = response.count or 0
+
     next_page = (offset // limit) + 1 if offset + limit < total else None
 
     # Compute supermarket_count and expiring_soon_count only on first page
