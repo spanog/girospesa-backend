@@ -17,13 +17,19 @@ logger = logging.getLogger(__name__)
 MAX_INLINE_BYTES = 20 * 1024 * 1024
 MAX_RETRIES = 3
 RETRY_BACKOFF_S = 2
+SERVER_OVERLOAD_BACKOFF_S = 20
 PDF_CHUNK_SIZE_PAGES = 3
 _RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)s'")
+_UNAVAILABLE_RE = re.compile(r"503|UNAVAILABLE", re.IGNORECASE)
 
 
-def _retry_delay(exc: Exception) -> float:
+def _retry_delay(exc: Exception, attempt: int = 0) -> float:
     m = _RETRY_DELAY_RE.search(str(exc))
-    return float(m.group(1)) if m else RETRY_BACKOFF_S
+    if m:
+        return float(m.group(1))
+    if _UNAVAILABLE_RE.search(str(exc)):
+        return SERVER_OVERLOAD_BACKOFF_S * (2**attempt)
+    return RETRY_BACKOFF_S
 
 
 def _trim_text(value: object, limit: int = 280) -> str:
@@ -182,7 +188,7 @@ class GeminiProvider:
                 logger.warning(msg)
                 retry_errors.append(msg)
                 if attempt < MAX_RETRIES - 1:
-                    delay = _retry_delay(exc)
+                    delay = _retry_delay(exc, attempt)
                     if delay > RETRY_BACKOFF_S:
                         logger.info("Rate limited — waiting %.0fs before retry", delay)
                     time.sleep(delay)
@@ -297,7 +303,7 @@ class GeminiProvider:
                 logger.warning(msg)
                 retry_errors.append(msg)
                 if attempt < MAX_RETRIES - 1:
-                    delay = _retry_delay(exc)
+                    delay = _retry_delay(exc, attempt)
                     if delay > RETRY_BACKOFF_S:
                         logger.info("Rate limited — waiting %.0fs before retry", delay)
                     time.sleep(delay)
