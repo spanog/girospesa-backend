@@ -75,17 +75,7 @@ def notify_extraction_complete(
     products_count: int = 0,
     error_message: str = "",
 ) -> None:
-    """Send Web Push to the flyer uploader when extraction finishes (success or error)."""
-    try:
-        result = sb.table("push_subscriptions").select("*").eq("user_id", user_id).execute()  # type: ignore[union-attr]
-        subscriptions = result.data or []
-    except Exception as exc:
-        logger.warning("Failed to fetch push subscriptions for user %s: %s", user_id, exc)
-        return
-
-    if not subscriptions:
-        return
-
+    """Persist inbox notification and send Web Push to the flyer uploader when extraction finishes."""
     try:
         profile_resp = (
             sb.table("user_profiles")  # type: ignore[union-attr]
@@ -117,6 +107,29 @@ def notify_extraction_complete(
         "products_count": products_count,
         "url": f"/admin/volantini/{flyer_id}",
     }
+
+    try:
+        sb.table("app_notifications").insert(  # type: ignore[union-attr]
+            {
+                "user_id": user_id,
+                "kind": kind,
+                "title": title,
+                "body": body,
+                "data": data,
+            }
+        ).execute()
+    except Exception as exc:
+        logger.warning("Failed to persist extraction app_notification for user %s: %s", user_id, exc)
+
+    try:
+        result = sb.table("push_subscriptions").select("*").eq("user_id", user_id).execute()  # type: ignore[union-attr]
+        subscriptions = result.data or []
+    except Exception as exc:
+        logger.warning("Failed to fetch push subscriptions for user %s: %s", user_id, exc)
+        return
+
+    if not subscriptions:
+        return
 
     stale_endpoints: list[str] = []
     for sub in subscriptions:
