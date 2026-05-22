@@ -142,7 +142,6 @@ def notify_extraction_complete(
                 ),
                 title=title,
                 body=body,
-                icon="/favicon.ico",
                 data=data,
             )
         except PushEndpointGoneError:
@@ -153,5 +152,5 @@ def notify_extraction_complete(
     for endpoint in stale_endpoints:
         try:
             sb.table("push_subscriptions").delete().eq("endpoint", endpoint).execute()  # type: ignore[union-attr]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to delete stale push endpoint %s: %s", endpoint, exc)

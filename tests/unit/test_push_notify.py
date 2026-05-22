@@ -22,6 +22,14 @@ def test_notify_extraction_creates_inbox_row_without_subscriptions():
     inserted_tables = [c.args[0] for c in sb.table.call_args_list]
     assert "app_notifications" in inserted_tables, f"Expected app_notifications insert, got: {inserted_tables}"
 
+    # Verify the insert was called with correct payload
+    insert_call_args = sb.table.return_value.insert.call_args[0][0]
+    assert insert_call_args["user_id"] == "user-1"
+    assert insert_call_args["kind"] == "extraction_complete"
+    assert insert_call_args["data"]["flyer_id"] == "flyer-1"
+    assert insert_call_args["data"]["status"] == "done"
+    assert insert_call_args["data"]["products_count"] == 10
+
 
 def test_notify_extraction_skips_inbox_when_deals_disabled():
     sb = MagicMock()
