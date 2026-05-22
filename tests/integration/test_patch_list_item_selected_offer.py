@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from api.routers.lists import router as lists_router
 from core.auth import get_current_user_id
-from services.product_format import build_format_bundle
+from tests.conftest import wait_for_user_bootstrap
 
 app = FastAPI()
 app.include_router(lists_router, prefix="/lists")
@@ -58,6 +58,7 @@ def auth_user(supabase_client, clean_db):
         {"email": email, "password": "Test_password_123!", "email_confirm": True}
     )
     user_id: str = resp.user.id
+    wait_for_user_bootstrap(user_id)
     yield user_id
     supabase_client.auth.admin.delete_user(user_id)
 
@@ -74,11 +75,6 @@ def seeded_offer_context(supabase_client):
         })
         .execute()
     ).data[0]
-    format_bundle = build_format_bundle({
-        "tipo": "confezione_singola",
-        "peso_volume": 1,
-        "unita_misura": "L",
-    })
     product = (
         supabase_client.table("products")
         .insert({
@@ -86,9 +82,6 @@ def seeded_offer_context(supabase_client):
             "brand": "Berna",
             "category": "alimentari-freschi",
             "subcategory": "Latticini e Formaggi",
-            "format": format_bundle.format_compact,
-            "format_key": format_bundle.format_key,
-            "format_label": format_bundle.format_label,
         })
         .execute()
     ).data[0]

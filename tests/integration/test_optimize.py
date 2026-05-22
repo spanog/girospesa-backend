@@ -21,8 +21,7 @@ from fastapi import FastAPI
 
 from api.routers.optimize import router as optimize_router
 from core.auth import get_current_user_id
-from services.product_format import build_format_bundle
-
+from tests.conftest import wait_for_user_bootstrap
 app = FastAPI()
 app.include_router(optimize_router, prefix="/optimize")
 
@@ -85,6 +84,7 @@ def auth_user(supabase_client):
         {"email": email, "password": "Test_password_123!", "email_confirm": True}
     )
     user_id: str = resp.user.id
+    wait_for_user_bootstrap(user_id)
     yield user_id
     supabase_client.auth.admin.delete_user(user_id)
 
@@ -109,19 +109,11 @@ def seeded_supermarket(supabase_client, clean_db):
 @pytest.fixture()
 def seeded_product(supabase_client, seeded_supermarket):
     """Insert a canonical product; return its row."""
-    format_bundle = build_format_bundle({
-        "tipo": "confezione_singola",
-        "peso_volume": 1,
-        "unita_misura": "L",
-    })
     row = (
         supabase_client.table("products")
         .insert({
             "name": "Latte intero",
             "brand": "Granarolo",
-            "format": format_bundle.format_compact,
-            "format_key": format_bundle.format_key,
-            "format_label": format_bundle.format_label,
         })
         .execute()
     ).data[0]

@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 from fastapi import FastAPI
+from tests.conftest import wait_for_user_bootstrap
 
 _config_mod = types.ModuleType("core.config")
 _config_mod.settings = types.SimpleNamespace(
@@ -100,6 +101,7 @@ def manager_profile(supabase_client, supermarket):
         {"email": email, "password": "Test_password_123!", "email_confirm": True}
     )
     user_id = resp.user.id
+    wait_for_user_bootstrap(user_id)
     (
         supabase_client.table("user_profiles")
         .update({"role": "supermarket_manager", "managed_supermarket_id": supermarket["id"]})

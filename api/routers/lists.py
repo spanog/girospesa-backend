@@ -123,6 +123,14 @@ def _now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_past_timestamp(value: str | datetime | None) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, datetime):
+        return value < datetime.now(timezone.utc)
+    return value < _now_utc()
+
+
 def _product_categories(sb: object, product_ids: set[str]) -> dict[str, dict]:
     if not product_ids:
         return {}
@@ -859,7 +867,7 @@ async def accept_pending_invite(
     invite = _invite_for_user(invite_id, user_id)
     if invite is None:
         raise HTTPException(status_code=404, detail="Invite not found")
-    if invite["expires_at"] < datetime.now(timezone.utc):
+    if _is_past_timestamp(invite.get("expires_at")):
         _set_invite_status(invite_id, status="expired")
         _mark_invite_notifications_read(sb, invite_id, user_id)
         raise HTTPException(status_code=410, detail="Invite has expired")

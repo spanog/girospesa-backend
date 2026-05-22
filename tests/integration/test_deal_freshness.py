@@ -17,6 +17,7 @@ from fastapi import FastAPI
 
 from api.routers.lists import router as lists_router
 from core.auth import get_current_user_id
+from tests.conftest import wait_for_user_bootstrap
 
 app = FastAPI()
 app.include_router(lists_router, prefix="/lists")
@@ -69,6 +70,7 @@ def auth_user(supabase_client):
         {"email": email, "password": "Test_password_123!", "email_confirm": True}
     )
     user_id: str = resp.user.id
+    wait_for_user_bootstrap(user_id)
     yield user_id
     supabase_client.auth.admin.delete_user(user_id)
 
@@ -143,7 +145,7 @@ class TestDealFreshnessIntegration:
     async def test_fresh_offer_returns_fresh_status(
         self, supabase_client, auth_user, product, supermarket
     ):
-        """Active offer with unchanged price → status='fresh'."""
+        """Active offer with unchanged price → staleness='fresh'."""
         offer = _insert_offer(supabase_client, product, supermarket, _FUTURE_DATE, price=1.29)
         item = _make_item("Latte intero", pinned_offer_id=offer["id"], pinned_product_id=product["id"], pinned_price=1.29)
         shopping_list = _create_list(supabase_client, auth_user, [item])
@@ -155,14 +157,14 @@ class TestDealFreshnessIntegration:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["status"] == "fresh"
+        assert data[0]["staleness"] == "fresh"
         assert data[0]["pinned_offer_id"] == offer["id"]
         assert data[0]["current_price"] == pytest.approx(1.29)
 
     async def test_expired_offer_returns_expired_status(
         self, supabase_client, auth_user, product, supermarket
     ):
-        """Offer with valid_to in the past (is_active=false) → status='expired'."""
+        """Offer with valid_to in the past (is_active=false) → staleness='expired'."""
         offer = _insert_offer(supabase_client, product, supermarket, _PAST_DATE, price=0.99)
         item = _make_item("Latte intero", pinned_offer_id=offer["id"], pinned_product_id=product["id"], pinned_price=0.99)
         shopping_list = _create_list(supabase_client, auth_user, [item])
@@ -174,13 +176,13 @@ class TestDealFreshnessIntegration:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["status"] == "expired"
-        assert data[0]["valid_to"] == _PAST_DATE
+        assert data[0]["staleness"] == "expired"
+        assert data[0]["current_price"] == pytest.approx(0.99)
 
     async def test_price_changed_offer_returns_price_changed_status(
         self, supabase_client, auth_user, product, supermarket
     ):
-        """Active offer whose price differs from snapshot → status='price_changed'."""
+        """Active offer whose price differs from snapshot → staleness='price_changed'."""
         offer = _insert_offer(supabase_client, product, supermarket, _FUTURE_DATE, price=1.49)
         pinned_price = 1.29  # old snapshot price
         item = _make_item("Latte intero", pinned_offer_id=offer["id"], pinned_product_id=product["id"], pinned_price=pinned_price)
@@ -193,14 +195,14 @@ class TestDealFreshnessIntegration:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["status"] == "price_changed"
+        assert data[0]["staleness"] == "price_changed"
         assert data[0]["current_price"] == pytest.approx(1.49)
-        assert data[0]["pinned_price"] == pytest.approx(1.29)
+        assert data[0]["snapshot_price"] == pytest.approx(1.29)
 
     async def test_missing_offer_returns_unavailable_status(
         self, supabase_client, auth_user, product, supermarket
     ):
-        """pinned_offer_id referencing a non-existent offer → status='unavailable'."""
+        """pinned_offer_id referencing a non-existent offer → staleness='unavailable'."""
         nonexistent_offer_id = str(uuid.uuid4())
         item = _make_item("Latte intero", pinned_offer_id=nonexistent_offer_id, pinned_product_id=product["id"])
         shopping_list = _create_list(supabase_client, auth_user, [item])
@@ -212,7 +214,7 @@ class TestDealFreshnessIntegration:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["status"] == "unavailable"
+        assert data[0]["staleness"] == "unavailable"
         assert data[0]["current_price"] is None
 
     async def test_item_without_pinned_offer_is_omitted(

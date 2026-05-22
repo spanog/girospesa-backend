@@ -85,7 +85,7 @@
 
 ## Push Favorites Webhook
 
-- `POST /push/notify-favorites` must ignore offers that are draft/unconfirmed, outside current validity window, missing a flyer, or linked to a non-public / non-done flyer. Favorite notifications are only for publicly visible offers.
+- `POST /push/notify-favorites` must ignore offers that are draft/unconfirmed, outside current validity window, missing a flyer, or linked to a non-public / non-done flyer. Favorite notifications are only for publicly visible offers. For each eligible recipient with `notification_favorites=true`, persist an `app_notifications` row with kind `favorite_offer` before attempting Web Push delivery, so inbox history survives closed clients or missing browser delivery.
 
 ## Ignore Rules
 

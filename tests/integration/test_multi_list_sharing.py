@@ -13,18 +13,21 @@ from fastapi import FastAPI
 from api.routers.lists import router as lists_router
 from api.routers.notifications import router as notifications_router
 from core.auth import get_current_user_id
+from tests.conftest import wait_for_user_bootstrap
 
 app = FastAPI()
 app.include_router(lists_router, prefix="/lists")
 app.include_router(notifications_router, prefix="/notifications")
 
-DB_DSN = os.getenv("DB_DSN")
+def _db_dsn() -> str | None:
+    return os.getenv("DB_DSN")
 
 
 def _ensure_auth_user_row(user_id: str, email: str) -> None:
-    if not DB_DSN:
+    dsn = _db_dsn()
+    if not dsn:
         return
-    conn = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(dsn)
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute(
@@ -50,9 +53,10 @@ def _ensure_auth_user_row(user_id: str, email: str) -> None:
 
 
 def _db_fetch_one(query: str, params: tuple) -> dict | None:
-    if not DB_DSN:
+    dsn = _db_dsn()
+    if not dsn:
         return None
-    conn = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(dsn)
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(query, params)
@@ -62,9 +66,10 @@ def _db_fetch_one(query: str, params: tuple) -> dict | None:
 
 
 def _db_fetch_all(query: str, params: tuple) -> list[dict]:
-    if not DB_DSN:
+    dsn = _db_dsn()
+    if not dsn:
         return []
-    conn = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(dsn)
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(query, params)
@@ -74,9 +79,10 @@ def _db_fetch_all(query: str, params: tuple) -> list[dict]:
 
 
 def _set_profile_display_name(user_id: str, display_name: str) -> None:
-    if not DB_DSN:
+    dsn = _db_dsn()
+    if not dsn:
         return
-    conn = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(dsn)
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute(
@@ -91,9 +97,10 @@ def _set_profile_display_name(user_id: str, display_name: str) -> None:
 
 
 def _insert_push_subscription(user_id: str) -> None:
-    if not DB_DSN:
+    dsn = _db_dsn()
+    if not dsn:
         return
-    conn = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(dsn)
     conn.autocommit = True
     cur = conn.cursor()
     cur.execute(
@@ -120,6 +127,7 @@ def owner_user(supabase_client):
     )
     user_id: str = resp.user.id
     _ensure_auth_user_row(user_id, email)
+    wait_for_user_bootstrap(user_id)
     _set_profile_display_name(user_id, "Owner Test")
     supabase_client.table("user_profiles").update(
         {"display_name": "Owner Test"}
@@ -136,6 +144,7 @@ def member_user(supabase_client):
     )
     user_id: str = resp.user.id
     _ensure_auth_user_row(user_id, email)
+    wait_for_user_bootstrap(user_id)
     _set_profile_display_name(user_id, "Member Test")
     supabase_client.table("user_profiles").update(
         {"display_name": "Member Test"}

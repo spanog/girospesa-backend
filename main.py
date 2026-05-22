@@ -22,6 +22,7 @@ from api.routers import (
     lists,
     notifications,
     offers,
+    optimize,
 
     products,
     purchases,
@@ -107,6 +108,7 @@ app.include_router(flyer_requests.router, prefix="/flyer-requests", tags=["flyer
 app.include_router(purchases.router, prefix="/purchases", tags=["purchases"])
 app.include_router(admin_products.router, prefix="/admin/products", tags=["admin-products"])
 app.include_router(offers.router, prefix="/offers", tags=["offers"])
+app.include_router(optimize.router, prefix="/optimize", tags=["optimize"])
 
 
 @app.get("/health")

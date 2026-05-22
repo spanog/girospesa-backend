@@ -215,7 +215,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 |--------|------|------|-------------|
 | `POST` | `/push/subscribe` | ✅ | Registra subscription Web Push del browser |
 | `POST` | `/push/unsubscribe` | ✅ | Cancella subscription |
-| `POST` | `/push/notify-favorites` | Webhook secret | Webhook Supabase: nuova offerta pubblica, confermata e attiva → notifica agli utenti che hanno quel prodotto tra i preferiti |
+| `POST` | `/push/notify-favorites` | Webhook secret | Webhook Supabase: nuova offerta pubblica, confermata e attiva → crea `app_notifications.favorite_offer` e invia Web Push agli utenti che hanno quel prodotto tra i preferiti |
 
 Le notifiche Web Push di completamento/fallimento estrazione includono nel campo `data` anche `kind`, `flyer_id`, `status`, `products_count` e `url`. Il frontend usa questi campi per aggiornare subito la cache della gestione volantini e poi confermare lo stato tramite refetch HTTP.
 
@@ -366,6 +366,7 @@ Frontend
     Backend: cerca utenti che hanno quel prodotto tra i preferiti
     Per ogni utente:
       check notification_favorites preference
+      → insert app_notifications.favorite_offer
       → fetch push_subscriptions
       → per ogni subscription:
             send_push_notification (VAPID, pywebpush)

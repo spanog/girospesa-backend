@@ -8,11 +8,13 @@ esplicitamente `supabase_client` o `async_client`.
 import os
 import sys
 import inspect
+import time
 import types
 from pathlib import Path
 
 import pytest
 import httpx
+import psycopg2
 from dotenv import load_dotenv
 
 from tests.env import resolve_test_env_file
@@ -24,16 +26,27 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(resolve_test_env_file(BACKEND_ROOT), override=False)
 
 if "geopy.exc" not in sys.modules:
-    geopy_exc = types.ModuleType("geopy.exc")
+    try:
+        import geopy.exc as geopy_exc  # type: ignore[import-not-found]
+    except Exception:
+        geopy_exc = types.ModuleType("geopy.exc")
 
-    class GeocoderTimedOut(Exception):
-        pass
+        class GeocoderNotFound(Exception):
+            pass
 
-    class GeocoderServiceError(Exception):
-        pass
+        class GeocoderTimedOut(Exception):
+            pass
 
-    geopy_exc.GeocoderTimedOut = GeocoderTimedOut
-    geopy_exc.GeocoderServiceError = GeocoderServiceError
+        class GeocoderServiceError(Exception):
+            pass
+
+        class ConfigurationError(Exception):
+            pass
+
+        geopy_exc.GeocoderNotFound = GeocoderNotFound
+        geopy_exc.GeocoderTimedOut = GeocoderTimedOut
+        geopy_exc.GeocoderServiceError = GeocoderServiceError
+        geopy_exc.ConfigurationError = ConfigurationError
     sys.modules["geopy.exc"] = geopy_exc
 
 
@@ -42,6 +55,27 @@ def _resolve_local_supabase_env(name: str) -> str:
     if value and not value.startswith("<local-"):
         return value
     raise RuntimeError(f"Missing test Supabase value for {name}.")
+
+
+def wait_for_user_bootstrap(user_id: str, *, timeout_seconds: float = 5.0) -> None:
+    """Wait until auth.users and user_profiles both expose the new user."""
+    dsn = os.environ.get("DB_DSN")
+    if not dsn:
+        return
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        conn = psycopg2.connect(dsn)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM auth.users WHERE id = %s LIMIT 1", (user_id,))
+        auth_ready = cur.fetchone() is not None
+        cur.execute("SELECT 1 FROM public.user_profiles WHERE id = %s LIMIT 1", (user_id,))
+        profile_ready = cur.fetchone() is not None
+        conn.close()
+        if auth_ready and profile_ready:
+            return
+        time.sleep(0.1)
+    raise RuntimeError(f"User bootstrap not ready for {user_id}")
 
 
 if "app" not in inspect.signature(httpx.AsyncClient.__init__).parameters:

@@ -2,7 +2,15 @@
 
 import pytest
 
+import core.config as core_config
+from core.config import Settings
 from scripts.integration_stack import integration_env, run_compose
+
+
+def _reload_runtime_settings() -> None:
+    refreshed = Settings()  # type: ignore[call-arg]
+    for field, value in refreshed.model_dump().items():
+        setattr(core_config.settings, field, value)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -11,8 +19,10 @@ def integration_test_env():
     monkeypatch = pytest.MonkeyPatch()
     for key, value in integration_env().items():
         monkeypatch.setenv(key, value)
+    _reload_runtime_settings()
     yield
     monkeypatch.undo()
+    _reload_runtime_settings()
 
 
 @pytest.fixture(scope="session", autouse=True)

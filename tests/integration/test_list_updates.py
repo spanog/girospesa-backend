@@ -18,12 +18,8 @@ import os
 import psycopg2
 import psycopg2.extras
 
-DB_DSN = os.getenv("DB_DSN")
-
-pytestmark = pytest.mark.skipif(
-    DB_DSN is None,
-    reason="DB_DSN required; run with integration test stack.",
-)
+def _db_dsn() -> str | None:
+    return os.getenv("DB_DSN")
 
 
 @pytest.fixture
@@ -37,8 +33,11 @@ def db_setup():
     list_id = str(uuid.uuid4())
     item1_id = str(uuid.uuid4())
     item2_id = str(uuid.uuid4())
+    dsn = _db_dsn()
+    if not dsn:
+        pytest.skip("DB_DSN required; run with integration test stack.")
 
-    conn = psycopg2.connect(DB_DSN)
+    conn = psycopg2.connect(dsn)
     conn.autocommit = False
     cur = conn.cursor()
 
@@ -92,7 +91,7 @@ def db_setup():
 
     # Teardown using a fresh connection (can't change autocommit mid-transaction)
     conn.close()
-    cleanup_conn = psycopg2.connect(DB_DSN)
+    cleanup_conn = psycopg2.connect(dsn)
     cleanup_conn.autocommit = True
     cleanup_cur = cleanup_conn.cursor()
     cleanup_cur.execute("DELETE FROM public.list_members WHERE list_id = %s", (list_id,))

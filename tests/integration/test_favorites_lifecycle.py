@@ -2,7 +2,7 @@
 
 Scenarios covered:
 1. Favorite stable on offer expiry: valid_to=yesterday → favorites row intact, product_id unchanged.
-2. Favorite stable on flyer deletion: DELETE flyers row → offers.flyer_id becomes NULL, favorites intact.
+2. Favorite stable on flyer deletion: DELETE flyers row → linked offers cascade-delete, favorites intact.
 3. New offer reflected in GET /favorites: INSERT new offer for favorited product → returned without touching favorites.
 4. No active offer: no offer with is_active=true → has_active_offer=False.
 5. POST /favorites FK constraint: product_id NOT NULL enforced by API (422 on missing field).
@@ -25,6 +25,7 @@ from fastapi import FastAPI
 
 from api.routers.favorites import router as favorites_router
 from core.auth import get_current_user_id
+from tests.conftest import wait_for_user_bootstrap
 
 app = FastAPI()
 app.include_router(favorites_router, prefix="/favorites")
@@ -45,6 +46,7 @@ def auth_user(supabase_client):
         {"email": email, "password": "Test_password_123!", "email_confirm": True}
     )
     user_id: str = resp.user.id
+    wait_for_user_bootstrap(user_id)
     yield user_id
     supabase_client.auth.admin.delete_user(user_id)
 
@@ -186,7 +188,7 @@ class TestFavoritesLifecycle:
     async def test_favorite_stable_on_flyer_deletion(
         self, supabase_client, auth_user, product, supermarket, flyer
     ):
-        """When the flyer row is deleted, offers.flyer_id becomes NULL (ON DELETE SET NULL).
+        """When the flyer row is deleted, linked offers cascade-delete.
         The favorites row must remain intact."""
         offer = _insert_offer(
             supabase_client, product, supermarket, _FUTURE_DATE, flyer_id=flyer["id"]
@@ -196,16 +198,15 @@ class TestFavoritesLifecycle:
         # Delete the flyer
         supabase_client.table("flyers").delete().eq("id", flyer["id"]).execute()
 
-        # offers.flyer_id must be NULL (ON DELETE SET NULL)
-        offer_row = (
+        # Linked offers now cascade-delete with the flyer.
+        offer_rows = (
             supabase_client.table("offers")
-            .select("id, flyer_id, is_active")
+            .select("id")
             .eq("id", offer["id"])
-            .single()
             .execute()
-        ).data
-        assert offer_row is not None, "Offer row must still exist after flyer deletion"
-        assert offer_row["flyer_id"] is None, "flyer_id must be NULL after ON DELETE SET NULL"
+            .data
+        )
+        assert offer_rows == []
 
         # Favorites row must still exist unchanged
         fav_row = (

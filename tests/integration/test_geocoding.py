@@ -27,6 +27,7 @@ import api.routers.users as users_module
 from api.routers.users import router as users_router
 from core.auth import get_current_user_id
 from services.geocoding import geocode_address
+from tests.conftest import wait_for_user_bootstrap
 
 app = FastAPI()
 app.include_router(users_router, prefix="/users")
@@ -55,6 +56,7 @@ def auth_user(supabase_client):
         {"email": email, "password": "Test_password_123!", "email_confirm": True}
     )
     user_id: str = resp.user.id
+    wait_for_user_bootstrap(user_id)
     yield user_id
     supabase_client.auth.admin.delete_user(user_id)
 
@@ -170,12 +172,11 @@ class TestGeocodeEndpoint:
     async def test_geocode_requires_authentication(self):
         """Endpoint rejects unauthenticated requests.
 
-        FastAPI's HTTPBearer returns 403 (not 401) when no Authorization header
-        is provided — this is the framework's default for missing bearer credentials.
+        Current auth layer returns 401 when no bearer token is provided.
         """
         app_no_auth = FastAPI()
         app_no_auth.include_router(users_router, prefix="/users")
-        # No dependency_overrides → HTTPBearer rejects missing token with 403
+        # No dependency_overrides → auth dependency rejects missing token
 
         async with httpx.AsyncClient(app=app_no_auth, base_url="http://test") as client:
             resp = await client.post(
@@ -183,4 +184,4 @@ class TestGeocodeEndpoint:
                 json={"address": "Via Roma 1, Milano"},
             )
 
-        assert resp.status_code == 403
+        assert resp.status_code == 401

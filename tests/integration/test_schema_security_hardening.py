@@ -227,7 +227,7 @@ def test_list_rpcs_are_not_security_definer():
     ]
 
 
-def test_offers_product_flyer_format_unique_index_is_not_partial():
+def test_offers_flyer_draft_product_format_unique_index_is_not_partial():
     rows = _fetch_all(
         """
         SELECT
@@ -240,14 +240,14 @@ def test_offers_product_flyer_format_unique_index_is_not_partial():
         JOIN pg_namespace n ON n.oid = tbl.relnamespace
         WHERE n.nspname = 'public'
           AND tbl.relname = 'offers'
-          AND idx.relname = 'idx_offers_product_flyer_format'
+          AND idx.relname = 'idx_offers_flyer_draft_product_format'
         """
     )
 
     assert rows == [
         {
             "is_unique": True,
-            "index_def": "CREATE UNIQUE INDEX idx_offers_product_flyer_format ON public.offers USING btree (product_id, flyer_id, format_key)",
+            "index_def": "CREATE UNIQUE INDEX idx_offers_flyer_draft_product_format ON public.offers USING btree (flyer_id, draft_product_key, format_key)",
             "predicate": None,
         }
     ]

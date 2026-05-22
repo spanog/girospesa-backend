@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 from fastapi import FastAPI
+from tests.conftest import wait_for_user_bootstrap
 
 from api.routers.flyers import router as flyers_router
 from core.auth import get_current_user, get_current_user_id, require_admin_or_manager
@@ -85,6 +86,7 @@ class TestFlyerUploadIntegration:
             {"email": email, "password": "Test_password_123!", "email_confirm": True}
         )
         user_id = resp.user.id
+        wait_for_user_bootstrap(user_id)
         (
             supabase_client.table("user_profiles")
             .update({"role": "admin", "managed_supermarket_id": None})

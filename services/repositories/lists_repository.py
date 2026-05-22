@@ -26,7 +26,7 @@ def _normalize_db_row(row: dict | None) -> dict | None:
 
 
 def _wait_for_auth_user(user_id: str, *, timeout_seconds: float = 3.0) -> None:
-    """Auth admin user creation can lag briefly before auth.users is visible."""
+    """Auth bootstrap can lag briefly before FK targets become visible."""
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         with get_postgres_cursor() as cursor:
@@ -41,8 +41,48 @@ def _wait_for_auth_user(user_id: str, *, timeout_seconds: float = 3.0) -> None:
             )
             if cursor.fetchone():
                 return
+            cursor.execute(
+                """
+                SELECT 1
+                FROM public.user_profiles
+                WHERE id = %s
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            if cursor.fetchone():
+                return
         time.sleep(0.1)
     raise HTTPException(status_code=409, detail="User profile is not ready yet")
+
+
+def _insert_owned_list_row(
+    cursor: psycopg2.extensions.cursor,
+    *,
+    user_id: str,
+    name: str,
+    items: list[dict] | None,
+    is_active: bool,
+    is_default: bool,
+) -> dict:
+    deadline = time.monotonic() + 3.0
+    params = (user_id, name, psycopg2.extras.Json(items or []), is_active, is_default)
+    while True:
+        try:
+            cursor.execute(
+                """
+                INSERT INTO public.shopping_lists (user_id, name, items, is_active, is_default)
+                VALUES (%s, %s, %s::jsonb, %s, %s)
+                RETURNING id, user_id, name, items, is_active, created_at, updated_at
+                """,
+                params,
+            )
+            return cursor.fetchone()
+        except psycopg2_errors.ForeignKeyViolation:
+            if time.monotonic() >= deadline:
+                raise
+            _wait_for_auth_user(user_id)
+            time.sleep(0.1)
 
 
 def verify_member(sb: object, list_id: str, user_id: str) -> None:
@@ -245,26 +285,16 @@ def create_owned_list(
         return row
     with get_postgres_cursor() as cursor:
         try:
-            cursor.execute(
-                """
-                INSERT INTO public.shopping_lists (user_id, name, items, is_active, is_default)
-                VALUES (%s, %s, %s::jsonb, %s, %s)
-                RETURNING id, user_id, name, items, is_active, created_at, updated_at
-                """,
-                (user_id, name, psycopg2.extras.Json(items or []), is_active, is_default),
+            row = _insert_owned_list_row(
+                cursor,
+                user_id=user_id,
+                name=name,
+                items=items,
+                is_active=is_active,
+                is_default=is_default,
             )
-            row = cursor.fetchone()
-        except psycopg2_errors.ForeignKeyViolation:
-            _wait_for_auth_user(user_id)
-            cursor.execute(
-                """
-                INSERT INTO public.shopping_lists (user_id, name, items, is_active, is_default)
-                VALUES (%s, %s, %s::jsonb, %s, %s)
-                RETURNING id, user_id, name, items, is_active, created_at, updated_at
-                """,
-                (user_id, name, psycopg2.extras.Json(items or []), is_active, is_default),
-            )
-            row = cursor.fetchone()
+        except psycopg2_errors.ForeignKeyViolation as exc:
+            raise HTTPException(status_code=409, detail="User profile is not ready yet") from exc
     normalized = _normalize_db_row(dict(row))
     if normalized is None:
         raise HTTPException(status_code=500, detail="Failed to create shopping list")

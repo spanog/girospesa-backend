@@ -18,6 +18,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from tests.conftest import wait_for_user_bootstrap
 
 
 
@@ -34,6 +35,7 @@ def gdpr_user(supabase_client):
         {"email": email, "password": "Test_password_123!", "email_confirm": True}
     )
     user_id: str = resp.user.id
+    wait_for_user_bootstrap(user_id)
     yield user_id
     # Cleanup: delete user if still exists (cascade handles related rows)
     try:

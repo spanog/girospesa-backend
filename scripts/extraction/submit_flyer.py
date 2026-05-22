@@ -20,11 +20,21 @@ from typing import Sequence
 from services.extraction.normalizer import deduplicate_products, normalize_products
 from services.extraction.pdf_utils import count_pdf_pages, is_pdf, mime_type_for_filename
 from services.extraction.providers import GeminiProvider
+from services.product_format import build_extraction_format_bundle
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _ensure_format_label(product: dict) -> dict:
+    if product.get("format_label") or not product.get("format"):
+        return product
+    bundle = build_extraction_format_bundle(product["format"])
+    enriched = dict(product)
+    enriched["format_label"] = bundle.format_label
+    return enriched
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -81,7 +91,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     normalized = normalize_products(all_products)
     normalized = [p for p in normalized if p.get("name") and p.get("price_offer")]
-    unique = deduplicate_products(normalized)
+    unique = [_ensure_format_label(product) for product in deduplicate_products(normalized)]
     if not unique:
         logger.error("No products extracted from file.")
         sys.exit(1)

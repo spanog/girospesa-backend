@@ -25,6 +25,31 @@ router = APIRouter()
 _WEBHOOK_SECRET_HEADER = "x-webhook-secret"
 
 
+def _favorite_offer_data(product_id: str) -> dict[str, str]:
+    return {
+        "kind": "favorite_offer",
+        "url": f"/offerte?product={product_id}",
+        "product_id": product_id,
+    }
+
+
+def _persist_app_notification(
+    user_id: str,
+    title: str,
+    body: str,
+    data: dict[str, str],
+) -> None:
+    get_supabase().table("app_notifications").insert(
+        {
+            "user_id": user_id,
+            "kind": "favorite_offer",
+            "title": title,
+            "body": body,
+            "data": data,
+        }
+    ).execute()
+
+
 def _offer_is_currently_active(record: dict) -> bool:
     today = date.today().isoformat()
     valid_from = record.get("valid_from")
@@ -160,6 +185,8 @@ async def notify_favorites(request: Request) -> Response:
         f"Valida fino al {valid_to}" if valid_to else "",
     ]
     notification_body = " — ".join(p for p in parts if p)
+    notification_title = f"Nuova offerta: {product_name}"
+    notification_data = _favorite_offer_data(product_id)
 
     # Find users who favourited this product and have push notifications enabled
     favs_resp = (
@@ -185,6 +212,13 @@ async def notify_favorites(request: Request) -> Response:
         if not profile_resp.data or not profile_resp.data.get("notification_favorites", True):
             continue
 
+        _persist_app_notification(
+            user_id=uid,
+            title=notification_title,
+            body=notification_body,
+            data=notification_data,
+        )
+
         # Fetch all push subscriptions for this user
         subs_resp = (
             sb.table("push_subscriptions")
@@ -202,9 +236,9 @@ async def notify_favorites(request: Request) -> Response:
             try:
                 send_push_notification(
                     subscription=subscription,
-                    title=f"Nuova offerta: {product_name}",
+                    title=notification_title,
                     body=notification_body,
-                    data={"kind": "favorite_offer", "url": f"/offerte?product={product_id}", "product_id": product_id},
+                    data=notification_data,
                 )
             except PushEndpointGoneError:
                 stale_endpoints.append((uid, sub["endpoint"]))

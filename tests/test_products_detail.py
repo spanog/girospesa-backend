@@ -40,6 +40,8 @@ def _format_unit_price_label(value, unit):
 
 
 _normalizer_mod.format_unit_price_label = _format_unit_price_label  # type: ignore[attr-defined]
+_normalizer_mod.normalize_products = lambda products: products  # type: ignore[attr-defined]
+_normalizer_mod.deduplicate_products = lambda products: products  # type: ignore[attr-defined]
 sys.modules["services.extraction"] = _extraction_pkg
 sys.modules["services.extraction.normalizer"] = _normalizer_mod
 

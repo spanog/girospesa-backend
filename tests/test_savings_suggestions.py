@@ -24,7 +24,11 @@ for _mod in (
 _config = types.ModuleType("core.config")
 _config.settings = MagicMock()
 sys.modules["core.config"] = _config
-sys.modules["core.database"] = MagicMock()
+_database = types.ModuleType("core.database")
+_database.has_direct_postgres = lambda: False  # type: ignore[attr-defined]
+_database.get_postgres_cursor = MagicMock()  # type: ignore[attr-defined]
+_database.get_supabase = MagicMock()  # type: ignore[attr-defined]
+sys.modules["core.database"] = _database
 _auth = types.ModuleType("core.auth")
 _auth.get_current_user_id = MagicMock()
 sys.modules["core.auth"] = _auth
@@ -35,6 +39,8 @@ from fastapi import FastAPI
 
 from api.routers import lists as _lists_module
 from api.routers.lists import router as _lists_router
+
+_lists_module.repo.has_direct_postgres = lambda: False
 
 _DEP = _lists_module.get_current_user_id
 _USER = "user-1"
