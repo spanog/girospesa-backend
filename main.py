@@ -57,12 +57,14 @@ async def lifespan(app: FastAPI):
         CronTrigger(hour=0, minute=0, timezone="Europe/Rome"),
         id="flyer_cleanup",
         replace_existing=True,
+        misfire_grace_time=None,
     )
     scheduler.add_job(
         PurchasedItemsCleanupService().run,
         CronTrigger(hour=0, minute=0, timezone="Europe/Rome"),
         id="purchased_items_cleanup",
         replace_existing=True,
+        misfire_grace_time=None,
     )
     scheduler.start()
     logger.info("Nightly schedulers started (fire daily at midnight Europe/Rome)")
