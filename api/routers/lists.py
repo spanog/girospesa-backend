@@ -97,6 +97,7 @@ class SelectListBody(BaseModel):
 
 class AddItemBody(BaseModel):
     name: str
+    brand: str | None = None
     quantity: float = 1.0
     unit: str | None = None
     source: Literal["manual", "offer"] = "manual"
@@ -137,7 +138,7 @@ def _product_categories(sb: object, product_ids: set[str]) -> dict[str, dict]:
         return {}
     rows = (
         sb.table("products")  # type: ignore[union-attr,attr-defined]
-        .select("id, category, subcategory")
+        .select("id, brand, category, subcategory")
         .in_("id", sorted(product_ids))
         .execute()
         .data
@@ -150,7 +151,7 @@ def _offer_categories(sb: object, offer_ids: set[str]) -> dict[str, dict]:
         return {}
     rows = (
         sb.table("offers")  # type: ignore[union-attr,attr-defined]
-        .select("id, product_id, products(category, subcategory)")
+        .select("id, product_id, products(brand, category, subcategory)")
         .in_("id", sorted(offer_ids))
         .execute()
         .data
@@ -164,6 +165,7 @@ def _category_for_item(item: dict, products: dict, offers: dict) -> dict:
     category_source = product or offers.get(item.get("pinned_offer_id")) or {}
     return {
         **item,
+        "brand": category_source.get("brand", item.get("brand")),
         "category": category_source.get("category", item.get("category")),
         "subcategory": category_source.get("subcategory", item.get("subcategory")),
     }
@@ -289,7 +291,7 @@ def _offer_row(sb: object, offer_id: str) -> dict:
 def _product_row(sb: object, product_id: str) -> dict:
     rows = (
         sb.table("products")  # type: ignore[union-attr,attr-defined]
-        .select("id, name, category, subcategory, image_url")
+        .select("id, name, brand, category, subcategory, image_url")
         .eq("id", product_id)
         .limit(1)
         .execute()
@@ -325,6 +327,7 @@ def _selected_offer_patch(sb: object, offer_id: str) -> dict:
     return {
         "source": "offer",
         "name": product.get("name", ""),
+        "brand": product.get("brand"),
         "pinned_product_id": offer["product_id"],
         "pinned_offer_id": offer["id"],
         "image_url": product.get("image_url"),
@@ -984,6 +987,7 @@ async def add_item(
     new_item = {
         "id": str(uuid.uuid4()),
         "name": body.name,
+        "brand": body.brand,
         "quantity": body.quantity,
         "unit": body.unit,
         "checked": False,

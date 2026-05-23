@@ -38,12 +38,14 @@ class SupabaseStub:
             {
                 "id": "prod-1",
                 "name": "Pasta",
+                "brand": "Barilla",
                 "category": "dispensa",
                 "subcategory": "Primi Piatti e Preparati",
             },
             {
                 "id": "prod-2",
                 "name": "Acqua naturale",
+                "brand": "Sant'Anna",
                 "category": "bevande",
                 "subcategory": "Acqua e Bibite",
             },
@@ -53,6 +55,7 @@ class SupabaseStub:
                 "id": "offer-1",
                 "product_id": "prod-2",
                 "products": {
+                    "brand": "Sant'Anna",
                     "category": "bevande",
                     "subcategory": "Acqua e Bibite",
                 },
@@ -86,6 +89,7 @@ def test_enriches_items_from_pinned_product_id():
 
     assert enriched[0]["category"] == "dispensa"
     assert enriched[0]["subcategory"] == "Primi Piatti e Preparati"
+    assert enriched[0]["brand"] == "Barilla"
 
 
 def test_enriches_items_from_pinned_offer_id():
@@ -95,6 +99,7 @@ def test_enriches_items_from_pinned_offer_id():
 
     assert enriched[0]["category"] == "bevande"
     assert enriched[0]["subcategory"] == "Acqua e Bibite"
+    assert enriched[0]["brand"] == "Sant'Anna"
 
 
 def test_keeps_manual_items_uncategorized():
@@ -125,6 +130,7 @@ def test_selected_offer_patch_builds_coherent_snapshot():
     patch = _selected_offer_patch(SupabaseStub(), "offer-1")
 
     assert patch["source"] == "offer"
+    assert patch["brand"] == "Sant'Anna"
     assert patch["pinned_product_id"] == "prod-2"
     assert patch["pinned_offer_id"] == "offer-1"
     assert patch["category"] == "bevande"

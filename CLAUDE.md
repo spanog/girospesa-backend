@@ -68,6 +68,7 @@
 ## Optimizer
 
 - `/optimize` must resolve `pinned_offer_id` before fuzzy matching. A list item added from an offer is an exact offer match (`match_score=1.0`) when the offer is active and in range. When the frontend selects an optimization alternative, `PATCH /lists/{list_id}/items/{item_id}` must persist the new `pinned_offer_id`, `pinned_product_id`, `found_deals`, category, and subcategory through RPC `update_list_item`, then reread the saved list item so lista, giro spesa, acquisti, and freshness stay aligned. `update_list_item` is `SECURITY INVOKER`; auth safety comes from RLS and `auth.uid()` membership checks, not definer privileges.
+- Shopping-list snapshots for items linked to offers/products must preserve `brand` alongside `name`, `pinned_product_id`, `pinned_offer_id`, and taxonomy fields. Read paths such as `GET /lists/active` should also backfill missing `brand` from the linked product/offer so older snapshots still render branded rows correctly.
 - Active offer filtering must stay null-safe and match public visibility windows: `valid_from IS NULL OR valid_from <= today`, `valid_to IS NULL OR valid_to >= today`.
 - `/optimize` must verify caller membership on `body.list_id` before loading any list items or returning shopping intent data.
 

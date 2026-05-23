@@ -255,6 +255,45 @@ async def test_patch_selected_offer_returns_coherent_item():
     rpc_mock.assert_awaited_once_with(_LIST_ID, _ITEM_ID, offer_patch, _USER_ID)
 
 
+async def test_add_offer_item_returns_brand_in_snapshot():
+    sb_mock = MagicMock()
+
+    offer_patch = {
+        "source": "offer",
+        "name": "Bistecca scelta",
+        "brand": "Filiera Italia",
+        "pinned_product_id": "prod-2",
+        "pinned_offer_id": "offer-2",
+        "image_url": None,
+        "category": "alimentari-freschi",
+        "subcategory": "Macelleria e Polleria",
+        "found_deals": [{"offer_id": "offer-2", "price_offer": 9.9}],
+    }
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None), \
+         patch.object(_lists_module, "_selected_offer_patch", return_value=offer_patch), \
+         patch.object(_lists_module, "_enrich_items_with_categories", return_value=[offer_patch]), \
+         patch.object(_lists_module, "_rpc_append_list_item", new=AsyncMock()) as rpc_mock:
+        resp = await _post_req(
+            f"/lists/{_LIST_ID}/items",
+            json={
+                "name": "Bistecca scelta",
+                "brand": "Filiera Italia",
+                "quantity": 1,
+                "source": "offer",
+                "pinned_product_id": "prod-2",
+                "pinned_offer_id": "offer-2",
+                "image_url": None,
+            },
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["brand"] == "Filiera Italia"
+    rpc_mock.assert_awaited_once()
+
+
 async def test_patch_category_returns_updated_item():
     initial_items = [
         {
