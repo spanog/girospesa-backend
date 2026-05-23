@@ -102,6 +102,7 @@ class AddItemBody(BaseModel):
     source: Literal["manual", "offer"] = "manual"
     pinned_product_id: str | None = None  # canonical products.id (set when source='offer')
     pinned_offer_id: str | None = None    # specific offers.id (set when source='offer')
+    image_url: str | None = None
 
 
 class InviteBody(BaseModel):
@@ -288,7 +289,7 @@ def _offer_row(sb: object, offer_id: str) -> dict:
 def _product_row(sb: object, product_id: str) -> dict:
     rows = (
         sb.table("products")  # type: ignore[union-attr,attr-defined]
-        .select("id, name, category, subcategory")
+        .select("id, name, category, subcategory, image_url")
         .eq("id", product_id)
         .limit(1)
         .execute()
@@ -326,6 +327,7 @@ def _selected_offer_patch(sb: object, offer_id: str) -> dict:
         "name": product.get("name", ""),
         "pinned_product_id": offer["product_id"],
         "pinned_offer_id": offer["id"],
+        "image_url": product.get("image_url"),
         "category": product.get("category"),
         "subcategory": product.get("subcategory"),
         "found_deals": [_deal_snapshot_from_offer(offer)],
@@ -992,6 +994,7 @@ async def add_item(
         "source": body.source,
         "pinned_product_id": body.pinned_product_id,
         "pinned_offer_id": body.pinned_offer_id,
+        "image_url": body.image_url,
         "category": None,
         "subcategory": None,
         "found_deals": [],
