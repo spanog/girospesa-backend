@@ -1014,6 +1014,34 @@ async def add_item(
     return new_item
 
 
+@router.post("/{list_id}/items/remove-purchased")
+async def remove_purchased_items(
+    list_id: str,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> dict:
+    sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
+    current = (
+        sb.table("shopping_lists")
+        .select("items")
+        .eq("id", list_id)
+        .single()
+        .execute()
+    )
+    items = current.data["items"] or []
+    remaining_items = [item for item in items if not item.get("purchased")]
+    sb.table("shopping_lists").update({"items": remaining_items}).eq("id", list_id).execute()
+    row = (
+        sb.table("shopping_lists")
+        .select("*")
+        .eq("id", list_id)
+        .single()
+        .execute()
+        .data
+    )
+    return row
+
+
 @router.delete("/{list_id}/items/{item_id}")
 async def remove_item(
     list_id: str,

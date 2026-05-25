@@ -472,6 +472,74 @@ async def test_reset_list_403_non_member():
     assert resp.status_code == 403
 
 
+async def test_remove_purchased_items_clears_only_purchased_items_and_returns_updated_list():
+    updated_list = {
+        "id": _LIST_ID,
+        "user_id": _USER_ID,
+        "name": "Lista principale",
+        "items": [
+            {
+                "id": "item-2",
+                "name": "Pane",
+                "quantity": 1,
+                "purchased": False,
+            }
+        ],
+        "is_active": True,
+    }
+    sb_mock = MagicMock()
+    table = sb_mock.table.return_value
+    table.select.return_value.eq.return_value.single.return_value.execute.side_effect = [
+        MagicMock(
+            data={
+                "items": [
+                    {
+                        "id": "item-1",
+                        "name": "Latte",
+                        "quantity": 1,
+                        "purchased": True,
+                    },
+                    {
+                        "id": "item-2",
+                        "name": "Pane",
+                        "quantity": 1,
+                        "purchased": False,
+                    },
+                ]
+            }
+        ),
+        MagicMock(data=updated_list),
+    ]
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None):
+        resp = await _post_req(
+            f"/lists/{_LIST_ID}/items/remove-purchased",
+            json={},
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["items"] == updated_list["items"]
+    sb_mock.table.return_value.update.assert_called_with(
+        {"items": updated_list["items"]}
+    )
+
+
+async def test_remove_purchased_items_403_non_member():
+    from fastapi import HTTPException
+
+    with patch.object(_lists_module, "get_supabase", return_value=MagicMock()), \
+         patch.object(_lists_module, "_verify_member", side_effect=HTTPException(status_code=403, detail="Not a member")):
+        resp = await _post_req(
+            f"/lists/{_LIST_ID}/items/remove-purchased",
+            json={},
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 403
+
+
 @pytest.mark.asyncio
 async def test_add_item_403_non_member():
     from fastapi import HTTPException

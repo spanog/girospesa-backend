@@ -119,6 +119,7 @@ Le liste non-default possono essere eliminate solo dal proprietario. Se lista co
 |--------|------|------|-------------|
 | `GET` | `/lists/active` | ✅ | Lista attiva; auto-crea `Lista principale` se non esiste; arricchisce gli item con `brand`, `category` e `subcategory`, facendo backfill del brand da prodotto/offerta quando lo snapshot storico non lo contiene |
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
+| `POST` | `/lists/{id}/items/remove-purchased` | ✅ member | Rimuove in blocco dalla lista solo gli item acquistati e restituisce la lista aggiornata, senza cancellare `purchase_history` |
 | `POST` | `/lists/{id}/items` | ✅ member | Aggiunge item (manuale o da offerta) e salva snapshot `brand`/`category`/`subcategory` quando collegato a prodotto/offerta; persistenza via RPC concorrente-safe `append_list_item` (`SECURITY INVOKER`, `search_path` fissato a `public`) |
 | `PATCH` | `/lists/{id}/items/{item_id}` | ✅ member | Aggiorna quantità o alternativa selezionata; con `pinned_offer_id` salva `source`, `pinned_product_id`, `found_deals`, categoria e sottocategoria coerenti via RPC concorrente-safe `update_list_item` (`SECURITY INVOKER`, protetta da RLS + `auth.uid()`), poi rilegge item persistito |
 | `DELETE` | `/lists/{id}/items/{item_id}` | ✅ member | Rimuove item via RPC concorrente-safe `remove_list_item` (`SECURITY INVOKER`, `search_path` fissato a `public`) |
