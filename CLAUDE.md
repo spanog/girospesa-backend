@@ -53,6 +53,8 @@
 - Admin product delete on `/admin/products/{id}` is hard delete only when product has zero linked offers; endpoint must also delete linked favorites.
 - `purchase_history.product_id` is historical snapshot data, not live FK protection for canonical products.
 - `purchase_history.quantity` stores purchased quantity; stored `price_paid`, `price_original`, and `savings` must be quantity-scaled totals, not unit values.
+- `purchase_history` must also snapshot `brand`, `format_label`, `image_url`, `category`, `subcategory`, and unit-price fields so `/purchases/history` keeps rich cards even if linked offers/products later change or disappear.
+- Purchase and undo flows on `/purchases/items/{item_id}` must mutate `shopping_lists.items` through `update_list_item` RPC patches, never with full-array `shopping_lists.update(...)` writes.
 
 ## Supabase Query Builder
 

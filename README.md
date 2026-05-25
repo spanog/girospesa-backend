@@ -224,9 +224,9 @@ Le notifiche Web Push di completamento/fallimento estrazione includono nel campo
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `POST` | `/purchases/items/{item_id}` | ✅ | Segna item come acquistato; registra prezzo e risparmio |
-| `DELETE` | `/purchases/items/{item_id}` | ✅ | Annulla acquisto |
-| `GET` | `/purchases/history` | ✅ | Storico risparmio (ultimi N giorni, default 90) |
+| `POST` | `/purchases/items/{item_id}` | ✅ | Segna item come acquistato; registra prezzo, risparmio e snapshot prodotto (brand, formato, immagine, categoria, unit price) e aggiorna i flag `purchased_*` tramite RPC `update_list_item` concorrente-safe |
+| `DELETE` | `/purchases/items/{item_id}` | ✅ | Annulla acquisto; pulisce i flag `purchased_*` tramite RPC `update_list_item` e rimuove la riga da `purchase_history` |
+| `GET` | `/purchases/history` | ✅ | Storico risparmio (ultimi N giorni, default 90) con metadati visuali completi per la UI |
 
 ### Analytics B2B (`/analytics`)
 
@@ -261,6 +261,7 @@ The backend runs scheduled background jobs via APScheduler (`AsyncIOScheduler`),
 
 - `purchase_history.product_id` resta valorizzabile come snapshot storico del prodotto acquistato, ma non mantiene più una foreign key verso `products`.
 - `purchase_history.quantity` salva quantità acquistata; `price_paid`, `price_original` e `savings` nello storico sono importi totali già scalati per quantità.
+- `purchase_history` salva anche snapshot di `brand`, `format_label`, `image_url`, `category`, `subcategory` e dei campi `unit_price*`, così lo storico frontend mantiene stessa densità informativa anche se catalogo o offerte cambiano nel tempo.
 - Questo permette di eliminare prodotti canonici non più usati senza perdere coerenza nello storico acquisti.
 
 | Job | Schedule | Service | Description |
