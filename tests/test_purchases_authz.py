@@ -364,12 +364,19 @@ async def test_get_history_uses_concrete_utc_cutoff():
     transport = httpx.ASGITransport(app=_test_app)
 
     sb = MagicMock()
-    table = sb.table.return_value
-    select = table.select.return_value
-    eq = select.eq.return_value
-    gte = eq.gte.return_value
-    order = gte.order.return_value
-    order.limit.return_value.execute.return_value = MagicMock(data=[])
+    records_table = MagicMock()
+    summary_table = MagicMock()
+    sb.table.side_effect = [records_table, summary_table]
+
+    records_select = records_table.select.return_value
+    records_eq = records_select.eq.return_value
+    records_gte = records_eq.gte.return_value
+    records_order = records_gte.order.return_value
+    records_order.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    summary_select = summary_table.select.return_value
+    summary_eq = summary_select.eq.return_value
+    summary_eq.gte.return_value.execute.return_value = MagicMock(data=[])
 
     with patch.object(_purchases_module, "get_supabase", return_value=sb):
         async with httpx.AsyncClient(
@@ -378,9 +385,10 @@ async def test_get_history_uses_concrete_utc_cutoff():
             resp = await client.get("/purchases/history", params={"days": 30})
 
     assert resp.status_code == 200
-    table.select.assert_called_once_with("*")
-    eq.gte.assert_called_once()
-    gte_args = eq.gte.call_args.args
+    records_table.select.assert_called_once_with("*")
+    summary_table.select.assert_called_once_with("price_paid, savings, offer_id")
+    records_eq.gte.assert_called_once()
+    gte_args = records_eq.gte.call_args.args
     assert gte_args[0] == "purchased_at"
     assert gte_args[1].endswith("+00:00")
     assert "interval" not in gte_args[1]
@@ -446,12 +454,24 @@ async def test_get_history_returns_summary_records():
     ]
 
     sb = MagicMock()
-    table = sb.table.return_value
-    select = table.select.return_value
-    eq = select.eq.return_value
-    gte = eq.gte.return_value
-    order = gte.order.return_value
-    order.limit.return_value.execute.return_value = MagicMock(data=rows)
+    records_table = MagicMock()
+    summary_table = MagicMock()
+    sb.table.side_effect = [records_table, summary_table]
+
+    records_select = records_table.select.return_value
+    records_eq = records_select.eq.return_value
+    records_gte = records_eq.gte.return_value
+    records_order = records_gte.order.return_value
+    records_order.order.return_value.limit.return_value.execute.return_value = MagicMock(data=rows)
+
+    summary_select = summary_table.select.return_value
+    summary_eq = summary_select.eq.return_value
+    summary_eq.gte.return_value.execute.return_value = MagicMock(
+        data=[
+            {"price_paid": 1.5, "savings": 0.5, "offer_id": None},
+            {"price_paid": 1.2, "savings": 0.4, "offer_id": "offer-1"},
+        ]
+    )
 
     with patch.object(_purchases_module, "get_supabase", return_value=sb):
         async with httpx.AsyncClient(
@@ -464,6 +484,101 @@ async def test_get_history_returns_summary_records():
         "total_savings": 0.9,
         "total_spend": 2.7,
         "total_purchases": 2,
+        "total_offer_purchases": 1,
         "period_days": 90,
         "records": rows,
+        "next_cursor_purchased_at": None,
+        "next_cursor_id": None,
+        "has_more": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_get_history_returns_next_cursor_and_applies_filters():
+    _test_app.dependency_overrides = _deps("user-99")
+    transport = httpx.ASGITransport(app=_test_app)
+
+    rows = [
+        {
+            "id": "r3",
+            "list_id": "list-1",
+            "list_item_id": "item-3",
+            "item_name": "Pasta",
+            "brand": "Rummo",
+            "format_label": "500 g",
+            "image_url": None,
+            "category": "dispensa",
+            "subcategory": "Primi Piatti e Preparati",
+            "product_id": None,
+            "offer_id": "offer-3",
+            "supermarket_id": "store-2",
+            "supermarket_name": "Coop",
+            "quantity": 1,
+            "price_paid": 1.5,
+            "price_original": 2.0,
+            "discount_pct": 25,
+            "unit_price": "3,00 €/kg",
+            "unit_price_value": 3.0,
+            "unit_price_unit": "kg",
+            "unit_price_label": "3,00 €/kg",
+            "savings": 0.5,
+            "purchased_at": "2026-05-08T09:00:00+00:00",
+        }
+    ]
+
+    sb = MagicMock()
+    records_table = MagicMock()
+    summary_table = MagicMock()
+    sb.table.side_effect = [records_table, summary_table]
+
+    records_select = records_table.select.return_value
+    records_eq = records_select.eq.return_value
+    records_gte = records_eq.gte.return_value
+    records_category = records_gte.eq.return_value
+    records_subcategory = records_category.eq.return_value
+    records_supermarket = records_subcategory.eq.return_value
+    records_source = records_supermarket.not_.is_.return_value
+    records_source.order.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(
+        data=rows + [dict(rows[0], id="r2", purchased_at="2026-05-07T09:00:00+00:00")]
+    )
+
+    summary_select = summary_table.select.return_value
+    summary_eq = summary_select.eq.return_value
+    summary_gte = summary_eq.gte.return_value
+    summary_category = summary_gte.eq.return_value
+    summary_subcategory = summary_category.eq.return_value
+    summary_supermarket = summary_subcategory.eq.return_value
+    summary_supermarket.not_.is_.return_value.execute.return_value = MagicMock(
+        data=[
+            {"price_paid": 1.5, "savings": 0.5, "offer_id": "offer-3"},
+            {"price_paid": 1.2, "savings": 0.4, "offer_id": "offer-4"},
+            {"price_paid": 2.1, "savings": 0.3, "offer_id": "offer-5"},
+        ]
+    )
+
+    with patch.object(_purchases_module, "get_supabase", return_value=sb):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            resp = await client.get(
+                "/purchases/history",
+                params={
+                    "days": 90,
+                    "limit": 1,
+                    "offset": 0,
+                    "category": "dispensa",
+                    "subcategory": "Primi Piatti e Preparati",
+                    "supermarket": "Coop",
+                    "source": "offer",
+                },
+            )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["total_purchases"] == 3
+    assert payload["total_offer_purchases"] == 3
+    assert payload["total_spend"] == 4.8
+    assert payload["total_savings"] == 1.2
+    assert payload["next_cursor_purchased_at"] == "2026-05-08T09:00:00+00:00"
+    assert payload["next_cursor_id"] == "r3"
+    assert payload["has_more"] is True

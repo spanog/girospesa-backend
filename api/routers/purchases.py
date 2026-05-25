@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 
 from core.auth import get_current_user_id
@@ -61,8 +61,12 @@ class SavingsSummary(BaseModel):
     total_savings: float
     total_spend: float
     total_purchases: int
+    total_offer_purchases: int
     period_days: int
     records: list[PurchaseRecord]
+    next_cursor_purchased_at: str | None = None
+    next_cursor_id: str | None = None
+    has_more: bool = False
 
 
 def _build_purchase_snapshot(item: dict, offer_data: dict) -> dict:
@@ -122,6 +126,48 @@ def _purchase_patch(*, purchased: bool, user_id: str | None, at: str | None) -> 
         "purchased_by": user_id,
         "purchased_at": at,
     }
+
+
+def _apply_history_filters(
+    query: object,
+    *,
+    user_id: str,
+    cutoff: str,
+    category: str | None,
+    subcategory: str | None,
+    supermarket: str | None,
+    source: Literal["all", "offer", "manual"],
+) -> object:
+    query = (
+        query.eq("user_id", user_id)  # type: ignore[union-attr,attr-defined]
+        .gte("purchased_at", cutoff)
+    )
+    if category:
+        query = query.eq("category", category)
+    if subcategory:
+        query = query.eq("subcategory", subcategory)
+    if supermarket:
+        query = query.eq("supermarket_name", supermarket)
+    if source == "offer":
+        query = query.not_.is_("offer_id", None)
+    elif source == "manual":
+        query = query.is_("offer_id", None)
+    return query
+
+
+def _apply_history_cursor(
+    query: object,
+    *,
+    cursor_purchased_at: str | None,
+    cursor_id: str | None,
+) -> object:
+    if not cursor_purchased_at:
+        return query
+    if cursor_id:
+        return query.or_(
+            f"purchased_at.lt.{cursor_purchased_at},and(purchased_at.eq.{cursor_purchased_at},id.lt.{cursor_id})"
+        )
+    return query.lt("purchased_at", cursor_purchased_at)
 
 
 def _load_offer_data(sb: object, offer_id: str) -> dict:
@@ -272,30 +318,78 @@ async def undo_purchase(
 async def get_history(
     user_id: Annotated[str, Depends(get_current_user_id)],
     days: int = 90,
-    limit: int = 200,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    category: str | None = None,
+    subcategory: str | None = None,
+    supermarket: str | None = None,
+    source: Literal["all", "offer", "manual"] = "all",
+    cursor_purchased_at: str | None = None,
+    cursor_id: str | None = None,
 ) -> SavingsSummary:
     """Return savings history for the authenticated user."""
     sb = get_supabase()
     # PostgREST filters compare literal values, so compute cutoff timestamp here.
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
+    base_query = _apply_history_filters(
+        sb.table("purchase_history").select("*"),
+        user_id=user_id,
+        cutoff=cutoff,
+        category=category,
+        subcategory=subcategory,
+        supermarket=supermarket,
+        source=source,
+    )
+    paged_query = _apply_history_cursor(
+        base_query,
+        cursor_purchased_at=cursor_purchased_at,
+        cursor_id=cursor_id,
+    )
     resp = (
-        sb.table("purchase_history")
-        .select("*")
-        .eq("user_id", user_id)
-        .gte("purchased_at", cutoff)
-        .order("purchased_at", desc=True)
-        .limit(limit)
+        paged_query.order("purchased_at", desc=True)
+        .order("id", desc=True)
+        .limit(limit + 1)
         .execute()
     )
-    records_raw: list[dict] = resp.data
+    records_raw_full: list[dict] = resp.data or []
+    has_more = len(records_raw_full) > limit
+    records_raw = records_raw_full[:limit]
+
+    summary_rows = (
+        _apply_history_filters(
+            sb.table("purchase_history").select("price_paid, savings, offer_id"),
+            user_id=user_id,
+            cutoff=cutoff,
+            category=category,
+            subcategory=subcategory,
+            supermarket=supermarket,
+            source=source,
+        )
+        .execute()
+        .data
+        or []
+    )
 
     records = [_to_purchase_record(record) for record in records_raw]
+    total_purchases = len(summary_rows)
+    total_spend = round(
+        sum(float(row.get("price_paid") or 0) for row in summary_rows), 2
+    )
+    total_savings = round(
+        sum(float(row.get("savings") or 0) for row in summary_rows), 2
+    )
+    total_offer_purchases = sum(1 for row in summary_rows if row.get("offer_id"))
+    next_cursor_purchased_at = records_raw[-1]["purchased_at"] if has_more and records_raw else None
+    next_cursor_id = records_raw[-1]["id"] if has_more and records_raw else None
 
     return SavingsSummary(
-        total_savings=round(sum(r.savings for r in records), 2),
-        total_spend=round(sum(r.price_paid for r in records), 2),
-        total_purchases=len(records),
+        total_savings=total_savings,
+        total_spend=total_spend,
+        total_purchases=total_purchases,
+        total_offer_purchases=total_offer_purchases,
         period_days=days,
         records=records,
+        next_cursor_purchased_at=next_cursor_purchased_at,
+        next_cursor_id=next_cursor_id,
+        has_more=has_more,
     )

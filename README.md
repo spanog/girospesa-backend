@@ -226,7 +226,7 @@ Le notifiche Web Push di completamento/fallimento estrazione includono nel campo
 |--------|------|------|-------------|
 | `POST` | `/purchases/items/{item_id}` | ✅ | Segna item come acquistato; registra prezzo, risparmio e snapshot prodotto (brand, formato, immagine, categoria, unit price) e aggiorna i flag `purchased_*` tramite RPC `update_list_item` concorrente-safe |
 | `DELETE` | `/purchases/items/{item_id}` | ✅ | Annulla acquisto; pulisce i flag `purchased_*` tramite RPC `update_list_item` e rimuove la riga da `purchase_history` |
-| `GET` | `/purchases/history` | ✅ | Storico risparmio (ultimi N giorni, default 90) con metadati visuali completi per la UI |
+| `GET` | `/purchases/history` | ✅ | Storico risparmio paginato (ultimi N giorni, default 90) con filtri server-side (`category`, `subcategory`, `supermarket`, `source`) e metadati visuali completi per la UI |
 
 ### Analytics B2B (`/analytics`)
 

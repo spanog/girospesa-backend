@@ -54,6 +54,7 @@
 - `purchase_history.product_id` is historical snapshot data, not live FK protection for canonical products.
 - `purchase_history.quantity` stores purchased quantity; stored `price_paid`, `price_original`, and `savings` must be quantity-scaled totals, not unit values.
 - `purchase_history` must also snapshot `brand`, `format_label`, `image_url`, `category`, `subcategory`, and unit-price fields so `/purchases/history` keeps rich cards even if linked offers/products later change or disappear.
+- `GET /purchases/history` must support incremental loading via stable cursor pagination (`cursor_purchased_at` + `cursor_id`) plus `limit`, together with server-side filters `category`, `subcategory`, `supermarket`, and `source`. Response must include `next_cursor_purchased_at` / `next_cursor_id` / `has_more` and aggregate totals computed over the full filtered result set, not just the current page.
 - Purchase and undo flows on `/purchases/items/{item_id}` must mutate `shopping_lists.items` through `update_list_item` RPC patches, never with full-array `shopping_lists.update(...)` writes.
 
 ## Supabase Query Builder
