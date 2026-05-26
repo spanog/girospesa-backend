@@ -17,15 +17,58 @@ class AddFavoriteBody(BaseModel):
     product_id: str
 
 
+def _serialize_active_offer(active_offer: dict) -> dict:
+    return {
+        "offer_id": active_offer["id"],
+        "supermarket_id": active_offer.get("supermarket_id"),
+        "supermarket_name": active_offer.get("supermarket_name"),
+        "supermarket_logo_url": (active_offer.get("supermarkets") or {}).get("logo_url"),
+        "format": active_offer.get("format"),
+        "format_label": active_offer.get("format_label") or "",
+        "price_offer": active_offer.get("price_offer"),
+        "price_original": active_offer.get("price_original"),
+        "discount_pct": active_offer.get("discount_pct"),
+        "valid_to": active_offer.get("valid_to"),
+        "created_at": active_offer.get("created_at"),
+        "unit_price": active_offer.get("unit_price"),
+        "unit_price_value": active_offer.get("unit_price_value"),
+        "unit_price_unit": active_offer.get("unit_price_unit"),
+        "unit_price_label": active_offer.get("unit_price") or format_unit_price_label(
+            active_offer.get("unit_price_value"),
+            active_offer.get("unit_price_unit"),
+        ),
+    }
+
+
+def _load_active_offers(sb, product_id: str) -> list[dict]:
+    offer_resp = (
+        apply_current_offer_window(
+            sb.table("offers").select(
+                "id, price_offer, price_original, discount_pct, valid_to, created_at, "
+                "format, format_label, "
+                "supermarket_name, supermarket_id, unit_price, unit_price_value, unit_price_unit, "
+                "supermarkets(logo_url)"
+            )
+            .eq("product_id", product_id)
+            .order("price_offer")
+            .order("created_at", desc=True)
+        )
+        .execute()
+    )
+    return [_serialize_active_offer(offer) for offer in offer_resp.data]
+
+
 @router.get("")
 async def list_favorites(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> list[dict]:
-    """Return all favourited products with their current best active offer (lowest price)."""
+    """Return all favourited products with their active offers sorted by price."""
     sb = get_supabase()
     favs_resp = (
         sb.table("favorites")
-        .select("product_id, products(id, name, brand, image_url, category)")
+        .select(
+            "id, product_id, products(id, name, brand, image_url, category, subcategory)"
+        )
         .eq("user_id", user_id)
         .execute()
     )
@@ -33,52 +76,28 @@ async def list_favorites(
     for fav in favs_resp.data:
         product_id: str = fav["product_id"]
         product: dict = fav.get("products") or {}
-        offer_resp = (
-            apply_current_offer_window(
-                sb.table("offers").select(
-                    "id, price_offer, price_original, discount_pct, valid_to, created_at, "
-                    "format, format_label, "
-                    "supermarket_name, supermarket_id, unit_price, unit_price_value, unit_price_unit, "
-                    "supermarkets(logo_url)"
-                )
-                .eq("product_id", product_id)
-                .order("price_offer")
+        active_offers = _load_active_offers(sb, product_id)
+        best_offer = active_offers[0] if active_offers else None
+        format_value = (best_offer or {}).get("format")
+        format_label = (best_offer or {}).get("format_label") or ""
+        if best_offer and not best_offer.get("unit_price_label"):
+            best_offer["unit_price_label"] = format_unit_price_label(
+                best_offer.get("unit_price_value"),
+                best_offer.get("unit_price_unit"),
             )
-            .limit(1)
-            .execute()
-        )
-        active_offer = offer_resp.data[0] if offer_resp.data else None
-        best_offer = None
-        if active_offer is not None:
-            best_offer = {
-                "offer_id": active_offer["id"],
-                "supermarket_id": active_offer.get("supermarket_id"),
-                "supermarket_name": active_offer.get("supermarket_name"),
-                "supermarket_logo_url": (active_offer.get("supermarkets") or {}).get("logo_url"),
-                "price_offer": active_offer.get("price_offer"),
-                "price_original": active_offer.get("price_original"),
-                "discount_pct": active_offer.get("discount_pct"),
-                "valid_to": active_offer.get("valid_to"),
-                "created_at": active_offer.get("created_at"),
-                "unit_price": active_offer.get("unit_price"),
-                "unit_price_value": active_offer.get("unit_price_value"),
-                "unit_price_unit": active_offer.get("unit_price_unit"),
-                "unit_price_label": active_offer.get("unit_price") or format_unit_price_label(
-                    active_offer.get("unit_price_value"),
-                    active_offer.get("unit_price_unit"),
-                ),
-            }
         result.append(
             {
                 "favorite_id": fav.get("id"),
                 "product_id": product_id,
                 "name": product.get("name"),
                 "brand": product.get("brand"),
-                "format": (active_offer or {}).get("format"),
-                "format_label": (active_offer or {}).get("format_label") or "",
+                "format": format_value,
+                "format_label": format_label,
                 "category": product.get("category"),
+                "subcategory": product.get("subcategory"),
                 "image_url": product.get("image_url"),
                 "best_offer": best_offer,
+                "active_offers": active_offers,
             }
         )
     return result

@@ -2,6 +2,7 @@
 
 Tests verify:
 - GET /favorites returns favorite products flattened with best_offer payload
+- GET /favorites returns active_offers sorted by price
 - GET /favorites/{product_id} returns is_favorite=True when row exists
 - GET /favorites/{product_id} returns is_favorite=False when no row
 - POST /favorites creates a row and returns it
@@ -81,7 +82,7 @@ async def _delete(url: str, dep_overrides: dict | None = None) -> httpx.Response
 
 class TestListFavorites:
     @pytest.mark.asyncio
-    async def test_returns_best_offer_with_unit_price_fields(self):
+    async def test_returns_best_offer_with_active_offers(self):
         sb = MagicMock()
 
         favorites_resp = MagicMock(data=[{
@@ -93,31 +94,50 @@ class TestListFavorites:
                 "brand": "Barilla",
                 "image_url": None,
                 "category": "dispensa",
+                "subcategory": "Pasta",
             },
         }])
-        offer_resp = MagicMock(data=[{
-            "id": "offer-1",
-            "price_offer": 0.99,
-            "price_original": 1.49,
-            "discount_pct": 34,
-            "valid_to": "2099-12-31",
-            "created_at": "2026-04-01T00:00:00Z",
-            "format": {"tipo": "confezione_singola", "peso_volume": 500, "unita_misura": "g"},
-            "format_label": "500 g",
-            "supermarket_name": "Lidl",
-            "supermarket_id": "sup-1",
-            "supermarkets": {"logo_url": "https://example.com/lidl.png"},
-            "unit_price": "1,98 €/kg",
-            "unit_price_value": 1.98,
-            "unit_price_unit": "kg",
-        }])
+        offer_resp = MagicMock(data=[
+            {
+                "id": "offer-1",
+                "price_offer": 0.99,
+                "price_original": 1.49,
+                "discount_pct": 34,
+                "valid_to": "2099-12-31",
+                "created_at": "2026-04-01T00:00:00Z",
+                "format": {"tipo": "confezione_singola", "peso_volume": 500, "unita_misura": "g"},
+                "format_label": "500 g",
+                "supermarket_name": "Lidl",
+                "supermarket_id": "sup-1",
+                "supermarkets": {"logo_url": "https://example.com/lidl.png"},
+                "unit_price": "1,98 €/kg",
+                "unit_price_value": 1.98,
+                "unit_price_unit": "kg",
+            },
+            {
+                "id": "offer-2",
+                "price_offer": 1.09,
+                "price_original": 1.59,
+                "discount_pct": 31,
+                "valid_to": "2099-12-30",
+                "created_at": "2026-03-20T00:00:00Z",
+                "format": {"tipo": "confezione_singola", "peso_volume": 550, "unita_misura": "g"},
+                "format_label": "550 g",
+                "supermarket_name": "Coop",
+                "supermarket_id": "sup-2",
+                "supermarkets": {"logo_url": "https://example.com/coop.png"},
+                "unit_price": None,
+                "unit_price_value": 2.18,
+                "unit_price_unit": "kg",
+            },
+        ])
 
         table = sb.table.return_value
         table.select.return_value.eq.return_value.execute.return_value = favorites_resp
         (
             table.select.return_value
             .eq.return_value.order.return_value
-            .limit.return_value.execute.return_value
+            .order.return_value.execute.return_value
         ) = offer_resp
 
         with patch("api.routers.favorites.get_supabase", return_value=sb):
@@ -127,11 +147,18 @@ class TestListFavorites:
         data = resp.json()
         assert data[0]["favorite_id"] == "fav-1"
         assert data[0]["product_id"] == PRODUCT_ID
+        assert data[0]["subcategory"] == "Pasta"
         assert data[0]["format_label"] == "500 g"
+        assert data[0]["format"]["peso_volume"] == 500
         assert data[0]["best_offer"]["offer_id"] == "offer-1"
         assert data[0]["best_offer"]["unit_price_value"] == pytest.approx(1.98)
         assert data[0]["best_offer"]["unit_price_unit"] == "kg"
         assert data[0]["best_offer"]["unit_price_label"] == "1,98 €/kg"
+        assert [offer["offer_id"] for offer in data[0]["active_offers"]] == [
+            "offer-1",
+            "offer-2",
+        ]
+        assert data[0]["active_offers"][1]["unit_price_label"] == "2,18 €/kg"
 
 
 # ---------------------------------------------------------------------------
