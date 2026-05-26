@@ -18,11 +18,13 @@ class AddFavoriteBody(BaseModel):
 
 
 def _serialize_active_offer(active_offer: dict) -> dict:
+    supermarket = active_offer.get("supermarkets") or {}
     return {
         "offer_id": active_offer["id"],
         "supermarket_id": active_offer.get("supermarket_id"),
         "supermarket_name": active_offer.get("supermarket_name"),
-        "supermarket_logo_url": (active_offer.get("supermarkets") or {}).get("logo_url"),
+        "supermarket_logo_url": supermarket.get("logo_url"),
+        "supermarket_address": supermarket.get("address"),
         "format": active_offer.get("format"),
         "format_label": active_offer.get("format_label") or "",
         "price_offer": active_offer.get("price_offer"),
@@ -47,7 +49,7 @@ def _load_active_offers(sb, product_id: str) -> list[dict]:
                 "id, price_offer, price_original, discount_pct, valid_to, created_at, "
                 "format, format_label, "
                 "supermarket_name, supermarket_id, unit_price, unit_price_value, unit_price_unit, "
-                "supermarkets(logo_url)"
+                "supermarkets(logo_url, address)"
             )
             .eq("product_id", product_id)
             .order("price_offer")

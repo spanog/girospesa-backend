@@ -143,7 +143,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `GET` | `/favorites` | ✅ | Lista preferiti con `active_offers[]` ordinato per prezzo e `best_offer` come primo elemento |
+| `GET` | `/favorites` | ✅ | Lista preferiti con `active_offers[]` ordinato per prezzo, `best_offer` come primo elemento e metadati supermercato (`name`, `logo_url`, `address`) per ogni offerta |
 | `GET` | `/favorites/{product_id}` | ✅ | Controlla se un prodotto è tra i preferiti |
 | `POST` | `/favorites` | ✅ | Aggiunge ai preferiti (body: `{product_id}`) |
 | `DELETE` | `/favorites/{product_id}` | ✅ | Rimuove dai preferiti |

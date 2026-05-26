@@ -109,7 +109,10 @@ class TestListFavorites:
                 "format_label": "500 g",
                 "supermarket_name": "Lidl",
                 "supermarket_id": "sup-1",
-                "supermarkets": {"logo_url": "https://example.com/lidl.png"},
+                "supermarkets": {
+                    "logo_url": "https://example.com/lidl.png",
+                    "address": "Via Roma 10, Milano",
+                },
                 "unit_price": "1,98 €/kg",
                 "unit_price_value": 1.98,
                 "unit_price_unit": "kg",
@@ -125,7 +128,10 @@ class TestListFavorites:
                 "format_label": "550 g",
                 "supermarket_name": "Coop",
                 "supermarket_id": "sup-2",
-                "supermarkets": {"logo_url": "https://example.com/coop.png"},
+                "supermarkets": {
+                    "logo_url": "https://example.com/coop.png",
+                    "address": "Corso Italia 20, Milano",
+                },
                 "unit_price": None,
                 "unit_price_value": 2.18,
                 "unit_price_unit": "kg",
@@ -154,6 +160,7 @@ class TestListFavorites:
         assert data[0]["best_offer"]["unit_price_value"] == pytest.approx(1.98)
         assert data[0]["best_offer"]["unit_price_unit"] == "kg"
         assert data[0]["best_offer"]["unit_price_label"] == "1,98 €/kg"
+        assert data[0]["best_offer"]["supermarket_address"] == "Via Roma 10, Milano"
         assert [offer["offer_id"] for offer in data[0]["active_offers"]] == [
             "offer-1",
             "offer-2",
