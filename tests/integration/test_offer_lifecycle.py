@@ -73,8 +73,16 @@ def _make_supabase_real_db_mock_storage() -> object:
         os.environ["SUPABASE_SERVICE_ROLE_KEY"],
     )
     storage_mock = MagicMock()
-    storage_mock.from_.return_value.upload.return_value = MagicMock()
-    storage_mock.from_.return_value.get_public_url.return_value = "https://storage.test/flyers/lifecycle.pdf"
+
+    def _storage_bucket(name: str) -> MagicMock:
+        bucket = MagicMock()
+        bucket.upload.return_value = MagicMock()
+        bucket.get_public_url.side_effect = (
+            lambda path: f"https://storage.test/{name}/{path}"
+        )
+        return bucket
+
+    storage_mock.from_.side_effect = _storage_bucket
     return _SupabaseWithMockStorage(sb, storage_mock)
 
 
@@ -152,6 +160,11 @@ def _make_mock_extraction_service(supabase_client):
                 .insert(
                     {
                         "product_id": product["id"],
+                        "draft_name": "Pasta Barilla",
+                        "draft_brand": "Barilla",
+                        "draft_category": "dispensa",
+                        "draft_subcategory": None,
+                        "draft_product_key": "pasta barilla|barilla",
                         "flyer_id": flyer_id,
                         "supermarket_id": flyer["supermarket_id"],
                         "supermarket_name": flyer["supermarket_name"],
@@ -242,6 +255,20 @@ class TestOfferLifecycleIntegration:
                 assert drafts[0]["is_confirmed"] is False
                 offer_id = drafts[0]["id"]
 
+                detach_resp = await client.patch(
+                    f"/flyers/{flyer_id}/draft-offers/{offer_id}",
+                    json={"detach_product": True},
+                )
+                assert detach_resp.status_code == 200
+                assert detach_resp.json()["binding_status"] == "new_on_confirm"
+
+                image_resp = await client.post(
+                    f"/flyers/{flyer_id}/draft-offers/{offer_id}/image",
+                    files={"file": ("pasta.png", b"png", "image/png")},
+                )
+                assert image_resp.status_code == 200
+                assert "/product-images/" in image_resp.json()["image_url"]
+
                 patch_resp = await client.patch(
                     f"/flyers/{flyer_id}/draft-offers/{offer_id}",
                     json={"price_offer": 2.49},
@@ -262,6 +289,17 @@ class TestOfferLifecycleIntegration:
                 ).data
                 assert confirmed_offer["is_confirmed"] is True
                 assert confirmed_offer["price_offer"] == pytest.approx(2.49)
+
+                created_product = (
+                    supabase_client.table("products")
+                    .select("image_url")
+                    .eq("name", "Pasta Barilla")
+                    .eq("brand", "Barilla")
+                    .single()
+                    .execute()
+                ).data
+                assert created_product["image_url"] is not None
+                assert "/product-images/" in created_product["image_url"]
 
                 after_confirm_resp = await client.get("/products")
                 assert after_confirm_resp.status_code == 200

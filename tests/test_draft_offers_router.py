@@ -71,6 +71,13 @@ async def _patch_req(url: str, dep_overrides: dict, json: dict) -> httpx.Respons
         return await client.patch(url, json=json)
 
 
+async def _post_multipart(url: str, dep_overrides: dict, files: dict) -> httpx.Response:
+    test_app.dependency_overrides = dep_overrides
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.post(url, files=files)
+
+
 def _sb_with_flyer(flyer: dict | None = None) -> MagicMock:
     sb = MagicMock()
     flyer_data = flyer or {"id": "flyer-1", "supermarket_id": "sup-1", "status": "pending"}
@@ -300,6 +307,7 @@ class TestListDraftOffers:
                 "id": "offer-1",
                 "flyer_id": "flyer-1",
                 "is_confirmed": False,
+                "draft_image_url": "https://storage.test/drafts/offer-1.png",
                 "unit_price": "1,29 €/kg",
                 "unit_price_value": 1.29,
                 "unit_price_unit": "kg",
@@ -333,6 +341,7 @@ class TestListDraftOffers:
         assert data[0]["name"] == "Pasta"
         assert data[0]["subcategory"] == "Primi Piatti e Preparati"
         assert data[0]["unit_price_label"] == "1,29 €/kg"
+        assert data[0]["image_url"] == "https://storage.test/drafts/offer-1.png"
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +458,118 @@ class TestUpdateDraftOffer:
         )
 
 
+class TestUploadDraftOfferImage:
+    def _make_sb(
+        self,
+        *,
+        product_id: str | None = None,
+        is_confirmed: bool = False,
+    ) -> MagicMock:
+        sb = MagicMock()
+        sb.storage.from_.return_value.upload.return_value = MagicMock()
+        sb.storage.from_.return_value.get_public_url.return_value = (
+            "https://storage.test/product-images/draft-offers/offer-1/prod.png"
+        )
+
+        flyer_result = MagicMock()
+        flyer_result.data = {"id": "flyer-1", "supermarket_id": "sup-1"}
+        offer_result = MagicMock()
+        offer_result.data = {
+            "id": "offer-1",
+            "product_id": product_id,
+            "flyer_id": "flyer-1",
+            "is_confirmed": is_confirmed,
+        }
+        updated_result = MagicMock()
+        updated_result.data = {
+            "id": "offer-1",
+            "flyer_id": "flyer-1",
+            "product_id": None,
+            "draft_name": "Pasta",
+            "draft_brand": "Barilla",
+            "draft_category": "dispensa",
+            "draft_subcategory": "Primi Piatti e Preparati",
+            "draft_image_url": "https://storage.test/product-images/draft-offers/offer-1/prod.png",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Coop",
+            "price_offer": 1.99,
+            "price_original": None,
+            "discount_pct": None,
+            "unit_price": None,
+            "unit_price_value": None,
+            "unit_price_unit": None,
+            "offer_notes": None,
+            "valid_from": None,
+            "valid_to": None,
+            "is_confirmed": False,
+            "is_reviewed": False,
+            "format": None,
+            "format_key": "v1",
+            "format_label": "500 g",
+            "created_at": "2026-05-14T00:00:00Z",
+            "products": None,
+        }
+
+        call_count = 0
+
+        def select_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            chain = MagicMock()
+            if call_count == 1:
+                chain.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+            elif call_count == 2:
+                chain.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = offer_result
+            else:
+                chain.eq.return_value.single.return_value.execute.return_value = updated_result
+            return chain
+
+        sb.table.return_value.select.side_effect = select_side_effect
+        sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+        return sb
+
+    @pytest.mark.asyncio
+    async def test_uploads_image_for_unbound_draft(self):
+        sb = self._make_sb()
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post_multipart(
+                "/flyers/flyer-1/draft-offers/offer-1/image",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                files={"file": ("prod.png", b"png", "image/png")},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["image_url"].endswith("/prod.png")
+        assert any(
+            call.args[0].get("draft_image_url") is not None
+            for call in sb.table.return_value.update.call_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_rejects_unsupported_image_type(self):
+        sb = self._make_sb()
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post_multipart(
+                "/flyers/flyer-1/draft-offers/offer-1/image",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                files={"file": ("prod.bmp", b"bmp", "image/bmp")},
+            )
+
+        assert resp.status_code == 415
+
+    @pytest.mark.asyncio
+    async def test_rejects_upload_for_bound_product(self):
+        sb = self._make_sb(product_id="prod-1")
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post_multipart(
+                "/flyers/flyer-1/draft-offers/offer-1/image",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                files={"file": ("prod.png", b"png", "image/png")},
+            )
+
+        assert resp.status_code == 409
+
+
 # ---------------------------------------------------------------------------
 # confirm_offers
 # ---------------------------------------------------------------------------
@@ -495,6 +616,58 @@ class TestConfirmOffers:
             )
         assert resp.status_code == 200
         assert resp.json()["confirmed"] == 0
+
+    @pytest.mark.asyncio
+    async def test_confirm_passes_draft_image_to_new_product(self):
+        sb = MagicMock()
+        flyer_result = MagicMock()
+        flyer_result.data = {"id": "flyer-1", "supermarket_id": "sup-1", "status": "done"}
+        drafts_result = MagicMock()
+        drafts_result.data = [
+            {
+                "id": "offer-1",
+                "product_id": None,
+                "draft_name": "Pasta",
+                "draft_brand": "Barilla",
+                "draft_category": "dispensa",
+                "draft_subcategory": "Primi Piatti e Preparati",
+                "draft_image_url": "https://storage.test/product-images/draft-offers/offer-1/prod.png",
+            }
+        ]
+        total_confirmed_result = MagicMock()
+        total_confirmed_result.data = [{"id": "offer-1"}]
+        total_confirmed_result.count = 1
+
+        call_count = 0
+
+        def select_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            chain = MagicMock()
+            if call_count == 1:
+                chain.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+            elif call_count == 2:
+                chain.eq.return_value.eq.return_value.execute.return_value = drafts_result
+            else:
+                chain.eq.return_value.eq.return_value.execute.return_value = total_confirmed_result
+            return chain
+
+        sb.table.return_value.select.side_effect = select_side_effect
+        sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers.upsert_product", return_value="prod-new") as mock_upsert,
+        ):
+            resp = await _post(
+                "/flyers/flyer-1/offers/confirm",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+            )
+
+        assert resp.status_code == 200
+        assert mock_upsert.call_args.args[1]["image_url"] == (
+            "https://storage.test/product-images/draft-offers/offer-1/prod.png"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,8 @@ router = APIRouter()
 
 ALLOWED_CONTENT_TYPES = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+ALLOWED_PRODUCT_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+MAX_PRODUCT_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 class DraftOfferUpdate(BaseModel):
@@ -88,6 +90,24 @@ def _has_confirmed_offers(sb, flyer_id: str) -> bool:
         .eq("is_confirmed", True)
     ).execute()
     return (result.count or 0) > 0
+
+
+def _upload_product_image_to_storage(
+    sb,
+    *,
+    storage_prefix: str,
+    file_content: bytes,
+    content_type: str,
+    filename: str | None,
+) -> str:
+    ext = (filename or "image").rsplit(".", 1)[-1].lower()
+    storage_path = f"{storage_prefix}/{uuid.uuid4()}.{ext}"
+    sb.storage.from_("product-images").upload(
+        path=storage_path,
+        file=file_content,
+        file_options={"content-type": content_type, "upsert": "true"},
+    )
+    return sb.storage.from_("product-images").get_public_url(storage_path)
 
 
 def _normalize_name(value: str | None) -> str | None:
@@ -613,6 +633,81 @@ async def update_draft_offer(
     return _flatten_draft_offer(updated.data)
 
 
+@router.post("/{flyer_id}/draft-offers/{offer_id}/image")
+async def upload_draft_offer_image(
+    flyer_id: str,
+    offer_id: str,
+    file: Annotated[UploadFile, File()],
+    profile: dict = Depends(require_admin_or_manager),
+) -> dict:
+    """Upload a staged product image for a draft offer that will create a new product."""
+    sb = get_supabase()
+    flyer_result = (
+        sb.table("flyers")
+        .select("id, supermarket_id, supermarket_name")
+        .eq("id", flyer_id)
+        .maybe_single()
+        .execute()
+    )
+    if not flyer_result or not flyer_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    _assert_flyer_access(sb, profile, flyer_result.data)
+
+    offer_result = (
+        sb.table("offers")
+        .select("id, product_id, flyer_id, is_confirmed")
+        .eq("id", offer_id)
+        .eq("flyer_id", flyer_id)
+        .maybe_single()
+        .execute()
+    )
+    if not offer_result or not offer_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Offer not found")
+
+    offer = offer_result.data
+    if offer.get("is_confirmed"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Confirmed offers must be updated from the catalog product page",
+        )
+    if offer.get("product_id"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Detach the catalog product before uploading a draft image",
+        )
+    if not file.content_type or file.content_type not in ALLOWED_PRODUCT_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Formato immagine non supportato. Usa JPEG, PNG, WebP o GIF.",
+        )
+
+    content = await file.read()
+    if len(content) > MAX_PRODUCT_IMAGE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Immagine troppo grande. Max 10 MB.",
+        )
+
+    public_url = _upload_product_image_to_storage(
+        sb,
+        storage_prefix=f"draft-offers/{offer_id}",
+        file_content=content,
+        content_type=file.content_type,
+        filename=file.filename,
+    )
+    sb.table("offers").update({"draft_image_url": public_url}).eq("id", offer_id).execute()
+
+    updated = (
+        sb.table("offers")
+        .select(_OFFER_PRODUCT_SELECT)
+        .eq("id", offer_id)
+        .single()
+        .execute()
+    )
+    return _flatten_draft_offer(updated.data)
+
+
 @router.delete("/{flyer_id}/draft-offers/{offer_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def delete_draft_offer(
     flyer_id: str,
@@ -663,7 +758,7 @@ async def confirm_offers(
 
     drafts = (
         sb.table("offers")
-        .select("id, product_id, draft_name, draft_brand, draft_category, draft_subcategory")
+        .select("id, product_id, draft_name, draft_brand, draft_category, draft_subcategory, draft_image_url")
         .eq("flyer_id", flyer_id)
         .eq("is_confirmed", False)
         .execute()
@@ -677,6 +772,7 @@ async def confirm_offers(
             "brand": draft.get("draft_brand"),
             "category": draft.get("draft_category"),
             "subcategory": draft.get("draft_subcategory"),
+            "image_url": draft.get("draft_image_url"),
         })
         sb.table("offers").update({"product_id": product_id}).eq("id", draft["id"]).execute()
 

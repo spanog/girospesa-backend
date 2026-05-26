@@ -159,6 +159,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 | `POST` | `/flyers/{flyer_id}/extract` | ✅ admin/manager | Avvia estrazione AI per un volantino `pending` oppure riprende da chunk fallito se `status='error'` e `resume_available=true` |
 | `GET` | `/flyers/{flyer_id}/draft-offers` | ✅ admin/manager | Lista offerte estratte ma non confermate |
 | `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline di una draft offer; `detach_product=true` rimuove il binding catalogo senza creare prodotti |
+| `POST` | `/flyers/{flyer_id}/draft-offers/{offer_id}/image` | ✅ admin/manager | Upload immagine prodotto staged per una bozza non agganciata; salva `draft_image_url` fino alla conferma |
 | `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma tutte le offerte draft, crea/upserta i prodotti canonici solo per bozze non agganciate e rende pubbliche le offerte |
 | `POST` | `/flyers/admin/cleanup` | 👑 admin | Trigger manuale pulizia volantini scaduti (eseguita automaticamente ogni mezzanotte) |
 
@@ -171,6 +172,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
   - `unit_price_unit TEXT` con valori ammessi `kg`, `L`, `kg sgocc`
   - `unit_price TEXT` come label derivata per compatibilità
 - Gli endpoint che restituiscono offerte (`/products`, `/flyers/{flyer_id}/draft-offers`, `/favorites`, `/optimize`) espongono anche `unit_price_value`, `unit_price_unit`, `unit_price_label`.
+- `GET /flyers/{flyer_id}/draft-offers` espone `image_url` con precedenza `draft_image_url -> products.image_url`, così la review mostra l'immagine staged anche prima della creazione del prodotto canonico.
 
 ### Contratto formato prodotto
 
@@ -187,6 +189,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 - `format.varianti` è consentito solo in input estrazione LLM: il backend lo espande in prodotti/offerte distinti prima dell'upsert. Nessun prodotto persistito rappresenta un parent con varianti miste.
 - Matching fuzzy/optimizer usa `name`, `brand`, `format_label`; mai JSON raw.
 - Durante l'estrazione il backend deduplica prima in memoria su `(name, brand)`, cerca match fuzzy nel catalogo esistente per agganciare le bozze quando possibile, deduplica le offerte su `(flyer_id, draft_product_key, format_key)` e fa upsert idempotente delle draft offers. Non crea nuovi prodotti canonici finché le offerte restano in bozza; li crea/upserta solo alla conferma finale.
+- In review il reviewer può caricare un'immagine prodotto solo per bozze `new_on_confirm` (incluse bozze sganciate manualmente dal catalogo). Alla conferma, `draft_image_url` viene copiato in `products.image_url`; le bozze già agganciate a un prodotto esistente non possono modificare l'immagine catalogo da questa pagina.
 - Per PDF multipagina il backend divide il file in chunk PDF rigidi da 3 pagine e invia un chunk per volta a Gemini. Dopo ogni chunk riuscito persiste subito le draft offers di quel chunk e aggiorna `flyers.extraction_metadata` con pagina corrente, percentuale, `last_completed_chunk` e `next_chunk_*`, così il frontend può mostrare avanzamento live durante il polling e review parziale.
 - Se un chunk fallisce dopo i retry, il flyer passa a `status='error'`, ma le draft offers dei chunk già riusciti restano salvate. `flyers.extraction_metadata` espone `resume_available`, `failed_chunk_*`, `next_chunk_*` e `partial_products_count`; una nuova `POST /flyers/{flyer_id}/extract` riparte dal primo chunk non completato correttamente senza duplicare le offerte già persistite. La ripresa si basa su `extraction_metadata` persistito, non sullo `status` transitorio del flyer mentre il retry è già tornato a `processing`.
 - Quando Gemini fallisce o va in retry, backend logga anche contesto strutturato se disponibile: tipo eccezione, `code`, `status`, `message`, HTTP status/body e request id. Stesso dettaglio finisce in `retry_errors` dentro `extraction_log`.
@@ -740,7 +743,7 @@ Flow identica in locale, test, prod: cambia solo valore env.
 |--------|-------------|-------|----------------|---------|
 | `avatars` | `{user_id}.{jpg\|png\|webp}` | Foto profilo utente | 5 MB | URL pubblico |
 | `flyers` | `{user_id}/{uuid}.{pdf\|jpg}` | Volantini caricati (pre-estrazione) | 50 MB | URL pubblico |
-| `product-images` | `{product_id}/{uuid}.{ext}` | Immagini prodotti (admin) | — | URL pubblico |
+| `product-images` | `{product_id}/{uuid}.{ext}` o `draft-offers/{offer_id}/{uuid}.{ext}` | Immagini prodotti admin e immagini staged durante review flyer | — | URL pubblico |
 
 I bucket pubblici non espongono listing anonimo via `storage.objects`: client e frontend devono usare solo URL diretti `/storage/v1/object/public/...`.
 

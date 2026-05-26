@@ -23,6 +23,7 @@ def draft_product_key(name: str | None, brand: str | None) -> str:
 def _flatten_draft_offer(offer: dict) -> dict:
     offer = dict(offer)
     product = offer.pop("products") or {}
+    draft_image_url = offer.get("draft_image_url")
     linked_product = None
     if product:
         linked_product = {
@@ -43,7 +44,8 @@ def _flatten_draft_offer(offer: dict) -> dict:
         "brand": brand,
         "category": category,
         "subcategory": subcategory,
-        "image_url": product.get("image_url"),
+        # Draft review can stage an image before the canonical product exists.
+        "image_url": draft_image_url or product.get("image_url"),
         "linked_product": linked_product,
         "binding_status": "existing" if linked_product else "new_on_confirm",
         "unit_price_label": offer.get("unit_price") or format_unit_price_label(
@@ -55,12 +57,16 @@ def _flatten_draft_offer(offer: dict) -> dict:
 
 def build_product_row(payload) -> dict:
     """Construct a product dict (no format — format lives in offers)."""
-    return {
+    row = {
         "name": payload.name,
         "brand": payload.brand,
         "category": payload.category,
         "subcategory": payload.subcategory,
     }
+    image_url = getattr(payload, "image_url", None)
+    if image_url is not None:
+        row["image_url"] = image_url
+    return row
 
 
 def build_format_fields(payload) -> dict:
