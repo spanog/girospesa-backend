@@ -121,7 +121,7 @@ Le liste non-default possono essere eliminate solo dal proprietario. Se lista co
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
 | `POST` | `/lists/{id}/items/remove-purchased` | ✅ member | Rimuove in blocco dalla lista solo gli item acquistati e restituisce la lista aggiornata, senza cancellare `purchase_history` |
 | `POST` | `/lists/{id}/items` | ✅ member | Aggiunge item (manuale o da offerta) e salva snapshot `brand`/`category`/`subcategory` quando collegato a prodotto/offerta; persistenza via RPC concorrente-safe `append_list_item` (`SECURITY INVOKER`, `search_path` fissato a `public`) |
-| `PATCH` | `/lists/{id}/items/{item_id}` | ✅ member | Aggiorna quantità o alternativa selezionata; con `pinned_offer_id` salva `source`, `pinned_product_id`, `found_deals`, categoria e sottocategoria coerenti via RPC concorrente-safe `update_list_item` (`SECURITY INVOKER`, protetta da RLS + `auth.uid()`), poi rilegge item persistito |
+| `PATCH` | `/lists/{id}/items/{item_id}` | ✅ member | Aggiorna quantità o binding esplicito a un'offerta; con `pinned_offer_id` salva `source`, `pinned_product_id`, `found_deals`, categoria e sottocategoria coerenti via RPC concorrente-safe `update_list_item` (`SECURITY INVOKER`, protetta da RLS + `auth.uid()`), poi rilegge item persistito |
 | `DELETE` | `/lists/{id}/items/{item_id}` | ✅ member | Rimuove item via RPC concorrente-safe `remove_list_item` (`SECURITY INVOKER`, `search_path` fissato a `public`) |
 | `POST` | `/lists/{id}/items/{item_id}/toggle` | ✅ member | Check/uncheck item; registra `checked_by`, `checked_at` |
 | `POST` | `/lists/{id}/invite` | ✅ owner | Crea link invito (token 64 char, TTL 7 giorni) |
@@ -307,16 +307,12 @@ Frontend
   Usa `pinned_offer_id` come default se ancora valido/vicino
   Usa `pinned_product_id` come match canonico se non c'è offerta specifica
   Gli item manuali restano nel gruppo `Senza offerta`
-  Per gli item manuali usa ricerca fuzzy `pg_trgm` solo per le alternative
+  L'MVP non espone UI di alternative o sostituzioni suggerite
   Filtra per distanza con PostGIS (`nearby_supermarkets`, `ST_DWithin`)
                     │
                     ▼
   Raggruppa item con offerta per supermercato
   Raggruppa item manuali senza offerta separatamente
-  Include alternative ordinate per prezzo crescente
-  Se l'utente sceglie un'alternativa:
-    PATCH /lists/{list_id}/items/{item_id}
-    aggiorna pinned_offer_id, pinned_product_id, found_deals e categorie
                     │
                     ▼
   Risposta: store_groups[{supermercato, prodotti, subtotal,
