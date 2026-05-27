@@ -1,0 +1,13 @@
+{
+  "created_at": "<datetime>",
+  "id": "<uuid>",
+  "is_active": true,
+  "is_default": true,
+  "is_owner": true,
+  "is_selected": true,
+  "items": [],
+  "member_role": "owner",
+  "name": "Lista principale",
+  "updated_at": "<datetime>",
+  "user_id": "<uuid>"
+}

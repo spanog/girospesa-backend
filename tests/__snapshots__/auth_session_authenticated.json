@@ -1,0 +1,12 @@
+{
+  "authenticated": true,
+  "profile": {
+    "display_name": "Mario Rossi",
+    "id": "user-1",
+    "role": "customer"
+  },
+  "user": {
+    "email": "mario@example.com",
+    "id": "user-1"
+  }
+}

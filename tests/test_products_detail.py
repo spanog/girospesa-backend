@@ -50,6 +50,7 @@ import httpx
 import pytest
 
 from api.routers.products import router
+from tests.snapshot_utils import assert_matches_json_snapshot
 
 test_app = FastAPI()
 test_app.include_router(router, prefix="/products")
@@ -150,7 +151,7 @@ async def _get(url: str) -> httpx.Response:
 
 class TestListProducts:
     @pytest.mark.asyncio
-    async def test_returns_paginated_confirmed_active_offers(self):
+    async def test_returns_paginated_confirmed_active_offers(self, request):
         sb = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
         select_mock = sb.table.return_value.select.return_value
@@ -175,6 +176,7 @@ class TestListProducts:
         assert data["items"][0]["id"] == "offer-list-1"
         assert data["items"][0]["name"] == "Latte intero"
         assert data["items"][0]["supermarket_slug"] == "lidl"
+        assert_matches_json_snapshot(request, "products_list_paginated", data)
 
         select_mock.eq.assert_any_call("is_confirmed", True)
         select_mock.eq.return_value.order.assert_called_once_with(
@@ -371,7 +373,7 @@ class TestListProducts:
 
 class TestGetProduct:
     @pytest.mark.asyncio
-    async def test_returns_flattened_offer(self):
+    async def test_returns_flattened_offer(self, request):
         sb = _make_sb(offer_row=_OFFER_ROW)
 
         with patch("api.routers.products.get_supabase", return_value=sb):
@@ -391,6 +393,7 @@ class TestGetProduct:
         # Nested dicts should NOT be in the response
         assert "products" not in data
         assert "supermarkets" not in data
+        assert_matches_json_snapshot(request, "products_detail_offer", data)
 
     @pytest.mark.asyncio
     async def test_returns_none_when_supermarket_address_missing(self):

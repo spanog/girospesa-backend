@@ -22,6 +22,7 @@ from fastapi import FastAPI
 from api.routers.optimize import router as optimize_router
 from core.auth import get_current_user_id
 from tests.conftest import wait_for_user_bootstrap
+from tests.snapshot_utils import assert_matches_json_snapshot
 app = FastAPI()
 app.include_router(optimize_router, prefix="/optimize")
 
@@ -215,7 +216,7 @@ class TestOptimizeIntegration:
         app.dependency_overrides.clear()
 
     async def test_optimize_returns_coverage_when_offers_match(
-        self, supabase_client, shopping_list_with_match
+        self, supabase_client, shopping_list_with_match, request
     ):
         """Happy path: list has item matching an active offer → coverage_percent > 0."""
         sb = _supabase_with_real_db(supabase_client)
@@ -244,6 +245,7 @@ class TestOptimizeIntegration:
         assert matched["unit_price_label"] == "1,29 €/l"
         assert matched["alternatives"][0]["unit_price_label"] == "1,29 €/l"
         assert matched["offer_id"] != matched["product_id"]  # distinct IDs after fix
+        assert_matches_json_snapshot(request, "optimize_with_matching_offer", body)
 
     async def test_optimize_empty_list_returns_full_coverage(
         self, supabase_client, shopping_list_empty

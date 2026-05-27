@@ -26,6 +26,7 @@ from fastapi import FastAPI
 from api.routers.favorites import router as favorites_router
 from core.auth import get_current_user_id
 from tests.conftest import wait_for_user_bootstrap
+from tests.snapshot_utils import assert_matches_json_snapshot
 
 app = FastAPI()
 app.include_router(favorites_router, prefix="/favorites")
@@ -220,7 +221,7 @@ class TestFavoritesLifecycle:
         assert fav_row["product_id"] == product["id"]
 
     async def test_new_offer_reflected_in_get_favorites(
-        self, supabase_client, auth_user, product, supermarket
+        self, supabase_client, auth_user, product, supermarket, request
     ):
         """When a new offer is inserted for a favorited product,
         GET /favorites returns the updated offer without touching the favorites row."""
@@ -241,6 +242,7 @@ class TestFavoritesLifecycle:
         assert items[0]["product_id"] == product["id"]
         assert items[0]["best_offer"]["offer_id"] == new_offer["id"]
         assert items[0]["best_offer"]["price_offer"] == pytest.approx(0.89)
+        assert_matches_json_snapshot(request, "favorites_with_best_offer", items)
 
         # Verify the favorites row itself was never touched
         fav_row = (

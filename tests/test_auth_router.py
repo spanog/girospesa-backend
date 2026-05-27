@@ -46,6 +46,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tests.snapshot_utils import assert_matches_json_snapshot
+
 
 @pytest.fixture()
 def app():
@@ -94,7 +96,7 @@ def test_session_returns_guest_without_cookie(client):
     assert response.json() == {"authenticated": False}
 
 
-def test_session_with_cookie_fetches_full_profile(client, monkeypatch):
+def test_session_with_cookie_fetches_full_profile(client, monkeypatch, request):
     _session_mod.read_session_token.return_value = {
         "sub": "user-1",
         "email": "mario@example.com",
@@ -112,6 +114,7 @@ def test_session_with_cookie_fetches_full_profile(client, monkeypatch):
     assert body["authenticated"] is True
     assert body["user"] == {"id": "user-1", "email": "mario@example.com"}
     assert body["profile"]["display_name"] == "Mario Rossi"
+    assert_matches_json_snapshot(request, "auth_session_authenticated", body)
 
     _session_mod.read_session_token.return_value = None  # restore default
 

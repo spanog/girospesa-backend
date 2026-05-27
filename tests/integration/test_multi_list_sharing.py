@@ -14,6 +14,7 @@ from api.routers.lists import router as lists_router
 from api.routers.notifications import router as notifications_router
 from core.auth import get_current_user_id
 from tests.conftest import wait_for_user_bootstrap
+from tests.snapshot_utils import assert_matches_json_snapshot
 
 app = FastAPI()
 app.include_router(lists_router, prefix="/lists")
@@ -160,13 +161,16 @@ async def _client_as(user_id: str):
 
 @pytest.mark.asyncio
 async def test_user_can_create_second_list_and_switch_selection(
-    supabase_client, owner_user, clean_db
+    supabase_client, owner_user, clean_db, request
 ):
     async with await _client_as(owner_user["id"]) as client:
         active_resp = await client.get("/lists/active")
         assert active_resp.status_code == 200
         default_list = active_resp.json()
         assert default_list["is_default"] is True
+        assert_matches_json_snapshot(
+            request, "lists_active_default_owner", default_list
+        )
 
         create_resp = await client.post("/lists", json={"name": "Weekend"})
         assert create_resp.status_code == 201

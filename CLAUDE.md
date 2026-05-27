@@ -22,6 +22,13 @@
 - Integration env overrides (`SUPABASE_URL`, `DB_DSN`, keys, etc.) must stay scoped to the `pytest` session and be restored afterward. Never mutate process env at module import time.
 - Dev stack (`supabase start`, backend on `.env`, local ports `54321+`) must remain untouched by integration test setup/teardown.
 
+## Testing Strategy
+
+- Router and service changes must add or update tests in the closest layer first: unit/service for pure logic, integration for real DB/API contracts.
+- Contract snapshots are required for stable JSON payloads touched by the change. Store them under `tests/__snapshots__/` or `tests/integration/__snapshots__/`.
+- Normalize unstable values before snapshot compare: UUID, invite token, ISO timestamp, variable URL host/query.
+- Keep explicit assertions for permissions, sorting, filtering, lifecycle transitions, and domain invariants even when a snapshot exists.
+
 ## Git
 
 - Keep `main` clean for deploy-ready code.

@@ -622,6 +622,8 @@ pytest tests/unit -v
 pytest tests/ -v --ignore=tests/integration   # tutto tranne integration
 ```
 
+Questa suite include anche snapshot contract mirati per router/unit test. Gli snapshot JSON vivono in `tests/__snapshots__/` e devono restare leggibili: normalizzare UUID, token, timestamp e URL variabili prima del confronto, mantenendo assertion esplicite per regole di business critiche.
+
 ### Test di integrazione (stack Docker isolato)
 
 ```bash
@@ -646,6 +648,8 @@ Comandi manuali utili:
 FastAPI non deve essere avviato separatamente: i test HTTP usano l'app in-process via HTTPX/ASGI.
 
 I test di integrazione coprono: geocoding, ottimizzazione, upload volantino, lifecycle preferiti, inviti lista, eliminazione account (GDPR).
+
+I contract snapshot di integrazione vivono in `tests/integration/__snapshots__/`. Servono a bloccare regressioni di shape JSON su `/favorites`, `/optimize`, `/invite`, `/lists/active` e route affini senza sostituire le assertion semantiche.
 
 ### Test di performance (opt-in)
 

@@ -1,0 +1,51 @@
+[
+  {
+    "active_offers": [
+      {
+        "created_at": "<datetime>",
+        "discount_pct": 40,
+        "format": {},
+        "format_label": "",
+        "offer_id": "<uuid>",
+        "price_offer": 0.89,
+        "price_original": 1.49,
+        "supermarket_address": null,
+        "supermarket_id": "<uuid>",
+        "supermarket_logo_url": null,
+        "supermarket_name": "Test Market",
+        "unit_price": null,
+        "unit_price_label": null,
+        "unit_price_unit": null,
+        "unit_price_value": null,
+        "valid_to": "2099-12-31"
+      }
+    ],
+    "best_offer": {
+      "created_at": "<datetime>",
+      "discount_pct": 40,
+      "format": {},
+      "format_label": "",
+      "offer_id": "<uuid>",
+      "price_offer": 0.89,
+      "price_original": 1.49,
+      "supermarket_address": null,
+      "supermarket_id": "<uuid>",
+      "supermarket_logo_url": null,
+      "supermarket_name": "Test Market",
+      "unit_price": null,
+      "unit_price_label": null,
+      "unit_price_unit": null,
+      "unit_price_value": null,
+      "valid_to": "2099-12-31"
+    },
+    "brand": "Barilla",
+    "category": null,
+    "favorite_id": "<uuid>",
+    "format": {},
+    "format_label": "",
+    "image_url": null,
+    "name": "Pasta Barilla",
+    "product_id": "<uuid>",
+    "subcategory": null
+  }
+]

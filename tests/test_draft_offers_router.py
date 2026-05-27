@@ -24,10 +24,10 @@ _settings_obj.gemini_model = "gemma-4-31b-it"
 _config_mod.settings = _settings_obj  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
-# Ensure services.extraction.service is not cached from another stub
-# (we patch ExtractionService inside the router endpoint, not the whole module)
-for _svc_mod in ("services.extraction.service", "services.extraction", "services.extraction.providers"):
-    sys.modules.pop(_svc_mod, None)
+_normalizer_mod = types.ModuleType("services.extraction.normalizer")
+_normalizer_mod.format_unit_price_label = lambda value, unit: None  # type: ignore[attr-defined]
+_normalizer_mod.normalize_unit_price_measure = lambda value: value  # type: ignore[attr-defined]
+sys.modules["services.extraction.normalizer"] = _normalizer_mod
 
 from fastapi import FastAPI
 import httpx
@@ -35,6 +35,9 @@ import pytest
 
 import api.routers.flyers as _flyers_module
 from api.routers.flyers import router
+from tests.snapshot_utils import assert_matches_json_snapshot
+
+sys.modules.pop("services.extraction.normalizer", None)
 
 _DEP_PROFILE = _flyers_module.require_admin_or_manager
 _DEP_USER_ID = _flyers_module.get_current_user_id
@@ -98,9 +101,11 @@ class TestTriggerExtraction:
         sb = _sb_with_flyer({"id": "flyer-1", "supermarket_id": "sup-1", "status": "pending"})
         mock_svc = MagicMock()
         mock_svc.return_value.run = MagicMock()
+        mock_service_module = types.ModuleType("services.extraction.service")
+        mock_service_module.ExtractionService = mock_svc  # type: ignore[attr-defined]
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
-            patch("services.extraction.service.ExtractionService", mock_svc),
+            patch.dict(sys.modules, {"services.extraction.service": mock_service_module}),
         ):
             resp = await _post(
                 "/flyers/flyer-1/extract",
@@ -204,7 +209,7 @@ class TestCreateDraftOffer:
         return sb
 
     @pytest.mark.asyncio
-    async def test_create_returns_201(self):
+    async def test_create_returns_201(self, request):
         sb = self._make_sb()
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post(
@@ -217,6 +222,7 @@ class TestCreateDraftOffer:
         assert data["name"] == "Mozzarella"
         assert data["is_confirmed"] is False
         assert data["subcategory"] == "Latticini e Formaggi"
+        assert_matches_json_snapshot(request, "draft_offer_create_response", data)
 
     @pytest.mark.asyncio
     async def test_create_inherits_flyer_dates(self):

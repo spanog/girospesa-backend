@@ -23,6 +23,7 @@ from api.routers.invite import router as invite_router
 from api.routers.lists import router as lists_router
 from core.auth import get_current_user_id
 from tests.conftest import wait_for_user_bootstrap
+from tests.snapshot_utils import assert_matches_json_snapshot
 
 app = FastAPI()
 app.include_router(lists_router, prefix="/lists")
@@ -107,7 +108,7 @@ def shared_member(supabase_client, owner_list, member_user, owner_user):
 
 class TestCreateInvite:
     async def test_owner_creates_invite_returns_token(
-        self, supabase_client, owner_user, owner_list
+        self, supabase_client, owner_user, owner_list, request
     ):
         """Owner POSTs /invite → 200, token is 64-char hex, status='pending'."""
         app.dependency_overrides[get_current_user_id] = lambda: owner_user
@@ -124,6 +125,7 @@ class TestCreateInvite:
         assert len(body["token"]) == 64
         assert body["list_id"] == owner_list["id"]
         assert body["invited_by"] == owner_user
+        assert_matches_json_snapshot(request, "invite_create_response", body)
 
         row = (
             supabase_client.table("list_invites")
@@ -189,7 +191,7 @@ class TestCreateInvite:
 
 class TestGetInvite:
     async def test_valid_token_returns_list_name_and_inviter(
-        self, supabase_client, pending_invite, owner_list
+        self, supabase_client, pending_invite, owner_list, request
     ):
         """Public endpoint returns list name, inviter display_name, and expiry."""
         async with httpx.AsyncClient(app=app, base_url="http://test") as client:
@@ -201,6 +203,7 @@ class TestGetInvite:
         assert body["list_name"] == owner_list["name"]
         assert body["invited_by"] == "Test Owner"
         assert "expires_at" in body
+        assert_matches_json_snapshot(request, "invite_get_public_payload", body)
 
     async def test_invalid_token_returns_404(self, supabase_client, owner_list):
         """A token that does not exist in the DB returns 404."""

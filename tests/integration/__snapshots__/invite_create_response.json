@@ -1,0 +1,14 @@
+{
+  "accepted_at": null,
+  "accepted_by": null,
+  "created_at": "<datetime>",
+  "declined_at": null,
+  "email": null,
+  "expires_at": "<datetime>",
+  "id": "<uuid>",
+  "invited_by": "<uuid>",
+  "invited_user_id": null,
+  "list_id": "<uuid>",
+  "status": "pending",
+  "token": "<token>"
+}
