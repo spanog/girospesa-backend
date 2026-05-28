@@ -131,6 +131,25 @@ def test_security_sensitive_functions_have_fixed_search_path():
     ]
 
 
+def test_private_list_rls_helpers_have_fixed_search_path():
+    rows = _fetch_all(
+        """
+        SELECT p.proname AS function_name,
+               COALESCE(array_to_string(p.proconfig, ','), '') AS function_config
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'private'
+          AND p.proname IN ('is_list_member', 'is_list_owner')
+        ORDER BY p.proname
+        """
+    )
+
+    assert rows == [
+        {"function_name": "is_list_member", "function_config": "search_path=public, pg_temp"},
+        {"function_name": "is_list_owner", "function_config": "search_path=public, pg_temp"},
+    ]
+
+
 def test_public_extensions_live_in_extensions_schema():
     rows = _fetch_all(
         """
@@ -207,6 +226,52 @@ def test_list_rpc_execute_privileges_match_intended_access():
             "handle_new_user": False,
         },
     ]
+
+
+def test_private_list_helper_privileges_match_intended_access():
+    rows = _fetch_all(
+        """
+        SELECT
+          role_name,
+          has_schema_privilege(role_name, 'private', 'USAGE') AS private_usage,
+          has_function_privilege(role_name, 'private.is_list_member(uuid, uuid)', 'EXECUTE') AS is_list_member,
+          has_function_privilege(role_name, 'private.is_list_owner(uuid, uuid)', 'EXECUTE') AS is_list_owner
+        FROM (
+          VALUES ('anon'), ('authenticated')
+        ) AS roles(role_name)
+        ORDER BY role_name
+        """
+    )
+
+    assert rows == [
+        {
+            "role_name": "anon",
+            "private_usage": False,
+            "is_list_member": False,
+            "is_list_owner": False,
+        },
+        {
+            "role_name": "authenticated",
+            "private_usage": True,
+            "is_list_member": True,
+            "is_list_owner": True,
+        },
+    ]
+
+
+def test_public_list_rls_helpers_are_removed():
+    rows = _fetch_all(
+        """
+        SELECT p.proname AS function_name
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND p.proname IN ('is_list_member', 'is_list_owner')
+        ORDER BY p.proname
+        """
+    )
+
+    assert rows == []
 
 
 def test_list_rpcs_are_not_security_definer():
