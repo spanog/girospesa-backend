@@ -160,6 +160,30 @@ def test_signup_calls_backend_only_flow(client, monkeypatch):
     assert len(signup_calls) == 1
 
 
+def test_signup_returns_duplicate_email_detail(client, monkeypatch):
+    fake_sb = MagicMock()
+    fake_sb.auth.sign_up.side_effect = Exception("User already registered")
+    monkeypatch.setattr(_auth_router, "get_supabase", lambda: fake_sb)
+
+    response = client.post("/auth/signup", json=_SIGNUP_BODY)
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Registrazione non riuscita. Verifica i dati inseriti oppure accedi se hai già un account.",
+    }
+
+
+def test_signup_returns_upstream_error_detail(client, monkeypatch):
+    fake_sb = MagicMock()
+    fake_sb.auth.sign_up.side_effect = Exception("Weak password")
+    monkeypatch.setattr(_auth_router, "get_supabase", lambda: fake_sb)
+
+    response = client.post("/auth/signup", json=_SIGNUP_BODY)
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Password non valida"}
+
+
 # ---------------------------------------------------------------------------
 # reset-password
 # ---------------------------------------------------------------------------

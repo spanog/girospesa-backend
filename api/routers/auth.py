@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -18,6 +20,7 @@ from core.session import (
 _PASSWORD_RESET_TTL_SECONDS = 60 * 60  # 1-hour recovery window
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 _COOKIE_NAME = "girospesa_session"
 
@@ -116,6 +119,18 @@ class SignupBody(BaseModel):
     home_postal_code: str
 
 
+def _signup_error_response(exc: Exception) -> tuple[int, str]:
+    detail = str(exc).strip() or "Signup failed"
+    lowered = detail.lower()
+    if "already registered" in lowered or "already exists" in lowered:
+        return 400, "Registrazione non riuscita. Verifica i dati inseriti oppure accedi se hai già un account."
+    if "password" in lowered:
+        return 400, "Password non valida"
+    if "email" in lowered:
+        return 400, "Email non valida"
+    return 400, "Registrazione non riuscita. Riprova più tardi."
+
+
 def signup_user(body: SignupBody) -> None:
     """Register a new user via Supabase Auth and trigger profile DB setup."""
     sb = get_supabase()
@@ -137,7 +152,9 @@ def signup_user(body: SignupBody) -> None:
             }
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Signup failed") from exc
+        status_code, detail = _signup_error_response(exc)
+        logger.exception("Signup failed for %s", body.email)
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.post("/signup", status_code=201)

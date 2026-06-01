@@ -446,6 +446,7 @@ Valori locali canonici:
 - `ADMIN_EMAIL` e `ADMIN_PASSWORD` servono per seedare utente admin via API service-role
 - `.env` backend deve contenere solo variabili lette da FastAPI; credenziali Docker/Supabase CLI come `POSTGRES_PASSWORD`, `ANON_KEY`, `JWT_SECRET` e `SERVICE_ROLE_KEY` non vanno copiate qui
 - `.env.test` e' locale-only ed e' ignorato da Git; i test integration iniettano questi valori solo dentro processo `pytest`, puntando allo stack Docker isolato su porte `55421`/`55422`, poi ripristinano l'env della sessione a fine run
+- `POST /auth/signup` logga sempre causa reale lato backend con stack trace, ma verso frontend restituisce solo messaggi sanitizzati: duplicato account -> `400 {"detail":"Registrazione non riuscita. Verifica i dati inseriti oppure accedi se hai già un account."}`; password/email non valide hanno copy dedicato; errori imprevisti restano generici
 
 ### 3. Avviare lo stack Supabase locale
 
