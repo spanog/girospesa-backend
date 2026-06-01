@@ -30,9 +30,7 @@ class UpdateProfileBody(BaseModel):
     home_province: str | None = None
     home_postal_code: str | None = None
     max_distance_km: int | None = Field(default=None, ge=1, le=100)
-    notification_deals: bool | None = None
-    notification_favorites: bool | None = None
-    notification_shared_lists: bool | None = None
+    notifications_enabled: bool | None = None
     preferred_supermarkets: list[str] | None = None
     search_label: str | None = None
     search_lat: float | None = None
@@ -83,6 +81,8 @@ async def update_profile(
         )
 
     sb.table("user_profiles").update(update_data).eq("id", user_id).execute()
+    if update_data.get("notifications_enabled") is False:
+        sb.table("push_subscriptions").delete().eq("user_id", user_id).execute()
     profile = sb.table("user_profiles").select("*").eq("id", user_id).single().execute()
     if not profile.data:
         raise HTTPException(status_code=404, detail="Profile not found")

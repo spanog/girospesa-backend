@@ -4,9 +4,9 @@ from services.push_notify import notify_extraction_complete
 
 def test_notify_extraction_creates_inbox_row_without_subscriptions():
     sb = MagicMock()
-    # profile: notification_deals=True
+    # profile: notifications_enabled=True
     profile_resp = MagicMock()
-    profile_resp.data = {"notification_deals": True}
+    profile_resp.data = {"notifications_enabled": True}
     sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = profile_resp
     # push_subscriptions: empty
     push_resp = MagicMock()
@@ -31,13 +31,13 @@ def test_notify_extraction_creates_inbox_row_without_subscriptions():
     assert insert_call_args["data"]["products_count"] == 10
 
 
-def test_notify_extraction_skips_inbox_when_deals_disabled():
+def test_notify_extraction_skips_inbox_when_notifications_disabled():
     sb = MagicMock()
     profile_resp = MagicMock()
-    profile_resp.data = {"notification_deals": False}
+    profile_resp.data = {"notifications_enabled": False}
     sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = profile_resp
 
     notify_extraction_complete(sb, "flyer-1", "user-1", True, "Lidl", products_count=10)
 
     inserted_tables = [c.args[0] for c in sb.table.call_args_list]
-    assert "app_notifications" not in inserted_tables, f"Should not insert when deals disabled, got: {inserted_tables}"
+    assert "app_notifications" not in inserted_tables, f"Should not insert when notifications disabled, got: {inserted_tables}"

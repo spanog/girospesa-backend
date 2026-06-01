@@ -18,7 +18,12 @@ from services.repositories import lists_repository as repo
 from services.extraction.normalizer import format_unit_price_label
 from services.deal_freshness import classify_deal_freshness
 from services.offer_visibility import apply_current_offer_window
-from services.push_notify import PushEndpointGoneError, PushSubscription, send_push_notification
+from services.push_notify import (
+    PushEndpointGoneError,
+    PushSubscription,
+    notifications_enabled_for_user,
+    send_push_notification,
+)
 
 router = APIRouter()
 DEFAULT_LIST_NAME = "Lista principale"
@@ -636,23 +641,6 @@ def _create_app_notification(
     return repo.create_app_notification(user_id, kind=kind, title=title, body=body, data=data)
 
 
-def _shared_list_notifications_enabled(sb: object, user_id: str) -> bool:
-    try:
-        profile = (
-            sb.table("user_profiles")
-            .select("notification_shared_lists")
-            .eq("id", user_id)
-            .maybe_single()
-            .execute()
-            .data
-        )
-    except Exception:
-        return True
-    if profile is None:
-        return True
-    return profile.get("notification_shared_lists", True)
-
-
 def _notify_shared_list_event(
     sb: object,
     user_id: str,
@@ -662,7 +650,7 @@ def _notify_shared_list_event(
     body: str,
     data: dict,
 ) -> dict | None:
-    if not _shared_list_notifications_enabled(sb, user_id):
+    if not notifications_enabled_for_user(sb, user_id):
         return None
     notification = _create_app_notification(
         sb,

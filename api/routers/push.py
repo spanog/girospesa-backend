@@ -17,7 +17,12 @@ from pydantic import BaseModel
 from core.auth import get_current_user_id
 from core.config import settings
 from core.database import get_supabase
-from services.push_notify import PushEndpointGoneError, PushSubscription, send_push_notification
+from services.push_notify import (
+    PushEndpointGoneError,
+    PushSubscription,
+    notifications_enabled_for_user,
+    send_push_notification,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -85,6 +90,11 @@ async def subscribe(
 ) -> dict:
     """Register or update a Web Push subscription for the authenticated user."""
     sb = get_supabase()
+    if not notifications_enabled_for_user(sb, user_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Riattiva le notifiche account prima di collegare un browser.",
+        )
     # Remove any stale subscription with the same endpoint belonging to a different user.
     # This prevents cross-user notification leaks when a device switches accounts.
     sb.table("push_subscriptions").delete().eq("endpoint", body.endpoint).neq("user_id", user_id).execute()
@@ -188,7 +198,7 @@ async def notify_favorites(request: Request) -> Response:
     notification_title = f"Nuova offerta: {product_name}"
     notification_data = _favorite_offer_data(product_id)
 
-    # Find users who favourited this product and have push notifications enabled
+    # Find users who favourited this product and have account notifications enabled
     favs_resp = (
         sb.table("favorites")
         .select("user_id")
@@ -201,15 +211,7 @@ async def notify_favorites(request: Request) -> Response:
     for fav in favs_resp.data:
         uid: str = fav["user_id"]
 
-        # Check per-user notification preference
-        profile_resp = (
-            sb.table("user_profiles")
-            .select("notification_favorites")
-            .eq("id", uid)
-            .maybe_single()
-            .execute()
-        )
-        if not profile_resp.data or not profile_resp.data.get("notification_favorites", True):
+        if not notifications_enabled_for_user(sb, uid):
             continue
 
         _persist_app_notification(
@@ -219,7 +221,6 @@ async def notify_favorites(request: Request) -> Response:
             data=notification_data,
         )
 
-        # Fetch all push subscriptions for this user
         subs_resp = (
             sb.table("push_subscriptions")
             .select("endpoint, p256dh, auth_key")

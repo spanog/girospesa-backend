@@ -106,7 +106,7 @@ Il backend usa tre livelli di autenticazione:
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
 | `GET` | `/users/me` | ✅ | Profilo utente autenticato, incluse preferenze notifiche granulari effettivamente usate |
-| `PUT` | `/users/me` | ✅ | Aggiorna profilo; auto-geocode se cambia indirizzo e salva preferenze notifiche (`notification_deals`, `notification_favorites`, `notification_shared_lists`) |
+| `PUT` | `/users/me` | ✅ | Aggiorna profilo; auto-geocode se cambia indirizzo e salva preferenza unica notifiche (`notifications_enabled`) |
 | `POST` | `/users/geocode` | ✅ | Geocodifica indirizzo di casa → aggiorna `home_lat/lng` e `home_location` PostGIS |
 | `POST` | `/users/me/avatar` | ✅ | Upload avatar (JPEG/PNG/WebP, max 5 MB) → bucket `avatars` |
 | `DELETE` | `/users/me` | ✅ | Elimina account + dati collegati, pulisce `girospesa_session`, risponde `204` |
@@ -160,7 +160,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 | `GET` | `/flyers/{flyer_id}/draft-offers` | ✅ admin/manager | Lista offerte estratte ma non confermate |
 | `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline di una draft offer; `detach_product=true` rimuove il binding catalogo senza creare prodotti |
 | `POST` | `/flyers/{flyer_id}/draft-offers/{offer_id}/image` | ✅ admin/manager | Upload immagine prodotto staged per una bozza non agganciata; salva `draft_image_url` fino alla conferma |
-| `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma tutte le offerte draft, crea/upserta i prodotti canonici solo per bozze non agganciate, rende pubbliche le offerte e, alla prima pubblicazione del volantino, invia `app_notifications.flyer_published` + Web Push ai customer vicini con `notification_deals=true` |
+| `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma tutte le offerte draft, crea/upserta i prodotti canonici solo per bozze non agganciate, rende pubbliche le offerte e, alla prima pubblicazione del volantino, invia `app_notifications.flyer_published` + Web Push ai customer vicini con `notifications_enabled=true` |
 | `POST` | `/flyers/admin/cleanup` | 👑 admin | Trigger manuale pulizia volantini scaduti (eseguita automaticamente ogni mezzanotte) |
 
 ### Contratto prezzi estrazione
@@ -367,7 +367,7 @@ Frontend
     Backend: legge product_id + supermarket_name dalla nuova offerta
     Backend: cerca utenti che hanno quel prodotto tra i preferiti
     Per ogni utente:
-      check notification_favorites preference
+      check notifications_enabled flag
       → insert app_notifications.favorite_offer
       → fetch push_subscriptions
       → per ogni subscription:

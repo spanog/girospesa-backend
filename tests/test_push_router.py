@@ -275,6 +275,33 @@ class TestNotifyExtractionComplete:
 
 class TestNotifyFavoritesVisibility:
     @pytest.mark.asyncio
+    async def test_subscribe_rejected_when_account_notifications_disabled(self):
+        app = FastAPI()
+        app.include_router(_push_router, prefix="/push")
+        app.dependency_overrides[_push_module.get_current_user_id] = lambda: "user-1"
+        transport = httpx.ASGITransport(app=app)
+
+        profile_table = MagicMock()
+        profile_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "notifications_enabled": False,
+        }
+        sb = MagicMock()
+        sb.table.return_value = profile_table
+
+        with patch.object(_push_module, "get_supabase", return_value=sb):
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post(
+                    "/push/subscribe",
+                    json={
+                        "endpoint": "https://push.example.com/abc",
+                        "p256dh": "key",
+                        "auth_key": "auth",
+                    },
+                )
+
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
     async def test_draft_offer_insert_does_not_notify(self):
         app = FastAPI()
         app.include_router(_push_router, prefix="/push")
@@ -331,7 +358,7 @@ class TestNotifyFavoritesVisibility:
 
         profiles_table = MagicMock()
         profiles_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = (
-            {"notification_favorites": True}
+            {"notifications_enabled": True}
         )
         tables["user_profiles"] = profiles_table
 
@@ -380,6 +407,69 @@ class TestNotifyFavoritesVisibility:
             }
         )
 
+    @pytest.mark.asyncio
+    async def test_confirmed_public_offer_skips_when_notifications_disabled(self):
+        app = FastAPI()
+        app.include_router(_push_router, prefix="/push")
+        transport = httpx.ASGITransport(app=app)
+
+        tables: dict[str, MagicMock] = {}
+
+        def table(name: str) -> MagicMock:
+            return tables[name]
+
+        flyer_table = MagicMock()
+        flyer_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "is_public": True,
+            "status": "done",
+        }
+        tables["flyers"] = flyer_table
+
+        product_table = MagicMock()
+        product_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "name": "Parmigiano Reggiano",
+        }
+        tables["products"] = product_table
+
+        favorites_table = MagicMock()
+        favorites_table.select.return_value.eq.return_value.execute.return_value.data = [
+            {"user_id": "user-1"},
+        ]
+        tables["favorites"] = favorites_table
+
+        profiles_table = MagicMock()
+        profiles_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = (
+            {"notifications_enabled": False}
+        )
+        tables["user_profiles"] = profiles_table
+
+        notifications_table = MagicMock()
+        tables["app_notifications"] = notifications_table
+
+        sb = MagicMock()
+        sb.table.side_effect = table
+
+        with patch.object(_push_module, "get_supabase", return_value=sb), \
+             patch.object(_push_module, "send_push_notification") as mock_send:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post(
+                    "/push/notify-favorites",
+                    headers={"x-webhook-secret": "super-secret"},
+                    json={
+                        "record": {
+                            "product_id": "prod-1",
+                            "flyer_id": "flyer-1",
+                            "discounted_price": 4.99,
+                            "valid_to": "2026-06-30",
+                            "is_confirmed": True,
+                        },
+                    },
+                )
+
+        assert resp.status_code == 204
+        notifications_table.insert.assert_not_called()
+        mock_send.assert_not_called()
+
     def test_stale_410_endpoint_deleted(self):
         sb = _make_sb_with_subscriptions([_SAMPLE_SUB])
         with patch(
@@ -425,7 +515,7 @@ class TestNotifyFavoritesVisibility:
 
 
 class TestNotifyPublicFlyerPublished:
-    def test_notifies_only_nearby_customers_with_deals_enabled(self):
+    def test_notifies_only_nearby_customers_with_notifications_enabled(self):
         tables: dict[str, MagicMock] = {}
 
         def table(name: str) -> MagicMock:
@@ -444,7 +534,7 @@ class TestNotifyPublicFlyerPublished:
             {
                 "id": "nearby-customer",
                 "role": "customer",
-                "notification_deals": True,
+                "notifications_enabled": True,
                 "home_lat": 45.465,
                 "home_lng": 9.191,
                 "search_lat": None,
@@ -454,7 +544,7 @@ class TestNotifyPublicFlyerPublished:
             {
                 "id": "far-customer",
                 "role": "customer",
-                "notification_deals": True,
+                "notifications_enabled": True,
                 "home_lat": 41.9028,
                 "home_lng": 12.4964,
                 "search_lat": None,
@@ -530,4 +620,51 @@ class TestNotifyPublicFlyerPublished:
                 products_count=12,
             )
 
+        mock_send.assert_not_called()
+
+    def test_skips_customers_with_notifications_disabled(self):
+        tables: dict[str, MagicMock] = {}
+
+        def table(name: str) -> MagicMock:
+            return tables[name]
+
+        supermarket_table = MagicMock()
+        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "id": "super-1",
+            "lat": 45.4642,
+            "lng": 9.19,
+        }
+        tables["supermarkets"] = supermarket_table
+
+        profiles_table = MagicMock()
+        profiles_table.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+            {
+                "id": "disabled-customer",
+                "role": "customer",
+                "notifications_enabled": False,
+                "home_lat": 45.465,
+                "home_lng": 9.191,
+                "search_lat": None,
+                "search_lng": None,
+                "max_distance_km": 10,
+            },
+        ]
+        tables["user_profiles"] = profiles_table
+
+        notifications_table = MagicMock()
+        tables["app_notifications"] = notifications_table
+
+        sb = MagicMock()
+        sb.table.side_effect = table
+
+        with patch("services.push_notify.send_push_notification") as mock_send:
+            notify_public_flyer_published(
+                sb,
+                flyer_id="flyer-1",
+                supermarket_id="super-1",
+                supermarket_name="Coop",
+                products_count=12,
+            )
+
+        notifications_table.insert.assert_not_called()
         mock_send.assert_not_called()

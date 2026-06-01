@@ -90,6 +90,29 @@ def _delete_stale_push_endpoints(sb: object, endpoints: list[str]) -> None:
             logger.warning("Failed to delete stale push endpoint %s: %s", endpoint, exc)
 
 
+def notifications_enabled_for_user(sb: object, user_id: str) -> bool:
+    try:
+        profile_resp = (
+            sb.table("user_profiles")  # type: ignore[union-attr]
+            .select("notifications_enabled")
+            .eq("id", user_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to fetch notifications_enabled for user %s: %s",
+            user_id,
+            exc,
+        )
+        return True
+
+    profile = profile_resp.data if profile_resp is not None else None
+    if profile is None:
+        return True
+    return profile.get("notifications_enabled", True)
+
+
 def _send_push_to_user(
     sb: object,
     *,
@@ -121,12 +144,6 @@ def _send_push_to_user(
             logger.warning("Push notify failed for %s: %s", sub["endpoint"], exc)
 
     _delete_stale_push_endpoints(sb, stale_endpoints)
-
-
-def _profile_pref_enabled(profile: dict | None, key: str) -> bool:
-    if profile is None:
-        return True
-    return profile.get(key, True)
 
 
 def _profile_reference_point(profile: dict) -> tuple[float | None, float | None]:
@@ -194,18 +211,8 @@ def notify_extraction_complete(
     error_message: str = "",
 ) -> None:
     """Persist inbox notification and send Web Push to the flyer uploader when extraction finishes."""
-    try:
-        profile_resp = (
-            sb.table("user_profiles")  # type: ignore[union-attr]
-            .select("notification_deals")
-            .eq("id", user_id)
-            .maybe_single()
-            .execute()
-        )
-        if profile_resp.data is not None and not profile_resp.data.get("notification_deals", True):
-            return
-    except Exception as exc:
-        logger.warning("Failed to fetch notification_deals pref for user %s: %s", user_id, exc)
+    if not notifications_enabled_for_user(sb, user_id):
+        return
 
     if success:
         title = "Estrazione completata"
@@ -263,10 +270,10 @@ def notify_public_flyer_published(
     profiles_resp = (
         sb.table("user_profiles")  # type: ignore[union-attr]
         .select(
-            "id, role, notification_deals, home_lat, home_lng, search_lat, search_lng, max_distance_km"
+            "id, role, notifications_enabled, home_lat, home_lng, search_lat, search_lng, max_distance_km"
         )
         .eq("role", "customer")
-        .eq("notification_deals", True)
+        .eq("notifications_enabled", True)
         .execute()
     )
     profiles = profiles_resp.data or []
@@ -287,7 +294,7 @@ def notify_public_flyer_published(
     target_lng = float(supermarket["lng"])
 
     for profile in profiles:
-        if not _profile_pref_enabled(profile, "notification_deals"):
+        if not profile.get("notifications_enabled", True):
             continue
         user_lat, user_lng = _profile_reference_point(profile)
         if user_lat is None or user_lng is None:

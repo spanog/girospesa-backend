@@ -97,7 +97,7 @@ def _set_profile_display_name(user_id: str, display_name: str) -> None:
     conn.close()
 
 
-def _set_shared_list_notifications(user_id: str, enabled: bool) -> None:
+def _set_notifications_enabled(user_id: str, enabled: bool) -> None:
     dsn = _db_dsn()
     if not dsn:
         return
@@ -107,7 +107,7 @@ def _set_shared_list_notifications(user_id: str, enabled: bool) -> None:
     cur.execute(
         """
         UPDATE public.user_profiles
-        SET notification_shared_lists = %s
+        SET notifications_enabled = %s
         WHERE id = %s
         """,
         (enabled, user_id),
@@ -653,7 +653,7 @@ async def test_owner_remove_member_notifies_target_and_falls_back_selected_list(
 async def test_shared_list_notifications_respect_profile_preference(
     supabase_client, owner_user, member_user, clean_db
 ):
-    _set_shared_list_notifications(member_user["id"], False)
+    _set_notifications_enabled(member_user["id"], False)
 
     async with await _client_as(owner_user["id"]) as owner_client:
         create_resp = await owner_client.post("/lists", json={"name": "Weekend"})

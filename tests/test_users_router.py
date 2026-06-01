@@ -106,16 +106,10 @@ class TestUpdateProfileBody:
         errors = exc_info.value.errors()
         assert any(e["loc"] == ("max_distance_km",) for e in errors)
 
-    def test_notification_flags(self):
-        body = UpdateProfileBody(
-            notification_deals=False,
-            notification_favorites=True,
-            notification_shared_lists=False,
-        )
+    def test_notifications_enabled_flag(self):
+        body = UpdateProfileBody(notifications_enabled=False)
         dumped = body.model_dump(exclude_none=True)
-        assert dumped["notification_deals"] is False
-        assert dumped["notification_favorites"] is True
-        assert dumped["notification_shared_lists"] is False
+        assert dumped["notifications_enabled"] is False
 
     def test_all_address_fields(self):
         body = UpdateProfileBody(
@@ -182,10 +176,12 @@ class TestDeleteAccount:
     @pytest.mark.asyncio
     async def test_returns_204_and_clears_cookie(self, monkeypatch):
         response = MagicMock()
-        monkeypatch.setattr("api.routers.users._delete_auth_user", MagicMock())
         _session_mod.clear_session_cookie.reset_mock()
 
+        from api.routers import users
         from api.routers.users import delete_account
+
+        monkeypatch.setattr(users, "_delete_auth_user", MagicMock())
 
         result = await delete_account(response, "user-1")
 
