@@ -30,9 +30,9 @@ class UpdateProfileBody(BaseModel):
     home_province: str | None = None
     home_postal_code: str | None = None
     max_distance_km: int | None = Field(default=None, ge=1, le=100)
-    notification_expiry: bool | None = None
     notification_deals: bool | None = None
     notification_favorites: bool | None = None
+    notification_shared_lists: bool | None = None
     preferred_supermarkets: list[str] | None = None
     search_label: str | None = None
     search_lat: float | None = None

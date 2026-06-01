@@ -600,6 +600,30 @@ def test_notify_invited_user_sends_push_for_each_subscription():
     assert push_kwargs["data"]["list_id"] == "list-1"
 
 
+def test_shared_list_event_skips_inbox_and_push_when_preference_disabled():
+    maybe_single_chain = MagicMock()
+    maybe_single_chain.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+        "notification_shared_lists": False
+    }
+    sb_mock = MagicMock()
+    sb_mock.table.return_value.select.return_value = maybe_single_chain
+
+    with patch.object(_lists_module, "_create_app_notification") as create_notification_mock, \
+         patch.object(_lists_module, "_notify_invited_user") as notify_mock:
+        result = _lists_module._notify_shared_list_event(
+            sb_mock,
+            "user-1",
+            kind="list_member_removed",
+            title="Rimosso dalla lista",
+            body="Owner ti ha rimosso",
+            data={"list_id": "list-1", "url": "/lista"},
+        )
+
+    assert result is None
+    create_notification_mock.assert_not_called()
+    notify_mock.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_member_can_leave_shared_list_and_notify_owner():
     sb_mock = MagicMock()
@@ -619,8 +643,7 @@ async def test_member_can_leave_shared_list_and_notify_owner():
              "_profile_row",
              return_value={"display_name": "Mario"},
          ) as profile_mock, \
-         patch.object(_lists_module, "_create_app_notification") as create_notification_mock, \
-         patch.object(_lists_module, "_notify_invited_user") as notify_mock, \
+         patch.object(_lists_module, "_notify_shared_list_event") as notify_shared_list_event_mock, \
          patch.object(_lists_module, "_verify_owner") as verify_owner_mock:
         resp = await _delete_req(
             "/lists/list-1/members/member-1",
@@ -632,25 +655,13 @@ async def test_member_can_leave_shared_list_and_notify_owner():
     fallback_mock.assert_called_once_with(sb_mock, {"member-1"}, "list-1")
     verify_owner_mock.assert_not_called()
     profile_mock.assert_called_once_with(sb_mock, "member-1")
-    create_notification_mock.assert_called_once_with(
+    notify_shared_list_event_mock.assert_called_once_with(
         sb_mock,
         "owner-1",
         kind="list_member_left",
         title="Membro uscito dalla lista",
         body="Mario ha lasciato la lista Weekend",
         data={
-            "list_id": "list-1",
-            "list_name": "Weekend",
-            "left_by": "Mario",
-            "url": "/lista",
-        },
-    )
-    notify_mock.assert_called_once_with(
-        sb_mock,
-        "owner-1",
-        "Membro uscito dalla lista",
-        "Mario ha lasciato la lista Weekend",
-        {
             "list_id": "list-1",
             "list_name": "Weekend",
             "left_by": "Mario",

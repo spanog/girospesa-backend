@@ -49,7 +49,13 @@ from pydantic import ValidationError
 
 import api.routers.push as _push_module
 from api.routers.push import SubscribeBody, UnsubscribeBody, router as _push_router
-from services.push_notify import PushEndpointGoneError, PushSubscription, notify_extraction_complete, send_push_notification
+from services.push_notify import (
+    PushEndpointGoneError,
+    PushSubscription,
+    notify_extraction_complete,
+    notify_public_flyer_published,
+    send_push_notification,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -324,9 +330,9 @@ class TestNotifyFavoritesVisibility:
         tables["favorites"] = favorites_table
 
         profiles_table = MagicMock()
-        profiles_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
-            "notification_favorites": True,
-        }
+        profiles_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = (
+            {"notification_favorites": True}
+        )
         tables["user_profiles"] = profiles_table
 
         subscriptions_table = MagicMock()
@@ -352,7 +358,7 @@ class TestNotifyFavoritesVisibility:
                             "flyer_id": "flyer-1",
                             "supermarket_id": "super-1",
                             "discounted_price": 4.99,
-                            "valid_to": "2026-05-30",
+                            "valid_to": "2026-06-30",
                             "is_confirmed": True,
                         },
                     },
@@ -365,7 +371,7 @@ class TestNotifyFavoritesVisibility:
                 "user_id": "user-1",
                 "kind": "favorite_offer",
                 "title": "Nuova offerta: Parmigiano Reggiano",
-                "body": "€4.99 — da Coop — Valida fino al 2026-05-30",
+                "body": "€4.99 — da Coop — Valida fino al 2026-06-30",
                 "data": {
                     "kind": "favorite_offer",
                     "url": "/offerte?product=prod-1",
@@ -415,4 +421,113 @@ class TestNotifyFavoritesVisibility:
                 success=True,
                 supermarket_name="Coop",
             )
+        mock_send.assert_not_called()
+
+
+class TestNotifyPublicFlyerPublished:
+    def test_notifies_only_nearby_customers_with_deals_enabled(self):
+        tables: dict[str, MagicMock] = {}
+
+        def table(name: str) -> MagicMock:
+            return tables[name]
+
+        supermarket_table = MagicMock()
+        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "id": "super-1",
+            "lat": 45.4642,
+            "lng": 9.19,
+        }
+        tables["supermarkets"] = supermarket_table
+
+        profiles_table = MagicMock()
+        profiles_table.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+            {
+                "id": "nearby-customer",
+                "role": "customer",
+                "notification_deals": True,
+                "home_lat": 45.465,
+                "home_lng": 9.191,
+                "search_lat": None,
+                "search_lng": None,
+                "max_distance_km": 10,
+            },
+            {
+                "id": "far-customer",
+                "role": "customer",
+                "notification_deals": True,
+                "home_lat": 41.9028,
+                "home_lng": 12.4964,
+                "search_lat": None,
+                "search_lng": None,
+                "max_distance_km": 10,
+            },
+        ]
+        tables["user_profiles"] = profiles_table
+
+        notifications_table = MagicMock()
+        notifications_table.insert.return_value.execute.return_value.data = [{"id": "notif-1"}]
+        tables["app_notifications"] = notifications_table
+
+        subscriptions_table = MagicMock()
+        subscriptions_table.select.return_value.eq.return_value.execute.side_effect = [
+            MagicMock(data=[_SAMPLE_SUB]),
+        ]
+        subscriptions_table.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+        tables["push_subscriptions"] = subscriptions_table
+
+        sb = MagicMock()
+        sb.table.side_effect = table
+
+        with patch("services.push_notify.send_push_notification") as mock_send:
+            notify_public_flyer_published(
+                sb,
+                flyer_id="flyer-1",
+                supermarket_id="super-1",
+                supermarket_name="Coop",
+                products_count=12,
+            )
+
+        notifications_table.insert.assert_called_once_with(
+            {
+                "user_id": "nearby-customer",
+                "kind": "flyer_published",
+                "title": "Nuovo volantino vicino a te",
+                "body": "Coop: 12 offerte nuove disponibili vicino a te",
+                "data": {
+                    "kind": "flyer_published",
+                    "flyer_id": "flyer-1",
+                    "supermarket_id": "super-1",
+                    "products_count": 12,
+                    "url": "/volantini",
+                },
+            }
+        )
+        mock_send.assert_called_once()
+
+    def test_skips_when_supermarket_coordinates_missing(self):
+        tables: dict[str, MagicMock] = {}
+
+        def table(name: str) -> MagicMock:
+            return tables[name]
+
+        supermarket_table = MagicMock()
+        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "id": "super-1",
+            "lat": None,
+            "lng": None,
+        }
+        tables["supermarkets"] = supermarket_table
+
+        sb = MagicMock()
+        sb.table.side_effect = table
+
+        with patch("services.push_notify.send_push_notification") as mock_send:
+            notify_public_flyer_published(
+                sb,
+                flyer_id="flyer-1",
+                supermarket_id="super-1",
+                supermarket_name="Coop",
+                products_count=12,
+            )
+
         mock_send.assert_not_called()

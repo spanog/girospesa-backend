@@ -602,7 +602,10 @@ class TestConfirmOffers:
     @pytest.mark.asyncio
     async def test_confirm_sets_is_confirmed_true(self):
         sb = self._make_sb("done", 3)
-        with patch("api.routers.flyers.get_supabase", return_value=sb):
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
+        ):
             resp = await _post(
                 "/flyers/flyer-1/offers/confirm",
                 {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
@@ -611,17 +614,55 @@ class TestConfirmOffers:
         data = resp.json()
         assert data["confirmed"] == 3
         assert data["flyer_id"] == "flyer-1"
+        notify_mock.assert_called_once_with(
+            sb,
+            flyer_id="flyer-1",
+            supermarket_id="sup-1",
+            supermarket_name="Supermercato",
+            products_count=3,
+        )
 
     @pytest.mark.asyncio
     async def test_confirm_idempotent_zero_count(self):
         sb = self._make_sb("done", 0)
-        with patch("api.routers.flyers.get_supabase", return_value=sb):
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
+        ):
             resp = await _post(
                 "/flyers/flyer-1/offers/confirm",
                 {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
             )
         assert resp.status_code == 200
         assert resp.json()["confirmed"] == 0
+        notify_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_confirm_does_not_notify_when_flyer_already_public(self):
+        sb = self._make_sb("done", 2)
+        flyer_result = MagicMock()
+        flyer_result.data = {
+            "id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Coop",
+            "status": "done",
+            "is_public": True,
+        }
+        sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = (
+            flyer_result
+        )
+
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
+        ):
+            resp = await _post(
+                "/flyers/flyer-1/offers/confirm",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+            )
+
+        assert resp.status_code == 200
+        notify_mock.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_confirm_passes_draft_image_to_new_product(self):

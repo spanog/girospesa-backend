@@ -97,6 +97,24 @@ def _set_profile_display_name(user_id: str, display_name: str) -> None:
     conn.close()
 
 
+def _set_shared_list_notifications(user_id: str, enabled: bool) -> None:
+    dsn = _db_dsn()
+    if not dsn:
+        return
+    conn = psycopg2.connect(dsn)
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE public.user_profiles
+        SET notification_shared_lists = %s
+        WHERE id = %s
+        """,
+        (enabled, user_id),
+    )
+    conn.close()
+
+
 def _insert_push_subscription(user_id: str) -> None:
     dsn = _db_dsn()
     if not dsn:
@@ -627,6 +645,41 @@ async def test_owner_remove_member_notifies_target_and_falls_back_selected_list(
         (owner_user["id"],),
     )
     assert owner_notifications == []
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_shared_list_notifications_respect_profile_preference(
+    supabase_client, owner_user, member_user, clean_db
+):
+    _set_shared_list_notifications(member_user["id"], False)
+
+    async with await _client_as(owner_user["id"]) as owner_client:
+        create_resp = await owner_client.post("/lists", json={"name": "Weekend"})
+        assert create_resp.status_code == 201
+        shared_list = create_resp.json()
+
+        with patch("api.routers.lists.send_push_notification") as mock_push:
+            invite_resp = await owner_client.post(
+                f"/lists/{shared_list['id']}/invites",
+                json={"email": member_user["email"]},
+            )
+
+    assert invite_resp.status_code == 201
+    assert invite_resp.json()["notification"] is None
+    mock_push.assert_not_called()
+
+    notification_rows = _db_fetch_all(
+        """
+        SELECT id
+        FROM public.app_notifications
+        WHERE user_id = %s
+          AND kind = 'list_invite'
+        """,
+        (member_user["id"],),
+    )
+    assert notification_rows == []
 
     app.dependency_overrides.clear()
 

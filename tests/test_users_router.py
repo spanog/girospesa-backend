@@ -108,14 +108,14 @@ class TestUpdateProfileBody:
 
     def test_notification_flags(self):
         body = UpdateProfileBody(
-            notification_expiry=True,
             notification_deals=False,
             notification_favorites=True,
+            notification_shared_lists=False,
         )
         dumped = body.model_dump(exclude_none=True)
-        assert dumped["notification_expiry"] is True
         assert dumped["notification_deals"] is False
         assert dumped["notification_favorites"] is True
+        assert dumped["notification_shared_lists"] is False
 
     def test_all_address_fields(self):
         body = UpdateProfileBody(

@@ -102,6 +102,8 @@
 ## Push Favorites Webhook
 
 - `POST /push/notify-favorites` must ignore offers that are draft/unconfirmed, outside current validity window, missing a flyer, or linked to a non-public / non-done flyer. Favorite notifications are only for publicly visible offers. For each eligible recipient with `notification_favorites=true`, persist an `app_notifications` row with kind `favorite_offer` before attempting Web Push delivery, so inbox history survives closed clients or missing browser delivery.
+- Le notifiche collegate alla condivisione lista (`list_invite`, `list_deleted`, `list_member_removed`, `list_member_left`) devono rispettare `user_profiles.notification_shared_lists`: se `false`, non persistere inbox notification e non tentare consegna Web Push.
+- Le notifiche customer `flyer_published` devono partire solo da `POST /flyers/{flyer_id}/offers/confirm`, esclusivamente alla prima pubblicazione del volantino (`flyers.is_public` prima `false`, dopo `true`) e solo per profili `customer` con `notification_deals=true` e supermercato entro `max_distance_km` usando `search_*` come priorita` rispetto a `home_*`.
 
 ## Ignore Rules
 

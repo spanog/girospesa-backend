@@ -13,6 +13,7 @@ from core.config import settings
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
 from services.offer_visibility import apply_current_offer_window
+from services.push_notify import notify_public_flyer_published
 from services.product_format import ProductFormat, build_format_bundle
 from api.routers._offer_utils import (
     _OFFER_PRODUCT_SELECT,
@@ -749,6 +750,7 @@ async def confirm_offers(
 
     flyer = flyer_result.data
     _assert_flyer_access(sb, profile, flyer)
+    was_public = bool(flyer.get("is_public"))
 
     if flyer.get("status") != "done":
         raise HTTPException(
@@ -789,6 +791,14 @@ async def confirm_offers(
     )
     if (total_confirmed.count or 0) > 0:
         sb.table("flyers").update({"is_public": True}).eq("id", flyer_id).execute()
+        if draft_rows and not was_public:
+            notify_public_flyer_published(
+                sb,
+                flyer_id=flyer_id,
+                supermarket_id=flyer["supermarket_id"],
+                supermarket_name=flyer.get("supermarket_name") or "Supermercato",
+                products_count=total_confirmed.count or 0,
+            )
 
     return {"confirmed": confirmed_count, "flyer_id": flyer_id}
 

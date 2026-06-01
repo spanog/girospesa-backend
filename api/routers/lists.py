@@ -636,6 +636,46 @@ def _create_app_notification(
     return repo.create_app_notification(user_id, kind=kind, title=title, body=body, data=data)
 
 
+def _shared_list_notifications_enabled(sb: object, user_id: str) -> bool:
+    try:
+        profile = (
+            sb.table("user_profiles")
+            .select("notification_shared_lists")
+            .eq("id", user_id)
+            .maybe_single()
+            .execute()
+            .data
+        )
+    except Exception:
+        return True
+    if profile is None:
+        return True
+    return profile.get("notification_shared_lists", True)
+
+
+def _notify_shared_list_event(
+    sb: object,
+    user_id: str,
+    *,
+    kind: str,
+    title: str,
+    body: str,
+    data: dict,
+) -> dict | None:
+    if not _shared_list_notifications_enabled(sb, user_id):
+        return None
+    notification = _create_app_notification(
+        sb,
+        user_id,
+        kind=kind,
+        title=title,
+        body=body,
+        data=data,
+    )
+    _notify_invited_user(sb, user_id, title, body, data)
+    return notification
+
+
 def _mark_invite_notifications_read(sb: object, invite_id: str, user_id: str) -> None:
     repo.mark_invite_notifications_read(invite_id, user_id)
 
@@ -942,7 +982,7 @@ async def delete_list(
     body = f"{owner_name} ha rimosso la lista {list_row['name']}"
     payload = _list_deleted_payload(list_row["name"], owner_name, list_id)
     for member_user_id in member_user_ids:
-        _create_app_notification(
+        _notify_shared_list_event(
             sb,
             member_user_id,
             kind="list_deleted",
@@ -950,7 +990,6 @@ async def delete_list(
             body=body,
             data=payload,
         )
-        _notify_invited_user(sb, member_user_id, title, body, payload)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -1162,7 +1201,7 @@ async def invite_member_by_email(
     title = "Invito lista spesa"
     body_text = f"{inviter_name} ti ha invitato in {list_row['name']}"
     payload = _invite_payload(list_row["name"], inviter_name, invite["id"], list_id)
-    notification = _create_app_notification(
+    notification = _notify_shared_list_event(
         sb,
         invited_user_id,
         kind="list_invite",
@@ -1170,7 +1209,6 @@ async def invite_member_by_email(
         body=body_text,
         data=payload,
     )
-    _notify_invited_user(sb, invited_user_id, title, body_text, payload)
     invite["notification"] = notification
     return invite
 
@@ -1405,7 +1443,7 @@ async def remove_member(
             title = "Membro uscito dalla lista"
             body = f"{member_name} ha lasciato la lista {list_row['name']}"
             payload = _list_member_left_payload(list_row["name"], member_name, list_id)
-            _create_app_notification(
+            _notify_shared_list_event(
                 sb,
                 owner_id,
                 kind="list_member_left",
@@ -1413,7 +1451,6 @@ async def remove_member(
                 body=body,
                 data=payload,
             )
-            _notify_invited_user(sb, owner_id, title, body, payload)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     owner_profile = _profile_row(sb, user_id)
@@ -1421,7 +1458,7 @@ async def remove_member(
     title = "Rimosso dalla lista"
     body = f"{owner_name} ti ha rimosso dalla lista {list_row['name']}"
     payload = _list_member_removed_payload(list_row["name"], owner_name, list_id)
-    _create_app_notification(
+    _notify_shared_list_event(
         sb,
         member_user_id,
         kind="list_member_removed",
@@ -1429,5 +1466,4 @@ async def remove_member(
         body=body,
         data=payload,
     )
-    _notify_invited_user(sb, member_user_id, title, body, payload)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
