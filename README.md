@@ -125,7 +125,7 @@ Le liste non-default possono essere eliminate solo dal proprietario. Se lista co
 | `DELETE` | `/lists/{id}/items/{item_id}` | ✅ member | Rimuove item via RPC concorrente-safe `remove_list_item` (`SECURITY INVOKER`, `search_path` fissato a `public`) |
 | `POST` | `/lists/{id}/items/{item_id}/toggle` | ✅ member | Check/uncheck item; registra `checked_by`, `checked_at` |
 | `POST` | `/lists/{id}/invite` | ✅ owner | Crea link invito (token 64 char, TTL 7 giorni) |
-| `GET` | `/lists/{id}/members` | ✅ member | Lista membri lista condivisa |
+| `GET` | `/lists/{id}/members` | ✅ member | Lista membri lista condivisa con campi flatten `display_name`, `avatar_url` ed `email` pronti per UI |
 | `DELETE` | `/lists/{id}/members/{user_id}` | ✅ owner/member(self) | Owner rimuove un altro membro oppure un member lascia la lista da solo; riallinea `active_list_id` del target alla `Lista principale` e notifica solo parte interessata (utente rimosso oppure proprietario) |
 | `GET` | `/lists/{id}/deal-freshness` | ✅ member | Freshness di tutte le offerte pinnate nella lista |
 

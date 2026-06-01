@@ -1371,7 +1371,16 @@ async def list_members(
     ) if member_ids else []
     profiles_by_id = {p["id"]: p for p in profiles}
     for m in members:
-        m["user_profiles"] = profiles_by_id.get(m["user_id"])
+        profile = profiles_by_id.get(m["user_id"]) or {}
+        email = None
+        try:
+            user_resp = sb.auth.admin.get_user_by_id(m["user_id"])
+            email = getattr(user_resp.user, "email", None)
+        except Exception:
+            email = None
+        m["display_name"] = profile.get("display_name")
+        m["avatar_url"] = profile.get("avatar_url")
+        m["email"] = email
     return members
 
 

@@ -180,6 +180,16 @@ async def _delete_req(
         return await client.delete(url)
 
 
+async def _get_req(
+    url: str,
+    dep_overrides: dict | None = None,
+) -> httpx.Response:
+    _test_app.dependency_overrides = dep_overrides or {}
+    transport = httpx.ASGITransport(app=_test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get(url)
+
+
 async def test_patch_quantity_returns_updated_item():
     initial_items = [
         {"id": _ITEM_ID, "name": "Latte", "quantity": 1.0, "checked": False, "purchased": False}
@@ -253,6 +263,62 @@ async def test_patch_selected_offer_returns_coherent_item():
     assert resp.json()["pinned_product_id"] == "prod-1"
     assert resp.json()["found_deals"][0]["offer_id"] == "offer-1"
     rpc_mock.assert_awaited_once_with(_LIST_ID, _ITEM_ID, offer_patch, _USER_ID)
+
+
+async def test_list_members_flattens_profile_and_email_fields():
+    members_table = MagicMock()
+    profiles_table = MagicMock()
+    members_table.select.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[
+            {
+                "id": "member-row-1",
+                "list_id": _LIST_ID,
+                "user_id": _USER_ID,
+                "role": "owner",
+                "invited_by": None,
+                "joined_at": "2026-05-11T10:00:00.000Z",
+            }
+        ]
+    )
+    profiles_table.select.return_value.in_.return_value.execute.return_value = MagicMock(
+        data=[
+            {
+                "id": _USER_ID,
+                "display_name": "Mario Rossi",
+                "avatar_url": "https://example.com/avatar.jpg",
+            }
+        ]
+    )
+
+    sb_mock = MagicMock()
+    sb_mock.table.side_effect = lambda name: {
+        "list_members": members_table,
+        "user_profiles": profiles_table,
+    }[name]
+    sb_mock.auth.admin.get_user_by_id.return_value = MagicMock(
+        user=MagicMock(email="mario@example.com")
+    )
+
+    with (
+        patch.object(_lists_module, "get_supabase", return_value=sb_mock),
+        patch.object(_lists_module, "_verify_member", return_value=None),
+    ):
+        resp = await _get_req(f"/lists/{_LIST_ID}/members", dep_overrides=_deps())
+
+    assert resp.status_code == 200
+    assert resp.json() == [
+        {
+            "id": "member-row-1",
+            "list_id": _LIST_ID,
+            "user_id": _USER_ID,
+            "role": "owner",
+            "invited_by": None,
+            "joined_at": "2026-05-11T10:00:00.000Z",
+            "display_name": "Mario Rossi",
+            "avatar_url": "https://example.com/avatar.jpg",
+            "email": "mario@example.com",
+        }
+    ]
 
 
 async def test_add_offer_item_returns_brand_in_snapshot():
