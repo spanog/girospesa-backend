@@ -941,6 +941,7 @@ async def accept_pending_invite(
         raise HTTPException(status_code=410, detail="Invite has expired")
     if not _existing_member(invite["list_id"], user_id):
         _insert_member(invite["list_id"], user_id, "member", invite.get("invited_by"))
+    _set_active_list_id(user_id, invite["list_id"])
     _set_invite_status(invite_id, status="accepted", accepted_by=user_id)
     _mark_invite_notifications_read(sb, invite_id, user_id)
     return {"list_id": invite["list_id"]}

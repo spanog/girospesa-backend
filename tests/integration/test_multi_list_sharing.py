@@ -277,6 +277,17 @@ async def test_email_invite_creates_notification_and_accept_flow(
     )
     assert len(member_rows) == 1
 
+    profile_row = _db_fetch_one(
+        """
+        SELECT active_list_id
+        FROM public.user_profiles
+        WHERE id = %s
+        """,
+        (member_user["id"],),
+    )
+    assert profile_row is not None
+    assert profile_row["active_list_id"] == owner_list["id"]
+
     notification_rows = _db_fetch_all(
         """
         SELECT read_at
