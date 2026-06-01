@@ -5,6 +5,7 @@ ensure_supported_python()
 import logging
 import socket
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit, urlunsplit
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -50,6 +51,36 @@ def _dev_extra_origins(frontend_port: int = 3000) -> list[str]:
     return extras
 
 
+def _loopback_host_variants(hostname: str) -> list[str]:
+    if hostname == "localhost":
+        return ["localhost", "127.0.0.1"]
+    if hostname == "127.0.0.1":
+        return ["127.0.0.1", "localhost"]
+    return [hostname]
+
+
+def _with_hostname(origin: str, hostname: str) -> str:
+    parsed = urlsplit(origin)
+    netloc = hostname if parsed.port is None else f"{hostname}:{parsed.port}"
+    return urlunsplit((parsed.scheme, netloc, "", "", ""))
+
+
+def _dev_allow_origins() -> list[str]:
+    origins = ["http://localhost:3000", "http://127.0.0.1:3000", settings.frontend_url]
+    parsed = urlsplit(settings.frontend_url)
+    if parsed.hostname:
+        for host in _loopback_host_variants(parsed.hostname):
+            origins.append(_with_hostname(settings.frontend_url, host))
+    origins.extend(_dev_extra_origins())
+    return list(dict.fromkeys(origins))
+
+
+def _allow_origins() -> list[str]:
+    if settings.environment == "production":
+        return [settings.frontend_url]
+    return _dev_allow_origins()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler()
@@ -80,13 +111,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-_allow_origins = ["http://localhost:3000", settings.frontend_url]
-if settings.environment != "production":
-    _allow_origins.extend(_dev_extra_origins())
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list(dict.fromkeys(_allow_origins)),
+    allow_origins=_allow_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

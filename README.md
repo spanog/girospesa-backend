@@ -109,7 +109,7 @@ Il backend usa tre livelli di autenticazione:
 | `PUT` | `/users/me` | ✅ | Aggiorna profilo; auto-geocode se cambia indirizzo |
 | `POST` | `/users/geocode` | ✅ | Geocodifica indirizzo di casa → aggiorna `home_lat/lng` e `home_location` PostGIS |
 | `POST` | `/users/me/avatar` | ✅ | Upload avatar (JPEG/PNG/WebP, max 5 MB) → bucket `avatars` |
-| `DELETE` | `/users/me` | ✅ | Elimina account + tutti i dati utente (GDPR) |
+| `DELETE` | `/users/me` | ✅ | Elimina account + dati collegati, pulisce `girospesa_session`, risponde `204` |
 
 ### Lista spesa (`/lists`)
 
@@ -439,7 +439,7 @@ cp .env.test.example .env.test
 Valori locali canonici:
 
 - `SUPABASE_URL=http://127.0.0.1:54321`
-- `FRONTEND_URL=http://127.0.0.1:3000`
+- `FRONTEND_URL=http://localhost:3000` come valore canonico; `http://127.0.0.1:3000` resta supportato in CORS per compatibilita' loopback
 - `GEOCODING_PROVIDER=nominatim` in locale, così signup/profilo/seed admin riflettono comportamento reale durante sviluppo manuale
 - `GOOGLE_API_KEY` richiesto solo se si vuole usare estrazione AI Gemini
 - `SUPABASE_SERVICE_ROLE_KEY` e `SUPABASE_JWT_SECRET` si copiano da `supabase status -o env`
@@ -691,7 +691,8 @@ Soglie: LCP < 2500ms, CLS < 0.1, INP < 200ms sulla pagina `/offerte`.
 SUPABASE_URL=http://127.0.0.1:54321
 SUPABASE_SERVICE_ROLE_KEY=<local-service-role-key>
 SUPABASE_JWT_SECRET=<local-jwt-secret>
-FRONTEND_URL=http://127.0.0.1:3000
+FRONTEND_URL=http://localhost:3000
+# `127.0.0.1:3000` resta supportato in sviluppo per compatibilita' loopback
 
 # ── Gemini extraction (solo se usi estrazione AI) ---------------------------
 LLM_PROVIDER=gemini

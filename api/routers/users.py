@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Annotated
 
@@ -11,9 +12,11 @@ from supabase import create_client
 from core.auth import get_current_user_id
 from core.config import settings
 from core.database import get_supabase
+from core.session import clear_session_cookie
 from services.geocoding import geocode_address
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _AVATAR_BUCKET = "avatars"
 _AVATAR_ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp"}
@@ -190,10 +193,43 @@ async def update_password(
     return Response(status_code=204)
 
 
-@router.delete("/me", status_code=204)
-async def delete_account(user_id: Annotated[str, Depends(get_current_user_id)]) -> Response:
-    """Permanently delete the authenticated user's account and all their data."""
+def _is_missing_user_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    markers = ("user not found", "not found", "does not exist")
+    return any(marker in message for marker in markers)
+
+
+def _cleanup_account_delete_dependencies(sb: object, user_id: str) -> None:
+    # Historical invite FKs may block auth.users deletion unless they are
+    # nulled or removed before the auth record is deleted.
+    sb.table("list_members").update({"invited_by": None}).eq("invited_by", user_id).execute()
+    sb.table("list_invites").update({"accepted_by": None}).eq("accepted_by", user_id).execute()
+    sb.table("list_invites").delete().eq("invited_by", user_id).execute()
+
+
+def _delete_auth_user(user_id: str) -> None:
     sb = get_supabase()
-    # Cascade deletes on all FK-linked tables are defined in the DB schema.
-    sb.auth.admin.delete_user(user_id)
-    return Response(status_code=204)
+    try:
+        _cleanup_account_delete_dependencies(sb, user_id)
+        sb.auth.admin.delete_user(user_id)
+    except Exception as exc:
+        if _is_missing_user_error(exc):
+            logger.info("Account already deleted", extra={"user_id": user_id})
+            return
+        logger.exception("Account deletion failed", extra={"user_id": user_id})
+        raise HTTPException(
+            status_code=502,
+            detail="Eliminazione account non riuscita. Riprova tra qualche istante.",
+        ) from exc
+
+
+@router.delete("/me", status_code=204)
+async def delete_account(
+    response: Response,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> Response:
+    """Permanently delete the authenticated user's account and all their data."""
+    _delete_auth_user(user_id)
+    clear_session_cookie(response)
+    response.status_code = 204
+    return response

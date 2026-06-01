@@ -28,12 +28,32 @@ sys.modules["core.config"] = _config_mod
 # Stub core.database and core.auth (no DB/JWT calls in these tests)
 sys.modules["core.database"] = MagicMock()
 sys.modules["core.auth"] = MagicMock()
+_session_mod = types.ModuleType("core.session")
+_session_mod.clear_session_cookie = MagicMock()
+sys.modules["core.session"] = _session_mod
 sys.modules["services.geocoding"] = MagicMock()
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from api.routers.users import GeocodeBody, UpdateProfileBody, geocode_user_address
+
+
+@pytest.fixture(scope="module", autouse=True)
+def cleanup_stubbed_modules():
+    yield
+    for name in (
+        "api",
+        "api.routers",
+        "api.routers.users",
+        "core.auth",
+        "core.config",
+        "core.database",
+        "core.session",
+        "services.geocoding",
+    ):
+        sys.modules.pop(name, None)
 
 
 class TestUpdateProfileBody:
@@ -119,14 +139,18 @@ class TestUpdateProfileBody:
 
 class TestGeocodeUserAddress:
     @pytest.mark.asyncio
-    async def test_updates_coordinates_and_home_location(self):
+    async def test_updates_coordinates_and_home_location(self, monkeypatch):
         sb = MagicMock()
         update_chain = sb.table.return_value.update.return_value.eq.return_value
 
         from api.routers import users
 
-        users.geocode_address = MagicMock(return_value=(45.4642, 9.19))
-        users.get_supabase = MagicMock(return_value=sb)
+        monkeypatch.setattr(
+            users,
+            "geocode_address",
+            MagicMock(return_value=(45.4642, 9.19)),
+        )
+        monkeypatch.setattr(users, "get_supabase", MagicMock(return_value=sb))
 
         result = await geocode_user_address(GeocodeBody(address="Via Roma 1"), "user-1")
 
@@ -140,3 +164,57 @@ class TestGeocodeUserAddress:
             }
         )
         update_chain.execute.assert_called_once()
+
+
+class TestDeleteAccount:
+    def test_cleanup_dependencies_rewrites_invite_refs(self, monkeypatch):
+        sb = MagicMock()
+
+        from api.routers import users
+
+        users._cleanup_account_delete_dependencies(sb, "user-1")
+
+        assert sb.table.call_args_list[0].args == ("list_members",)
+        assert (
+            sb.table.return_value.update.return_value.eq.return_value.execute.called
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_204_and_clears_cookie(self, monkeypatch):
+        response = MagicMock()
+        monkeypatch.setattr("api.routers.users._delete_auth_user", MagicMock())
+        _session_mod.clear_session_cookie.reset_mock()
+
+        from api.routers.users import delete_account
+
+        result = await delete_account(response, "user-1")
+
+        assert result is response
+        assert response.status_code == 204
+        _session_mod.clear_session_cookie.assert_called_once_with(response)
+
+    def test_maps_backend_delete_error_to_http_502(self, monkeypatch):
+        sb = MagicMock()
+        sb.auth.admin.delete_user.side_effect = RuntimeError("backend boom")
+
+        from api.routers import users
+
+        monkeypatch.setattr(users, "get_supabase", MagicMock(return_value=sb))
+        monkeypatch.setattr(users, "_cleanup_account_delete_dependencies", MagicMock())
+
+        with pytest.raises(HTTPException) as exc_info:
+            users._delete_auth_user("user-1")
+
+        assert exc_info.value.status_code == 502
+        assert "Eliminazione account" in exc_info.value.detail
+
+    def test_missing_user_is_treated_as_success(self, monkeypatch):
+        sb = MagicMock()
+        sb.auth.admin.delete_user.side_effect = RuntimeError("User not found")
+
+        from api.routers import users
+
+        monkeypatch.setattr(users, "get_supabase", MagicMock(return_value=sb))
+        monkeypatch.setattr(users, "_cleanup_account_delete_dependencies", MagicMock())
+
+        users._delete_auth_user("user-1")
