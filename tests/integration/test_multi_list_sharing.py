@@ -291,6 +291,60 @@ async def test_email_invite_creates_notification_and_accept_flow(
 
 
 @pytest.mark.asyncio
+async def test_revoked_invite_keeps_inbox_history_and_returns_conflict(
+    supabase_client, owner_user, member_user, clean_db
+):
+    async with await _client_as(owner_user["id"]) as owner_client:
+        active_resp = await owner_client.get("/lists/active")
+        owner_list = active_resp.json()
+
+        invite_resp = await owner_client.post(
+            f"/lists/{owner_list['id']}/invites",
+            json={"email": member_user["email"]},
+        )
+        assert invite_resp.status_code == 201
+        invite = invite_resp.json()
+
+        revoke_resp = await owner_client.delete(
+            f"/lists/{owner_list['id']}/invites/{invite['id']}"
+        )
+        assert revoke_resp.status_code == 204
+
+    async with await _client_as(member_user["id"]) as member_client:
+        notifications_resp = await member_client.get("/notifications")
+        assert notifications_resp.status_code == 200
+        notifications = notifications_resp.json()
+        invite_notification = next(
+            row
+            for row in notifications
+            if row["kind"] == "list_invite"
+            and row["data"].get("invite_id") == invite["id"]
+        )
+        assert invite_notification["title"] == "Invito revocato"
+        assert invite_notification["data"]["invite_status"] == "revoked"
+
+        pending_resp = await member_client.get("/lists/invites/pending")
+        assert pending_resp.status_code == 200
+        assert pending_resp.json() == []
+
+        accept_resp = await member_client.post(
+            f"/lists/invites/{invite['id']}/accept",
+            json={},
+        )
+        assert accept_resp.status_code == 409
+        assert accept_resp.json()["detail"] == "Invite has been revoked"
+
+        decline_resp = await member_client.post(
+            f"/lists/invites/{invite['id']}/decline",
+            json={},
+        )
+        assert decline_resp.status_code == 409
+        assert decline_resp.json()["detail"] == "Invite has been revoked"
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_non_owner_member_cannot_manage_sharing(
     supabase_client, owner_user, member_user, clean_db
 ):

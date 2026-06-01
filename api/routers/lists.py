@@ -595,6 +595,7 @@ def _fallback_selected_list_for_users(sb: object, user_ids: set[str], deleted_li
 def _invite_payload(list_name: str, inviter_name: str | None, invite_id: str, list_id: str) -> dict:
     return {
         "invite_id": invite_id,
+        "invite_status": "pending",
         "list_id": list_id,
         "url": f"/lista?invite={invite_id}&list={list_id}",
         "list_name": list_name,
@@ -668,16 +669,35 @@ def _mark_invite_notifications_read(sb: object, invite_id: str, user_id: str) ->
     repo.mark_invite_notifications_read(invite_id, user_id)
 
 
-def _delete_invite_notifications(sb: object, invite_id: str, user_id: str) -> None:
-    repo.delete_invite_notifications(invite_id, user_id)
+def _update_invite_notifications(
+    sb: object,
+    invite_id: str,
+    user_id: str,
+    *,
+    title: str,
+    body: str,
+    data: dict,
+) -> None:
+    repo.update_invite_notifications(
+        invite_id,
+        user_id,
+        title=title,
+        body=body,
+        data=data,
+    )
 
 
 def _pending_list_invites_for_user(user_id: str) -> list[dict]:
     return repo.pending_list_invites_for_user(user_id)
 
 
-def _invite_for_user(invite_id: str, user_id: str) -> dict | None:
-    return repo.invite_for_user(invite_id, user_id)
+def _invite_for_user(
+    invite_id: str,
+    user_id: str,
+    *,
+    pending_only: bool = True,
+) -> dict | None:
+    return repo.invite_for_user(invite_id, user_id, pending_only=pending_only)
 
 
 def _existing_member(list_id: str, user_id: str) -> bool:
@@ -763,6 +783,20 @@ def _notify_invited_user(sb: object, user_id: str, title: str, body: str, data: 
             )
         except Exception:
             continue
+
+
+def _raise_invalid_invite_status(invite: dict) -> None:
+    status_value = invite.get("status")
+    status = status_value if isinstance(status_value, str) else "unknown"
+    if status == "expired" or _is_past_timestamp(invite.get("expires_at")):
+        raise HTTPException(status_code=410, detail="Invite has expired")
+    if status == "revoked":
+        raise HTTPException(status_code=409, detail="Invite has been revoked")
+    if status == "accepted":
+        raise HTTPException(status_code=409, detail="Invite has already been accepted")
+    if status == "declined":
+        raise HTTPException(status_code=409, detail="Invite has already been declined")
+    raise HTTPException(status_code=409, detail=f"Invite is not actionable: {status}")
 
 
 @router.get("")
@@ -896,9 +930,11 @@ async def accept_pending_invite(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict:
     sb = get_supabase()
-    invite = _invite_for_user(invite_id, user_id)
+    invite = _invite_for_user(invite_id, user_id, pending_only=False)
     if invite is None:
         raise HTTPException(status_code=404, detail="Invite not found")
+    if invite.get("status") != "pending":
+        _raise_invalid_invite_status(invite)
     if _is_past_timestamp(invite.get("expires_at")):
         _set_invite_status(invite_id, status="expired")
         _mark_invite_notifications_read(sb, invite_id, user_id)
@@ -916,9 +952,15 @@ async def decline_pending_invite(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> Response:
     sb = get_supabase()
-    invite = _invite_for_user(invite_id, user_id)
+    invite = _invite_for_user(invite_id, user_id, pending_only=False)
     if invite is None:
         raise HTTPException(status_code=404, detail="Invite not found")
+    if invite.get("status") != "pending":
+        _raise_invalid_invite_status(invite)
+    if _is_past_timestamp(invite.get("expires_at")):
+        _set_invite_status(invite_id, status="expired")
+        _mark_invite_notifications_read(sb, invite_id, user_id)
+        raise HTTPException(status_code=410, detail="Invite has expired")
     _set_invite_status(invite_id, status="declined")
     _mark_invite_notifications_read(sb, invite_id, user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -1255,6 +1297,13 @@ async def revoke_invite(
         raise HTTPException(status_code=404, detail="Invite not found")
     invite = invite_resp.data[0]
     if invite["status"] == "pending":
+        revoked_at = _now_utc()
+        list_name = _shopping_list_row(list_id).get("name") or "questa lista"
+        inviter_name = _profile_row(sb, user_id).get("display_name")
+        body = (
+            f'L\'invito alla lista "{list_name}" e\' stato revocato'
+            + (f" da {inviter_name}." if inviter_name else ".")
+        )
         (
             sb.table("list_invites")
             .update({"status": "revoked"})
@@ -1262,7 +1311,22 @@ async def revoke_invite(
             .execute()
         )
         if invite.get("invited_user_id"):
-            _delete_invite_notifications(sb, invite_id, invite["invited_user_id"])
+            _update_invite_notifications(
+                sb,
+                invite_id,
+                invite["invited_user_id"],
+                title="Invito revocato",
+                body=body,
+                data={
+                    "invite_id": invite_id,
+                    "invite_status": "revoked",
+                    "revoked_at": revoked_at,
+                    "list_id": list_id,
+                    "list_name": list_name,
+                    "invited_by": inviter_name,
+                    "url": "/lista",
+                },
+            )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

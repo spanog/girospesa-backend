@@ -478,28 +478,32 @@ def pending_list_invites_for_user(user_id: str) -> list[dict]:
     return [_normalize_db_row(dict(row)) for row in rows]
 
 
-def invite_for_user(invite_id: str, user_id: str) -> dict | None:
+def invite_for_user(
+    invite_id: str,
+    user_id: str,
+    *,
+    pending_only: bool = True,
+) -> dict | None:
     if not has_direct_postgres():
         sb = get_supabase()
-        rows = (
+        query = (
             sb.table("list_invites")
             .select("*")
             .eq("id", invite_id)
             .eq("invited_user_id", user_id)
-            .eq("status", "pending")
-            .limit(1)
-            .execute()
-            .data
         )
+        if pending_only:
+            query = query.eq("status", "pending")
+        rows = query.limit(1).execute().data
         return rows[0] if rows else None
     with get_postgres_cursor() as cursor:
         cursor.execute(
-            """
+            f"""
             SELECT *
             FROM public.list_invites
             WHERE id = %s
               AND invited_user_id = %s
-              AND status = 'pending'
+              {"AND status = 'pending'" if pending_only else ""}
             LIMIT 1
             """,
             (invite_id, user_id),
@@ -721,12 +725,25 @@ def mark_invite_notifications_read(invite_id: str, user_id: str) -> None:
         )
 
 
-def delete_invite_notifications(invite_id: str, user_id: str) -> None:
+def update_invite_notifications(
+    invite_id: str,
+    user_id: str,
+    *,
+    title: str,
+    body: str,
+    data: dict,
+) -> None:
     if not has_direct_postgres():
         sb = get_supabase()
         (
             sb.table("app_notifications")
-            .delete()
+            .update(
+                {
+                    "title": title,
+                    "body": body,
+                    "data": data,
+                }
+            )
             .eq("user_id", user_id)
             .eq("kind", "list_invite")
             .contains("data", {"invite_id": invite_id})
@@ -736,12 +753,15 @@ def delete_invite_notifications(invite_id: str, user_id: str) -> None:
     with get_postgres_cursor() as cursor:
         cursor.execute(
             """
-            DELETE FROM public.app_notifications
+            UPDATE public.app_notifications
+            SET title = %s,
+                body = %s,
+                data = %s::jsonb
             WHERE user_id = %s
               AND kind = 'list_invite'
               AND data->>'invite_id' = %s
             """,
-            (user_id, invite_id),
+            (title, body, psycopg2.extras.Json(data), user_id, invite_id),
         )
 
 
