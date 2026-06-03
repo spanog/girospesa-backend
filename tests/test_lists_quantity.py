@@ -709,6 +709,11 @@ async def test_member_can_leave_shared_list_and_notify_owner():
              "_profile_row",
              return_value={"display_name": "Mario"},
          ) as profile_mock, \
+         patch.object(
+             _lists_module,
+             "_auth_user_by_id",
+             return_value={"id": "member-1", "email": "mario@example.com"},
+         ) as auth_user_mock, \
          patch.object(_lists_module, "_notify_shared_list_event") as notify_shared_list_event_mock, \
          patch.object(_lists_module, "_verify_owner") as verify_owner_mock:
         resp = await _delete_req(
@@ -721,16 +726,18 @@ async def test_member_can_leave_shared_list_and_notify_owner():
     fallback_mock.assert_called_once_with(sb_mock, {"member-1"}, "list-1")
     verify_owner_mock.assert_not_called()
     profile_mock.assert_called_once_with(sb_mock, "member-1")
+    auth_user_mock.assert_called_once_with("member-1")
     notify_shared_list_event_mock.assert_called_once_with(
         sb_mock,
         "owner-1",
         kind="list_member_left",
         title="Membro uscito dalla lista",
-        body="Mario ha lasciato la lista Weekend",
+        body="Mario (mario@example.com) ha lasciato la lista Weekend",
         data={
             "list_id": "list-1",
             "list_name": "Weekend",
             "left_by": "Mario",
+            "left_by_email": "mario@example.com",
             "url": "/lista",
         },
     )

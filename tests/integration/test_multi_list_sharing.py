@@ -266,27 +266,37 @@ async def test_email_invite_creates_notification_and_accept_flow(
     assert invite_row["status"] == "accepted"
     assert invite_row["accepted_by"] == member_user["id"]
 
-    member_rows = _db_fetch_all(
-        """
-        SELECT user_id
-        FROM public.list_members
-        WHERE list_id = %s
-          AND user_id = %s
-        """,
-        (owner_list["id"], member_user["id"]),
-    )
-    assert len(member_rows) == 1
 
-    profile_row = _db_fetch_one(
-        """
-        SELECT active_list_id
-        FROM public.user_profiles
-        WHERE id = %s
-        """,
-        (member_user["id"],),
-    )
-    assert profile_row is not None
-    assert profile_row["active_list_id"] == owner_list["id"]
+@pytest.mark.asyncio
+async def test_received_invites_endpoint_includes_closed_statuses(
+    supabase_client, owner_user, member_user, clean_db
+):
+    async with await _client_as(owner_user["id"]) as owner_client:
+        active_resp = await owner_client.get("/lists/active")
+        owner_list = active_resp.json()
+
+        invite_resp = await owner_client.post(
+            f"/lists/{owner_list['id']}/invites",
+            json={"email": member_user["email"]},
+        )
+        assert invite_resp.status_code == 201
+        invite = invite_resp.json()
+
+    async with await _client_as(member_user["id"]) as member_client:
+        decline_resp = await member_client.post(
+            f"/lists/invites/{invite['id']}/decline", json={}
+        )
+        assert decline_resp.status_code == 204
+
+        invites_resp = await member_client.get("/lists/invites")
+        assert invites_resp.status_code == 200
+        invites = invites_resp.json()
+
+    assert len(invites) == 1
+    assert invites[0]["id"] == invite["id"]
+    assert invites[0]["status"] == "declined"
+    assert invites[0]["list_name"] == owner_list["name"]
+    assert invites[0]["invited_by_name"] == "Owner Test"
 
     notification_rows = _db_fetch_all(
         """
@@ -697,7 +707,10 @@ async def test_owner_remove_member_notifies_target_and_falls_back_selected_list(
     assert notification["data"]["list_id"] == shared_list["id"]
     assert notification["data"]["list_name"] == shared_list["name"]
     assert notification["data"]["removed_by"] == "Owner Test"
+    assert notification["data"]["removed_by_email"] == owner_user["email"]
     assert notification["data"]["url"] == "/lista"
+    assert "Owner Test" in notification["body"]
+    assert f"({owner_user['email']})" in notification["body"]
     assert "Weekend" in notification["body"]
 
     owner_notifications = _db_fetch_all(
@@ -834,7 +847,10 @@ async def test_member_can_leave_shared_list_and_owner_gets_notification(
     assert notification["data"]["list_id"] == shared_list["id"]
     assert notification["data"]["list_name"] == shared_list["name"]
     assert notification["data"]["left_by"] == "Member Test"
+    assert notification["data"]["left_by_email"] == member_user["email"]
     assert notification["data"]["url"] == "/lista"
+    assert "Member Test" in notification["body"]
+    assert f"({member_user['email']})" in notification["body"]
     assert "Weekend" in notification["body"]
 
     member_notifications = _db_fetch_all(

@@ -617,6 +617,7 @@ def _list_member_removed_payload(list_name: str, removed_by: str | None, list_id
         "list_id": list_id,
         "list_name": list_name,
         "removed_by": removed_by,
+        "removed_by_email": None,
         "url": "/lista",
     }
 
@@ -626,6 +627,7 @@ def _list_member_left_payload(list_name: str, left_by: str | None, list_id: str)
         "list_id": list_id,
         "list_name": list_name,
         "left_by": left_by,
+        "left_by_email": None,
         "url": "/lista",
     }
 
@@ -691,6 +693,10 @@ def _pending_list_invites_for_user(user_id: str) -> list[dict]:
     return repo.pending_list_invites_for_user(user_id)
 
 
+def _list_invites_for_user(user_id: str) -> list[dict]:
+    return repo.list_invites_for_user(user_id)
+
+
 def _invite_for_user(
     invite_id: str,
     user_id: str,
@@ -726,6 +732,22 @@ def _insert_list_invite(list_id: str, invited_by: str, invited_user_id: str, ema
 
 def _auth_user_by_email(email: str) -> dict | None:
     return repo.auth_user_by_email(email)
+
+
+def _auth_user_by_id(user_id: str) -> dict | None:
+    return repo.auth_user_by_id(user_id)
+
+
+def _format_notification_actor(display_name: str | None, email: str | None) -> str:
+    name = display_name.strip() if isinstance(display_name, str) and display_name.strip() else None
+    mail = email.strip() if isinstance(email, str) and email.strip() else None
+    if name and mail and name != mail:
+        return f"{name} ({mail})"
+    if name:
+        return name
+    if mail:
+        return mail
+    return "Un utente"
 
 
 def _impacted_member_user_ids_for_list(list_id: str) -> list[str]:
@@ -898,6 +920,38 @@ async def list_pending_invites(
 ) -> list[dict]:
     sb = get_supabase()
     invites = _pending_list_invites_for_user(user_id)
+    if not invites:
+        return []
+    list_ids = sorted({invite["list_id"] for invite in invites})
+    inviter_ids = sorted({invite["invited_by"] for invite in invites})
+    lists = (
+        sb.table("shopping_lists")
+        .select("id, name")
+        .in_("id", list_ids)
+        .execute()
+        .data
+    )
+    profiles = (
+        sb.table("user_profiles")
+        .select("id, display_name")
+        .in_("id", inviter_ids)
+        .execute()
+        .data
+    )
+    list_names = {row["id"]: row["name"] for row in lists}
+    inviter_names = {row["id"]: row.get("display_name") for row in profiles}
+    for invite in invites:
+        invite["list_name"] = list_names.get(invite["list_id"])
+        invite["invited_by_name"] = inviter_names.get(invite["invited_by"])
+    return invites
+
+
+@router.get("/invites")
+async def list_received_invites(
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> list[dict]:
+    sb = get_supabase()
+    invites = _list_invites_for_user(user_id)
     if not invites:
         return []
     list_ids = sorted({invite["list_id"] for invite in invites})
@@ -1501,10 +1555,16 @@ async def remove_member(
         owner_id = list_row.get("user_id")
         if owner_id and owner_id != user_id:
             member_profile = _profile_row(sb, user_id)
-            member_name = member_profile.get("display_name") or "Un utente"
+            member_auth = _auth_user_by_id(user_id) or {}
+            member_name = member_profile.get("display_name")
+            member_email = member_auth.get("email")
+            member_label = _format_notification_actor(member_name, member_email)
             title = "Membro uscito dalla lista"
-            body = f"{member_name} ha lasciato la lista {list_row['name']}"
-            payload = _list_member_left_payload(list_row["name"], member_name, list_id)
+            body = f"{member_label} ha lasciato la lista {list_row['name']}"
+            payload = {
+                **_list_member_left_payload(list_row["name"], member_name, list_id),
+                "left_by_email": member_email,
+            }
             _notify_shared_list_event(
                 sb,
                 owner_id,
@@ -1516,10 +1576,16 @@ async def remove_member(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     owner_profile = _profile_row(sb, user_id)
-    owner_name = owner_profile.get("display_name") or "Un utente"
+    owner_auth = _auth_user_by_id(user_id) or {}
+    owner_name = owner_profile.get("display_name")
+    owner_email = owner_auth.get("email")
+    owner_label = _format_notification_actor(owner_name, owner_email)
     title = "Rimosso dalla lista"
-    body = f"{owner_name} ti ha rimosso dalla lista {list_row['name']}"
-    payload = _list_member_removed_payload(list_row["name"], owner_name, list_id)
+    body = f"{owner_label} ti ha rimosso dalla lista {list_row['name']}"
+    payload = {
+        **_list_member_removed_payload(list_row["name"], owner_name, list_id),
+        "removed_by_email": owner_email,
+    }
     _notify_shared_list_event(
         sb,
         member_user_id,

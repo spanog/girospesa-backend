@@ -478,6 +478,31 @@ def pending_list_invites_for_user(user_id: str) -> list[dict]:
     return [_normalize_db_row(dict(row)) for row in rows]
 
 
+def list_invites_for_user(user_id: str) -> list[dict]:
+    if not has_direct_postgres():
+        sb = get_supabase()
+        return (
+            sb.table("list_invites")
+            .select("*")
+            .eq("invited_user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+            .data
+        )
+    with get_postgres_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT *
+            FROM public.list_invites
+            WHERE invited_user_id = %s
+            ORDER BY created_at DESC
+            """,
+            (user_id,),
+        )
+        rows = cursor.fetchall()
+    return [_normalize_db_row(dict(row)) for row in rows]
+
+
 def invite_for_user(
     invite_id: str,
     user_id: str,
@@ -780,6 +805,29 @@ def auth_user_by_email(email: str) -> dict | None:
             LIMIT 1
             """,
             (email,),
+        )
+        row = cursor.fetchone()
+    return _normalize_db_row(dict(row)) if row else None
+
+
+def auth_user_by_id(user_id: str) -> dict | None:
+    if not has_direct_postgres():
+        try:
+            user = get_supabase().auth.admin.get_user_by_id(user_id).user
+        except Exception:
+            return None
+        if user is None:
+            return None
+        return {"id": getattr(user, "id", user_id), "email": getattr(user, "email", None)}
+    with get_postgres_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id, email
+            FROM auth.users
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (user_id,),
         )
         row = cursor.fetchone()
     return _normalize_db_row(dict(row)) if row else None
