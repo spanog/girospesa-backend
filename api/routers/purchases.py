@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from core.auth import get_current_user_id
 from core.database import get_supabase
 from api.routers.lists import _rpc_update_list_item
+from services.list_sync import publish_list_sync_event
 from services.extraction.normalizer import format_unit_price_label
 
 router = APIRouter()
@@ -273,6 +274,7 @@ async def purchase_item(
         _purchase_patch(purchased=True, user_id=user_id, at=now),
         user_id,
     )
+    publish_list_sync_event(body.list_id, "list_updated", "item_purchased")
 
     return _to_purchase_record(record)
 
@@ -309,6 +311,7 @@ async def undo_purchase(
         _purchase_patch(purchased=False, user_id=None, at=None),
         user_id,
     )
+    publish_list_sync_event(list_id, "list_updated", "item_purchase_undone")
 
     sb.table("purchase_history").delete().eq("list_item_id", item_id).eq("user_id", user_id).execute()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

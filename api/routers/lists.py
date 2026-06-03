@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Annotated, Literal
@@ -7,7 +8,8 @@ from uuid import UUID
 import json
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 from jose import jwt
 from pydantic import BaseModel
 
@@ -23,6 +25,13 @@ from services.push_notify import (
     PushSubscription,
     notifications_enabled_for_user,
     send_push_notification,
+)
+from services.list_sync import (
+    LIST_SYNC_HEARTBEAT_SECONDS,
+    connect_listener,
+    now_utc_iso,
+    publish_list_sync_event,
+    wait_for_list_sync_event,
 )
 
 router = APIRouter()
@@ -126,7 +135,7 @@ class UpdateListItemBody(BaseModel):
 
 
 def _now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return now_utc_iso()
 
 
 def _is_past_timestamp(value: str | datetime | None) -> bool:
@@ -738,6 +747,28 @@ def _auth_user_by_id(user_id: str) -> dict | None:
     return repo.auth_user_by_id(user_id)
 
 
+def _publish_list_sync_event(
+    list_id: str,
+    event: Literal["list_updated", "members_updated", "invites_updated"],
+    reason: str,
+) -> None:
+    publish_list_sync_event(list_id, event, reason)
+
+
+def _format_sse_message(
+    event: str,
+    payload: dict,
+    *,
+    event_id: str | None = None,
+) -> str:
+    lines: list[str] = []
+    if event_id:
+        lines.append(f"id: {event_id}")
+    lines.append(f"event: {event}")
+    lines.append(f"data: {json.dumps(payload)}")
+    return "\n".join(lines) + "\n\n"
+
+
 def _format_notification_actor(display_name: str | None, email: str | None) -> str:
     name = display_name.strip() if isinstance(display_name, str) and display_name.strip() else None
     mail = email.strip() if isinstance(email, str) and email.strip() else None
@@ -998,6 +1029,8 @@ async def accept_pending_invite(
     _set_active_list_id(user_id, invite["list_id"])
     _set_invite_status(invite_id, status="accepted", accepted_by=user_id)
     _mark_invite_notifications_read(sb, invite_id, user_id)
+    _publish_list_sync_event(invite["list_id"], "members_updated", "member_joined")
+    _publish_list_sync_event(invite["list_id"], "invites_updated", "invite_accepted")
     return {"list_id": invite["list_id"]}
 
 
@@ -1018,6 +1051,7 @@ async def decline_pending_invite(
         raise HTTPException(status_code=410, detail="Invite has expired")
     _set_invite_status(invite_id, status="declined")
     _mark_invite_notifications_read(sb, invite_id, user_id)
+    _publish_list_sync_event(invite["list_id"], "invites_updated", "invite_declined")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -1028,6 +1062,72 @@ async def get_list(
 ) -> dict:
     sb = get_supabase()
     return _list_detail(sb, list_id, user_id)
+
+
+@router.get("/{list_id}/events")
+async def stream_list_events(
+    list_id: str,
+    request: Request,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+) -> StreamingResponse:
+    if not has_direct_postgres():
+        raise HTTPException(
+            status_code=503,
+            detail="List realtime sync requires direct Postgres access",
+        )
+    sb = get_supabase()
+    _verify_member(sb, list_id, user_id)
+
+    async def event_stream():
+        connection = connect_listener()
+        try:
+            yield _format_sse_message(
+                "keepalive",
+                {"list_id": list_id, "changed_at": _now_utc(), "reason": "connected"},
+                event_id=str(time.time_ns()),
+            )
+            while True:
+                if await request.is_disconnected():
+                    break
+                next_event = await asyncio.to_thread(
+                    wait_for_list_sync_event,
+                    connection,
+                    timeout_seconds=LIST_SYNC_HEARTBEAT_SECONDS,
+                )
+                if next_event is None:
+                    yield _format_sse_message(
+                        "keepalive",
+                        {
+                            "list_id": list_id,
+                            "changed_at": _now_utc(),
+                            "reason": "heartbeat",
+                        },
+                        event_id=str(time.time_ns()),
+                    )
+                    continue
+                if next_event["list_id"] != list_id:
+                    continue
+                yield _format_sse_message(
+                    next_event["event"],
+                    {
+                        "list_id": next_event["list_id"],
+                        "changed_at": next_event["changed_at"],
+                        "reason": next_event["reason"],
+                    },
+                    event_id=next_event["id"],
+                )
+        finally:
+            connection.close()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.patch("/{list_id}")
@@ -1044,6 +1144,7 @@ async def rename_list(
     if not name:
         raise HTTPException(status_code=422, detail="List name is required")
     _rename_shopping_list(list_id, name)
+    _publish_list_sync_event(list_id, "list_updated", "list_renamed")
     return _list_detail(sb, list_id, user_id)
 
 
@@ -1063,6 +1164,9 @@ async def delete_list(
     impacted_users = repo.impacted_user_ids_for_list(list_id)
     _delete_shopping_list(list_id)
     _fallback_selected_list_for_users(sb, impacted_users, list_id)
+    _publish_list_sync_event(list_id, "list_updated", "list_deleted")
+    _publish_list_sync_event(list_id, "members_updated", "list_deleted")
+    _publish_list_sync_event(list_id, "invites_updated", "list_deleted")
     title = "Lista rimossa"
     body = f"{owner_name} ha rimosso la lista {list_row['name']}"
     payload = _list_deleted_payload(list_row["name"], owner_name, list_id)
@@ -1086,6 +1190,7 @@ async def reset_list(
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
     sb.table("shopping_lists").update({"items": []}).eq("id", list_id).execute()
+    _publish_list_sync_event(list_id, "list_updated", "list_reset")
     row = (
         sb.table("shopping_lists")
         .select("*")
@@ -1134,6 +1239,7 @@ async def add_item(
             pass
     new_item = _enrich_items_with_categories(sb, [new_item])[0]
     await _rpc_append_list_item(list_id, new_item, user_id)
+    _publish_list_sync_event(list_id, "list_updated", "item_added")
     return new_item
 
 
@@ -1154,6 +1260,7 @@ async def remove_purchased_items(
     items = current.data["items"] or []
     remaining_items = [item for item in items if not item.get("purchased")]
     sb.table("shopping_lists").update({"items": remaining_items}).eq("id", list_id).execute()
+    _publish_list_sync_event(list_id, "list_updated", "purchased_items_removed")
     row = (
         sb.table("shopping_lists")
         .select("*")
@@ -1181,6 +1288,7 @@ async def remove_item(
     if target and target.get("purchased_by"):
         sb.table("purchase_history").delete().eq("list_item_id", item_id).eq("user_id", target["purchased_by"]).execute()
     await _rpc_remove_list_item(list_id, item_id, user_id)
+    _publish_list_sync_event(list_id, "list_updated", "item_removed")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -1202,6 +1310,7 @@ async def toggle_item(
         "checked_at": _now_utc() if new_checked else None,
     }
     await _rpc_update_list_item(list_id, item_id, patch, user_id)
+    _publish_list_sync_event(list_id, "list_updated", "item_toggled")
     toggled = {**toggled, **patch}
     if toggled is None:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -1226,6 +1335,7 @@ async def set_item_checked(
         "checked_at": _now_utc() if checked else None,
     }
     await _rpc_update_list_item(list_id, item_id, patch, user_id)
+    _publish_list_sync_event(list_id, "list_updated", "item_checked")
     return {**item, **patch}
 
 
@@ -1247,6 +1357,7 @@ async def patch_item(
         patch.update(_selected_offer_patch(sb, body.pinned_offer_id))
     _patch_item_in_items(items, item_id, patch)
     await _rpc_update_list_item(list_id, item_id, patch, user_id)
+    _publish_list_sync_event(list_id, "list_updated", "item_patched")
     refreshed = (
         sb.table("shopping_lists")
         .select("items")
@@ -1294,6 +1405,7 @@ async def invite_member_by_email(
         body=body_text,
         data=payload,
     )
+    _publish_list_sync_event(list_id, "invites_updated", "invite_created")
     invite["notification"] = notification
     return invite
 
@@ -1382,6 +1494,7 @@ async def revoke_invite(
                     "url": "/lista",
                 },
             )
+        _publish_list_sync_event(list_id, "invites_updated", "invite_revoked")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -1399,6 +1512,7 @@ async def create_invite(
         .insert({"list_id": list_id, "invited_by": user_id, "email": body.email})
         .execute()
     )
+    _publish_list_sync_event(list_id, "invites_updated", "invite_created")
     return invite.data[0]
 
 
@@ -1523,6 +1637,8 @@ async def clear_stale_offers(
         ).execute()
         cleared_names.append(entry["list_item_name"])
 
+    if stale:
+        _publish_list_sync_event(list_id, "list_updated", "stale_offers_cleared")
     return {"cleared": len(stale), "cleared_names": cleared_names}
 
 
@@ -1573,6 +1689,7 @@ async def remove_member(
                 body=body,
                 data=payload,
             )
+        _publish_list_sync_event(list_id, "members_updated", "member_left")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     owner_profile = _profile_row(sb, user_id)
@@ -1594,4 +1711,5 @@ async def remove_member(
         body=body,
         data=payload,
     )
+    _publish_list_sync_event(list_id, "members_updated", "member_removed")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

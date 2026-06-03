@@ -114,10 +114,12 @@ Il backend usa tre livelli di autenticazione:
 ### Lista spesa (`/lists`)
 
 Le liste non-default possono essere eliminate solo dal proprietario. Se lista condivisa viene rimossa, backend riallinea gli `active_list_id` dei membri alla loro `Lista principale`, crea una `app_notification` persistente per ogni membro attivo e prova anche l'invio Web Push se esiste una subscription. Anche la rimozione di un singolo membro da una lista condivisa riallinea l'`active_list_id` del target alla sua `Lista principale` e genera notifica persistente + Web Push solo per l'utente rimosso. Lo stesso endpoint supporta anche il self-leave: un `member` può uscire dalla lista condivisa rimuovendo solo la propria membership; in quel caso il fallback della lista attiva avviene sul membro uscente e la notifica inbox/Web Push viene inviata solo al proprietario della lista. Le notifiche `list_member_removed` e `list_member_left` mostrano l'identità dell'attore come `Nome Cognome (email)` quando l'email è disponibile, e mantengono anche i campi strutturati nel payload per eventuale rendering dedicato. Condivisione e gestione inviti restano owner-only: solo il proprietario può creare inviti email o token, elencare inviti pendenti e revocarli; un membro condiviso può solo leggere i membri della lista e lasciare la propria membership. Ogni read/write lista resta limitato a proprietario o membri condivisi; un invito pending non concede accesso finché non viene accettato. Quando utente accetta invito diretto email, backend imposta subito quella lista come `active_list_id`, cosi `/lists/active` e redirect frontend verso `/lista?list=...` restano allineati. Nei deploy con accesso Postgres diretto, la creazione lista owned gestisce anche il breve lag tra `auth.admin.create_user` e visibilità della riga in `auth.users`, ritentando l'insert dopo attesa breve invece di fallire con FK race.
+Per sync quasi immediato tra membri, il backend espone anche `GET /lists/{list_id}/events` come stream `text/event-stream`: ogni mutazione lista/membership/invite pubblica un `pg_notify` su canale Postgres dedicato, lo stream inoltra solo eventi della lista sottoscritta e il frontend invalida le query locali senza refresh manuale.
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
 | `GET` | `/lists/active` | ✅ | Lista attiva; auto-crea `Lista principale` se non esiste; arricchisce gli item con `brand`, `category` e `subcategory`, facendo backfill del brand da prodotto/offerta quando lo snapshot storico non lo contiene |
+| `GET` | `/lists/{id}/events` | ✅ member | Stream SSE autenticato via cookie session; inoltra eventi `list_updated`, `members_updated`, `invites_updated` per sync live della lista condivisa |
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
 | `POST` | `/lists/{id}/items/remove-purchased` | ✅ member | Rimuove in blocco dalla lista solo gli item acquistati e restituisce la lista aggiornata, senza cancellare `purchase_history` |
 | `POST` | `/lists/{id}/items` | ✅ member | Aggiunge item (manuale o da offerta) e salva snapshot `brand`/`category`/`subcategory` quando collegato a prodotto/offerta; persistenza via RPC concorrente-safe `append_list_item` (`SECURITY INVOKER`, `search_path` fissato a `public`) |
@@ -391,7 +393,7 @@ Frontend
     Backend: segna invite → accepted
                     │
   Ora entrambi vedono la lista in tempo reale
-  (Supabase Realtime su shopping_lists.items, list_members)
+  (SSE backend su /lists/{id}/events, alimentato da Postgres NOTIFY)
 ```
 
 ### 5. Freshness delle offerte in lista

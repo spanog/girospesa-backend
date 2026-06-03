@@ -162,7 +162,8 @@ async def test_purchase_item_scales_totals_by_quantity():
     rpc_mock = AsyncMock(return_value=None)
     with patch.object(_purchases_module, "get_supabase", return_value=sb), \
          patch.object(_purchases_module, "_verify_member", return_value=None), \
-         patch.object(_purchases_module, "_rpc_update_list_item", new=rpc_mock):
+         patch.object(_purchases_module, "_rpc_update_list_item", new=rpc_mock), \
+         patch.object(_purchases_module, "publish_list_sync_event") as publish_mock:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://test"
         ) as client:
@@ -186,6 +187,7 @@ async def test_purchase_item_scales_totals_by_quantity():
     assert resp.json()["brand"] == "Granarolo"
     assert resp.json()["format_label"] == "1 L"
     rpc_mock.assert_awaited_once()
+    publish_mock.assert_called_once_with("list-1", "list_updated", "item_purchased")
     assert rpc_mock.await_args.args == (
         "list-1",
         "item-1",
@@ -283,7 +285,8 @@ async def test_purchase_item_falls_back_when_pinned_offer_missing():
     rpc_mock = AsyncMock(return_value=None)
     with patch.object(_purchases_module, "get_supabase", return_value=sb), \
          patch.object(_purchases_module, "_verify_member", return_value=None), \
-         patch.object(_purchases_module, "_rpc_update_list_item", new=rpc_mock):
+         patch.object(_purchases_module, "_rpc_update_list_item", new=rpc_mock), \
+         patch.object(_purchases_module, "publish_list_sync_event") as publish_mock:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://test"
         ) as client:
@@ -298,6 +301,7 @@ async def test_purchase_item_falls_back_when_pinned_offer_missing():
     assert insert_payload["supermarket_name"] == "Esselunga"
     assert insert_payload["price_paid"] == 1.2
     rpc_mock.assert_awaited_once()
+    publish_mock.assert_called_once_with("list-1", "list_updated", "item_purchased")
 
 
 @pytest.mark.asyncio
@@ -334,7 +338,8 @@ async def test_undo_purchase_uses_item_patch_rpc():
     rpc_mock = AsyncMock(return_value=None)
     with patch.object(_purchases_module, "get_supabase", return_value=sb), \
          patch.object(_purchases_module, "_verify_member", return_value=None), \
-         patch.object(_purchases_module, "_rpc_update_list_item", new=rpc_mock):
+         patch.object(_purchases_module, "_rpc_update_list_item", new=rpc_mock), \
+         patch.object(_purchases_module, "publish_list_sync_event") as publish_mock:
         async with httpx.AsyncClient(
             transport=transport, base_url="http://test"
         ) as client:
@@ -353,6 +358,11 @@ async def test_undo_purchase_uses_item_patch_rpc():
             "purchased_at": None,
         },
         "user-1",
+    )
+    publish_mock.assert_called_once_with(
+        "list-1",
+        "list_updated",
+        "item_purchase_undone",
     )
     purchase_history_table.delete.assert_called_once()
     shopping_lists_table.update.assert_not_called()
