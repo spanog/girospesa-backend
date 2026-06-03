@@ -586,7 +586,17 @@ async def test_remove_purchased_items_clears_only_purchased_items_and_returns_up
         )
 
     assert resp.status_code == 200
-    assert resp.json()["items"] == updated_list["items"]
+    assert resp.json()["items"] == [
+        {
+            "id": "item-2",
+            "name": "Pane",
+            "quantity": 1,
+            "purchased": False,
+            "brand": None,
+            "category": None,
+            "subcategory": None,
+        }
+    ]
     sb_mock.table.return_value.update.assert_called_with(
         {"items": updated_list["items"]}
     )

@@ -136,6 +136,18 @@ class TestPatchItemSelectedOfferIntegration:
         assert body["found_deals"][0]["offer_id"] == seeded_offer_context["offer"]["id"]
         assert body["found_deals"][0]["product_id"] == seeded_offer_context["product"]["id"]
         assert body["found_deals"][0]["supermarket_name"] == seeded_offer_context["store"]["name"]
+        saved_items = (
+            supabase_client.table("shopping_lists")
+            .select("items")
+            .eq("id", shopping_list["id"])
+            .single()
+            .execute()
+            .data["items"]
+        )
+        saved_item = next(saved for saved in saved_items if saved["id"] == item["id"])
+        assert saved_item["pinned_offer_id"] == seeded_offer_context["offer"]["id"]
+        assert saved_item["pinned_product_id"] == seeded_offer_context["product"]["id"]
+        assert saved_item["found_deals"][0]["offer_id"] == seeded_offer_context["offer"]["id"]
 
     async def test_missing_offer_returns_404_without_modifying_item(
         self, supabase_client, auth_user

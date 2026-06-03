@@ -38,6 +38,11 @@ from services.purchased_items_cleanup import PurchasedItemsCleanupService
 logger = logging.getLogger(__name__)
 
 
+def _frontend_origin() -> str:
+    value = getattr(settings, "frontend_url", "http://localhost:3000")
+    return value if isinstance(value, str) and value else "http://localhost:3000"
+
+
 def _dev_extra_origins(frontend_port: int = 3000) -> list[str]:
     extras = [f"http://127.0.0.1:{frontend_port}"]
     try:
@@ -66,18 +71,19 @@ def _with_hostname(origin: str, hostname: str) -> str:
 
 
 def _dev_allow_origins() -> list[str]:
-    origins = ["http://localhost:3000", "http://127.0.0.1:3000", settings.frontend_url]
-    parsed = urlsplit(settings.frontend_url)
+    frontend_origin = _frontend_origin()
+    origins = ["http://localhost:3000", "http://127.0.0.1:3000", frontend_origin]
+    parsed = urlsplit(frontend_origin)
     if parsed.hostname:
         for host in _loopback_host_variants(parsed.hostname):
-            origins.append(_with_hostname(settings.frontend_url, host))
+            origins.append(_with_hostname(frontend_origin, host))
     origins.extend(_dev_extra_origins())
     return list(dict.fromkeys(origins))
 
 
 def _allow_origins() -> list[str]:
     if settings.environment == "production":
-        return [settings.frontend_url]
+        return [_frontend_origin()]
     return _dev_allow_origins()
 
 

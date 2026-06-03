@@ -12,7 +12,6 @@ from supabase import create_client
 from core.auth import get_current_user_id
 from core.config import settings
 from core.database import get_supabase
-from core.session import clear_session_cookie
 from services.geocoding import geocode_address
 
 router = APIRouter()
@@ -229,7 +228,9 @@ async def delete_account(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> Response:
     """Permanently delete the authenticated user's account and all their data."""
+    from core.session import clear_session_cookie as clear_cookie
+
     _delete_auth_user(user_id)
-    clear_session_cookie(response)
+    clear_cookie(response)
     response.status_code = 204
     return response

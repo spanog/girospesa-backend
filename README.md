@@ -118,7 +118,7 @@ Per sync quasi immediato tra membri, il backend espone anche `GET /lists/{list_i
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `GET` | `/lists/active` | ✅ | Lista attiva; auto-crea `Lista principale` se non esiste; arricchisce gli item con `brand`, `category` e `subcategory`, facendo backfill del brand da prodotto/offerta quando lo snapshot storico non lo contiene |
+| `GET` | `/lists/active` | ✅ | Lista attiva; auto-crea `Lista principale` se non esiste; arricchisce gli item con `brand`, `category` e `subcategory`, facendo backfill del brand da prodotto/offerta quando lo snapshot storico non lo contiene. Per liste condivise, il pin offerta resta canonico nel DB ma la risposta maschera prezzo/supermercato quando il viewer non vede quel supermercato nel proprio raggio attivo |
 | `GET` | `/lists/{id}/events` | ✅ member | Stream SSE autenticato via cookie session; inoltra eventi `list_updated`, `members_updated`, `invites_updated` per sync live della lista condivisa |
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
 | `POST` | `/lists/{id}/items/remove-purchased` | ✅ member | Rimuove in blocco dalla lista solo gli item acquistati e restituisce la lista aggiornata, senza cancellare `purchase_history` |
@@ -129,7 +129,7 @@ Per sync quasi immediato tra membri, il backend espone anche `GET /lists/{list_i
 | `POST` | `/lists/{id}/invite` | ✅ owner | Crea link invito (token 64 char, TTL 7 giorni) |
 | `GET` | `/lists/{id}/members` | ✅ member | Lista membri lista condivisa con campi flatten `display_name`, `avatar_url` ed `email` pronti per UI |
 | `DELETE` | `/lists/{id}/members/{user_id}` | ✅ owner/member(self) | Owner rimuove un altro membro oppure un member lascia la lista da solo; riallinea `active_list_id` del target alla `Lista principale` e notifica solo parte interessata (utente rimosso oppure proprietario) |
-| `GET` | `/lists/{id}/deal-freshness` | ✅ member | Freshness di tutte le offerte pinnate nella lista |
+| `GET` | `/lists/{id}/deal-freshness` | ✅ member | Freshness di tutte le offerte pinnate nella lista; le offerte fuori raggio per il viewer corrente risultano `unavailable` con flag risposta `offer_visibility_status='hidden_for_viewer'`, senza esporre prezzo attuale |
 
 ### Prodotti e offerte (`/products`)
 
@@ -200,7 +200,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `POST` | `/optimize` | ✅ member | Ottimizza lista spesa → gruppi per supermercato con risparmio e alternative; accesso consentito solo ai membri della lista indicata |
+| `POST` | `/optimize` | ✅ member | Ottimizza lista spesa → gruppi per supermercato con risparmio e alternative; accesso consentito solo ai membri della lista indicata. Il matching usa solo i supermercati visibili al viewer corrente secondo `search_*`/`home_*` + `max_distance_km`; un `pinned_offer_id` fuori raggio non viene restituito come default né incluso tra le alternative |
 
 ### Supermercati (`/supermarkets`)
 

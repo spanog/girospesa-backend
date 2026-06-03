@@ -83,8 +83,10 @@
 
 - `/optimize` must resolve `pinned_offer_id` before fuzzy matching. A list item added from an offer is an exact offer match (`match_score=1.0`) when the offer is active and in range. `PATCH /lists/{list_id}/items/{item_id}` must persist any explicit `pinned_offer_id`, `pinned_product_id`, `found_deals`, category, and subcategory updates through RPC `update_list_item`, then reread the saved list item so lista, giro spesa, acquisti, and freshness stay aligned. `update_list_item` is `SECURITY INVOKER`; auth safety comes from RLS and `auth.uid()` membership checks, not definer privileges.
 - Shopping-list snapshots for items linked to offers/products must preserve `brand` alongside `name`, `pinned_product_id`, `pinned_offer_id`, and taxonomy fields. Read paths such as `GET /lists/active` should also backfill missing `brand` from the linked product/offer so older snapshots still render branded rows correctly.
+- Shared-list read paths are viewer-specific. Keep stored `pinned_offer_id` and `found_deals` unchanged in `shopping_lists.items`, but when current member cannot see that supermarket inside their own `search_*`/`home_*` + `max_distance_km` context, `GET /lists/active` and `GET /lists/{id}` must mask the item as manual/no-offer and return `offer_visibility_status='hidden_for_viewer'`. Do not leak supermarket or price through masked list responses.
 - Active offer filtering must stay null-safe and match public visibility windows: `valid_from IS NULL OR valid_from <= today`, `valid_to IS NULL OR valid_to >= today`.
 - `/optimize` must verify caller membership on `body.list_id` before loading any list items or returning shopping intent data.
+- `/optimize` and `GET /lists/{id}/deal-freshness` must use the viewer’s visible supermarket subset, not the owner’s. A hidden pinned offer must surface as `unavailable` for freshness, must not trigger stale-offer cleanup, and must not appear in optimizer store groups or alternatives.
 
 ## Shopping Lists
 

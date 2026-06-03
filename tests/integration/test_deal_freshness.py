@@ -129,6 +129,26 @@ def _create_list(supabase_client, user_id: str, items: list[dict]) -> dict:
     return list_row
 
 
+def _set_profile_location(
+    supabase_client,
+    user_id: str,
+    *,
+    lat: float,
+    lng: float,
+    max_distance_km: int,
+) -> None:
+    (
+        supabase_client.table("user_profiles")
+        .update({
+            "home_lat": lat,
+            "home_lng": lng,
+            "max_distance_km": max_distance_km,
+        })
+        .eq("id", user_id)
+        .execute()
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -247,3 +267,39 @@ class TestDealFreshnessIntegration:
                 resp = await client.get(f"/lists/{shopping_list['id']}/deal-freshness")
 
         assert resp.status_code == 403
+
+    async def test_hidden_offer_for_viewer_returns_unavailable_without_price(
+        self, supabase_client, auth_user, product, supermarket
+    ):
+        _set_profile_location(
+            supabase_client,
+            auth_user,
+            lat=41.9028,
+            lng=12.4964,
+            max_distance_km=5,
+        )
+        (
+            supabase_client.table("supermarkets")
+            .update({"lat": 45.4642, "lng": 9.19})
+            .eq("id", supermarket["id"])
+            .execute()
+        )
+        offer = _insert_offer(supabase_client, product, supermarket, _FUTURE_DATE, price=1.29)
+        item = _make_item(
+            "Latte intero",
+            pinned_offer_id=offer["id"],
+            pinned_product_id=product["id"],
+            pinned_price=1.29,
+        )
+        shopping_list = _create_list(supabase_client, auth_user, [item])
+
+        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+            with patch("api.routers.lists.get_supabase", return_value=supabase_client):
+                resp = await client.get(f"/lists/{shopping_list['id']}/deal-freshness")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["staleness"] == "unavailable"
+        assert data[0]["current_price"] is None
+        assert data[0]["offer_visibility_status"] == "hidden_for_viewer"

@@ -72,6 +72,26 @@ def _create_member_list(supabase_client, auth_user: str, name: str, items: list[
     return row
 
 
+def _set_profile_location(
+    supabase_client,
+    user_id: str,
+    *,
+    lat: float,
+    lng: float,
+    max_distance_km: int,
+) -> None:
+    (
+        supabase_client.table("user_profiles")
+        .update({
+            "home_lat": lat,
+            "home_lng": lng,
+            "max_distance_km": max_distance_km,
+        })
+        .eq("id", user_id)
+        .execute()
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -377,3 +397,82 @@ class TestOptimizeIntegration:
         assert matched["offer_id"] is None
         assert matched["alternatives"][0]["product_id"] == seeded_product["id"]
         assert matched["alternatives"][0]["offer_id"] == seeded_offer["id"]
+
+    async def test_optimize_uses_only_viewer_visible_supermarkets(
+        self, supabase_client, auth_user, seeded_product
+    ):
+        _set_profile_location(
+            supabase_client,
+            auth_user,
+            lat=45.4642,
+            lng=9.19,
+            max_distance_km=10,
+        )
+        visible_store = (
+            supabase_client.table("supermarkets")
+            .insert({
+                "name": "Visible Market",
+                "slug": f"visible-market-{uuid.uuid4().hex[:6]}",
+                "lat": 45.465,
+                "lng": 9.191,
+            })
+            .execute()
+        ).data[0]
+        hidden_store = (
+            supabase_client.table("supermarkets")
+            .insert({
+                "name": "Hidden Market",
+                "slug": f"hidden-market-{uuid.uuid4().hex[:6]}",
+                "lat": 41.9028,
+                "lng": 12.4964,
+            })
+            .execute()
+        ).data[0]
+        visible_offer = (
+            supabase_client.table("offers")
+            .insert({
+                "product_id": seeded_product["id"],
+                "supermarket_id": visible_store["id"],
+                "supermarket_name": visible_store["name"],
+                "price_offer": 1.39,
+                "price_original": 1.69,
+                "valid_to": _FUTURE_DATE,
+                "is_confirmed": True,
+            })
+            .execute()
+        ).data[0]
+        hidden_offer = (
+            supabase_client.table("offers")
+            .insert({
+                "product_id": seeded_product["id"],
+                "supermarket_id": hidden_store["id"],
+                "supermarket_name": hidden_store["name"],
+                "price_offer": 1.19,
+                "price_original": 1.59,
+                "valid_to": _FUTURE_DATE,
+                "is_confirmed": True,
+            })
+            .execute()
+        ).data[0]
+        items = [
+            _make_list_item(
+                "Latte intero",
+                pinned_product_id=seeded_product["id"],
+                pinned_offer_id=hidden_offer["id"],
+            )
+        ]
+        row = _create_member_list(supabase_client, auth_user, "Visibility list", items)
+        sb = _supabase_with_real_db(supabase_client)
+
+        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+            with patch("api.routers.optimize.get_supabase", return_value=sb):
+                resp = await client.post("/optimize", json={"list_id": row["id"]})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["store_groups"][0]["supermarket_id"] == visible_store["id"]
+        matched = body["store_groups"][0]["products"][0]
+        assert matched["offer_id"] == visible_offer["id"]
+        assert {alt["supermarket_id"] for alt in matched["alternatives"]} == {
+            visible_store["id"]
+        }

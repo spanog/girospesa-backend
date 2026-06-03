@@ -19,6 +19,13 @@ from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
 from services.repositories import lists_repository as repo
 from services.extraction.normalizer import format_unit_price_label
 from services.deal_freshness import classify_deal_freshness
+from services.list_offer_visibility import (
+    HIDDEN_FOR_VIEWER,
+    hidden_offer_ids_for_viewer,
+    project_item_for_viewer,
+    project_items_for_viewer,
+    visible_supermarket_ids_for_user,
+)
 from services.offer_visibility import apply_current_offer_window
 from services.push_notify import (
     PushEndpointGoneError,
@@ -570,7 +577,8 @@ def _list_member_role(sb: object, list_id: str, user_id: str) -> str | None:
 def _list_detail(sb: object, list_id: str, user_id: str) -> dict:
     _verify_member(sb, list_id, user_id)
     row = _shopping_list_row(list_id)
-    row["items"] = _enrich_items_with_categories(sb, row.get("items") or [])
+    items = _enrich_items_with_categories(sb, row.get("items") or [])
+    row["items"] = _project_list_items_for_viewer(sb, items, user_id)
     row["is_default"] = _is_default_by_list_id(list_id)
     member_role = _list_member_role(sb, list_id, user_id)
     selected_list_id = _resolve_selected_list_id(sb, user_id)
@@ -578,6 +586,44 @@ def _list_detail(sb: object, list_id: str, user_id: str) -> dict:
     row["is_owner"] = member_role == "owner"
     row["is_selected"] = row["id"] == selected_list_id
     return row
+
+
+def _offer_rows_for_items(sb: object, items: list[dict]) -> list[dict]:
+    offer_ids = sorted({
+        item["pinned_offer_id"]
+        for item in items
+        if item.get("pinned_offer_id")
+    })
+    if not offer_ids:
+        return []
+    return (
+        sb.table("offers")  # type: ignore[union-attr,attr-defined]
+        .select("id, supermarket_id")
+        .in_("id", offer_ids)
+        .execute()
+        .data
+    )
+
+
+def _hidden_offer_ids_for_viewer(
+    sb: object,
+    items: list[dict],
+    user_id: str,
+) -> set[str]:
+    visible_supermarket_ids = visible_supermarket_ids_for_user(sb, user_id)
+    if visible_supermarket_ids is None:
+        return set()
+    offer_rows = _offer_rows_for_items(sb, items)
+    return hidden_offer_ids_for_viewer(items, offer_rows, visible_supermarket_ids)
+
+
+def _project_list_items_for_viewer(
+    sb: object,
+    items: list[dict],
+    user_id: str,
+) -> list[dict]:
+    hidden_offer_ids = _hidden_offer_ids_for_viewer(sb, items, user_id)
+    return project_items_for_viewer(items, hidden_offer_ids)
 
 
 def _member_counts(list_ids: list[str]) -> dict[str, int]:
@@ -1199,6 +1245,12 @@ async def reset_list(
         .execute()
         .data
     )
+    row = dict(row)
+    row["items"] = _project_list_items_for_viewer(
+        sb,
+        _enrich_items_with_categories(sb, row.get("items") or []),
+        user_id,
+    )
     return row
 
 
@@ -1240,7 +1292,10 @@ async def add_item(
     new_item = _enrich_items_with_categories(sb, [new_item])[0]
     await _rpc_append_list_item(list_id, new_item, user_id)
     _publish_list_sync_event(list_id, "list_updated", "item_added")
-    return new_item
+    return project_item_for_viewer(
+        new_item,
+        _hidden_offer_ids_for_viewer(sb, [new_item], user_id),
+    )
 
 
 @router.post("/{list_id}/items/remove-purchased")
@@ -1268,6 +1323,12 @@ async def remove_purchased_items(
         .single()
         .execute()
         .data
+    )
+    row = dict(row)
+    row["items"] = _project_list_items_for_viewer(
+        sb,
+        _enrich_items_with_categories(sb, row.get("items") or []),
+        user_id,
     )
     return row
 
@@ -1314,7 +1375,11 @@ async def toggle_item(
     toggled = {**toggled, **patch}
     if toggled is None:
         raise HTTPException(status_code=404, detail="Item not found")
-    return toggled
+    toggled = _enrich_items_with_categories(sb, [toggled])[0]
+    return project_item_for_viewer(
+        toggled,
+        _hidden_offer_ids_for_viewer(sb, [toggled], user_id),
+    )
 
 
 @router.post("/{list_id}/items/{item_id}/check")
@@ -1336,7 +1401,11 @@ async def set_item_checked(
     }
     await _rpc_update_list_item(list_id, item_id, patch, user_id)
     _publish_list_sync_event(list_id, "list_updated", "item_checked")
-    return {**item, **patch}
+    checked_item = _enrich_items_with_categories(sb, [{**item, **patch}])[0]
+    return project_item_for_viewer(
+        checked_item,
+        _hidden_offer_ids_for_viewer(sb, [checked_item], user_id),
+    )
 
 
 @router.patch("/{list_id}/items/{item_id}")
@@ -1366,7 +1435,13 @@ async def patch_item(
         .execute()
         .data["items"]
     )
-    return _find_item(refreshed, item_id)
+    refreshed_item = _enrich_items_with_categories(
+        sb, [_find_item(refreshed, item_id)]
+    )[0]
+    return project_item_for_viewer(
+        refreshed_item,
+        _hidden_offer_ids_for_viewer(sb, [refreshed_item], user_id),
+    )
 
 
 @router.post("/{list_id}/invites", status_code=status.HTTP_201_CREATED)
@@ -1566,11 +1641,12 @@ async def get_deal_freshness(
         sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
     )
     items: list[dict] = list_row.data.get("items") or []
+    hidden_offer_ids = _hidden_offer_ids_for_viewer(sb, items, user_id)
 
     offer_ids = [
         item["pinned_offer_id"]
         for item in items
-        if item.get("pinned_offer_id")
+        if item.get("pinned_offer_id") and item["pinned_offer_id"] not in hidden_offer_ids
     ]
 
     offers_by_id: dict[str, dict] = {}
@@ -1592,6 +1668,11 @@ async def get_deal_freshness(
             "snapshot_price": entry["pinned_price"],
             "pinned_offer_id": entry.get("pinned_offer_id"),
             "pinned_product_id": entry.get("pinned_product_id"),
+            "offer_visibility_status": (
+                HIDDEN_FOR_VIEWER
+                if entry.get("pinned_offer_id") in hidden_offer_ids
+                else None
+            ),
         }
         for entry in classify_deal_freshness(items, offers_by_id)
     ]
@@ -1610,8 +1691,13 @@ async def clear_stale_offers(
         sb.table("shopping_lists").select("items").eq("id", list_id).single().execute()
     )
     items: list[dict] = list_row.data.get("items") or []
+    hidden_offer_ids = _hidden_offer_ids_for_viewer(sb, items, user_id)
 
-    offer_ids = [item["pinned_offer_id"] for item in items if item.get("pinned_offer_id")]
+    offer_ids = [
+        item["pinned_offer_id"]
+        for item in items
+        if item.get("pinned_offer_id") and item["pinned_offer_id"] not in hidden_offer_ids
+    ]
     offers_by_id: dict[str, dict] = {}
     if offer_ids:
         rows = (
@@ -1623,7 +1709,12 @@ async def clear_stale_offers(
         offers_by_id = {row["id"]: row for row in rows}
 
     freshness = classify_deal_freshness(items, offers_by_id)
-    stale = [f for f in freshness if f["status"] in ("expired", "unavailable")]
+    stale = [
+        entry
+        for entry in freshness
+        if entry["status"] in ("expired", "unavailable")
+        and entry.get("pinned_offer_id") not in hidden_offer_ids
+    ]
 
     cleared_names: list[str] = []
     for entry in stale:

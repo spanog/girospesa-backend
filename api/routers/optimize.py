@@ -4,12 +4,15 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from core.auth import get_current_user_id
 from core.database import get_supabase
+from services.list_offer_visibility import visible_supermarket_ids_for_user
 from services.extraction.normalizer import format_unit_price_label
 from services.offer_visibility import apply_current_offer_window
+from services.repositories import lists_repository as lists_repo
 
 router = APIRouter()
 
@@ -52,7 +55,8 @@ def _similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, left_norm, right_norm).ratio()
 
 
-def _load_list(sb: Any, list_id: str) -> dict:
+def _load_list(sb: Any, list_id: str, user_id: str) -> dict:
+    lists_repo.verify_member(sb, list_id, user_id)
     response = (
         sb.table("shopping_lists")
         .select("id, items")
@@ -65,10 +69,18 @@ def _load_list(sb: Any, list_id: str) -> dict:
     return response.data
 
 
-def _load_active_offers(sb: Any) -> list[OfferCandidate]:
-    response = apply_current_offer_window(
+def _load_active_offers(
+    sb: Any,
+    visible_supermarket_ids: set[str] | None,
+) -> list[OfferCandidate]:
+    query = apply_current_offer_window(
         sb.table("offers").select(_OFFER_SELECT).eq("is_confirmed", True)
-    ).execute()
+    )
+    if visible_supermarket_ids is not None:
+        if not visible_supermarket_ids:
+            return []
+        query = query.in_("supermarket_id", sorted(visible_supermarket_ids))
+    response = query.execute()
     return [_to_offer_candidate(row) for row in response.data or []]
 
 
@@ -228,9 +240,12 @@ def _totals(store_groups: list[dict[str, Any]]) -> tuple[float, float]:
 
 
 @router.post("")
-async def optimize(body: OptimizeBody) -> dict[str, Any]:
+async def optimize(
+    body: OptimizeBody,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, Any]:
     sb = get_supabase()
-    shopping_list = _load_list(sb, body.list_id)
+    shopping_list = _load_list(sb, body.list_id, user_id)
     items = shopping_list.get("items") or []
     if not items:
         return {
@@ -241,7 +256,8 @@ async def optimize(body: OptimizeBody) -> dict[str, Any]:
             "coverage_percent": 100,
         }
 
-    offers = _load_active_offers(sb)
+    visible_supermarket_ids = visible_supermarket_ids_for_user(sb, user_id)
+    offers = _load_active_offers(sb, visible_supermarket_ids)
     by_offer_id, by_product_id = _group_offers(offers)
     grouped: dict[str, dict[str, Any]] = {}
 
