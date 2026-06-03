@@ -25,6 +25,35 @@ logger = logging.getLogger(__name__)
 _COOKIE_NAME = "girospesa_session"
 
 
+def _load_profile_with_manager_ids(sb, user_id: str) -> dict | None:
+    profile_resp = (
+        sb.table("user_profiles")
+        .select("*")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    profile = profile_resp.data if profile_resp else None
+    if not profile:
+        return None
+
+    manager_ids_resp = (
+        sb.table("manager_supermarkets")
+        .select("supermarket_id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    manager_ids = [
+        row["supermarket_id"]
+        for row in (manager_ids_resp.data or [])
+        if row.get("supermarket_id")
+    ]
+    if not manager_ids and profile.get("managed_supermarket_id"):
+        manager_ids = [profile["managed_supermarket_id"]]
+    profile["managed_supermarket_ids"] = manager_ids
+    return profile
+
+
 def login_with_password(email: str, password: str) -> dict:
     """Authenticate via Supabase and return user + profile dict."""
     sb = get_supabase()
@@ -37,14 +66,7 @@ def login_with_password(email: str, password: str) -> dict:
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    profile_resp = (
-        sb.table("user_profiles")
-        .select("*")
-        .eq("id", user.id)
-        .maybe_single()
-        .execute()
-    )
-    profile = profile_resp.data if profile_resp else None
+    profile = _load_profile_with_manager_ids(sb, user.id)
 
     return {
         "user": {"id": user.id, "email": user.email},
@@ -83,14 +105,7 @@ async def session(request: Request) -> dict:
 
     user_id: str = payload["sub"]
     sb = get_supabase()
-    profile_resp = (
-        sb.table("user_profiles")
-        .select("*")
-        .eq("id", user_id)
-        .maybe_single()
-        .execute()
-    )
-    profile = profile_resp.data if profile_resp else None
+    profile = _load_profile_with_manager_ids(sb, user_id)
 
     return {
         "authenticated": True,

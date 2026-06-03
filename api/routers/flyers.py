@@ -8,7 +8,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 
 from pydantic import BaseModel, Field
 
-from core.auth import assert_flyer_access, get_current_user_id, get_optional_user_id, require_admin_or_manager
+from core.auth import (
+    assert_flyer_access,
+    get_current_user_id,
+    get_optional_user_id,
+    managed_supermarket_ids,
+    require_admin_or_manager,
+)
 from core.config import settings
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
@@ -45,8 +51,6 @@ class DraftOfferUpdate(BaseModel):
     unit_price_value: float | None = Field(None, gt=0)
     unit_price_unit: str | None = None
     offer_notes: str | None = None
-    valid_from: str | None = None
-    valid_to: str | None = None
     is_reviewed: bool | None = None
     detach_product: bool | None = None
 
@@ -62,8 +66,15 @@ class DraftOfferCreate(BaseModel):
     unit_price_value: float | None = Field(None, gt=0)
     unit_price_unit: str | None = None
     offer_notes: str | None = None
+
+
+class FlyerValidityUpdate(BaseModel):
     valid_from: str | None = None
     valid_to: str | None = None
+
+
+class FlyerTargetsUpdate(BaseModel):
+    supermarket_ids: list[str] = Field(default_factory=list, min_length=1)
 
 
 def _confirmed_count_by_flyer(sb, flyer_ids: list[str]) -> dict[str, int]:
@@ -93,6 +104,170 @@ def _has_confirmed_offers(sb, flyer_id: str) -> bool:
     return (result.count or 0) > 0
 
 
+def _flyer_targets(sb, flyer_id: str) -> list[dict]:
+    result = (
+        sb.table("flyer_targets")
+        .select("id, supermarket_id, supermarkets(id, name, address, city, province, postal_code, logo_url)")
+        .eq("flyer_id", flyer_id)
+        .execute()
+    )
+    targets: list[dict] = []
+    for row in result.data or []:
+        supermarket = row.get("supermarkets") or {}
+        targets.append(
+            {
+                "id": row.get("id"),
+                "supermarket_id": row["supermarket_id"],
+                "supermarket_name": supermarket.get("name"),
+                "address": supermarket.get("address"),
+                "city": supermarket.get("city"),
+                "province": supermarket.get("province"),
+                "postal_code": supermarket.get("postal_code"),
+                "logo_url": supermarket.get("logo_url"),
+            }
+        )
+    return targets
+
+
+def _enrich_flyer(sb, flyer: dict) -> dict:
+    enriched = dict(flyer)
+    enriched["flyer_kind"] = flyer.get("flyer_kind") or "source"
+    enriched["targets"] = _flyer_targets(sb, flyer["id"]) if enriched["flyer_kind"] == "source" else []
+    return enriched
+
+
+def _source_flyer_required(flyer: dict) -> None:
+    if (flyer.get("flyer_kind") or "source") != "source":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This action is only available on source flyers",
+        )
+
+
+def _profile_supermarket_ids(profile: dict) -> list[str]:
+    return managed_supermarket_ids(profile)
+
+
+def _manager_target_ids(sb, flyer_id: str) -> set[str]:
+    return {target["supermarket_id"] for target in _flyer_targets(sb, flyer_id)}
+
+
+def _supermarket_name_map(sb, supermarket_ids: list[str]) -> dict[str, str]:
+    if not supermarket_ids:
+        return {}
+    result = sb.table("supermarkets").select("id, name").in_("id", supermarket_ids).execute()
+    return {
+        row["id"]: row.get("name") or "Supermercato"
+        for row in (result.data or [])
+        if row.get("id")
+    }
+
+
+def _resolve_upload_supermarket_ids(profile: dict, supermarket_ids: list[str]) -> list[str]:
+    requested = [value for value in supermarket_ids if value]
+    if profile.get("role") != "supermarket_manager":
+        return requested
+
+    allowed = _profile_supermarket_ids(profile)
+    if not requested:
+        if len(allowed) == 1:
+            return allowed
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Select at least one managed supermarket",
+        )
+    forbidden = [value for value in requested if value not in allowed]
+    if forbidden:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Managers can only upload flyers for their assigned supermarkets",
+        )
+    return requested
+
+
+def _duplicate_target_conflicts(
+    sb,
+    *,
+    file_hash: str,
+    supermarket_ids: list[str],
+    exclude_source_flyer_id: str | None = None,
+) -> set[str]:
+    if not supermarket_ids:
+        return set()
+
+    flyers_resp = sb.table("flyers").select("id, flyer_kind, supermarket_id").eq("file_hash", file_hash).execute()
+    rows = flyers_resp.data or []
+    conflicts = {
+        row["supermarket_id"]
+        for row in rows
+        if row.get("flyer_kind") == "published_target"
+        and row.get("supermarket_id") in supermarket_ids
+    }
+
+    source_ids = [
+        row["id"]
+        for row in rows
+        if row.get("flyer_kind") == "source"
+        and row.get("id") != exclude_source_flyer_id
+    ]
+    if source_ids:
+        targets_resp = (
+            sb.table("flyer_targets")
+            .select("supermarket_id")
+            .in_("flyer_id", source_ids)
+            .in_("supermarket_id", supermarket_ids)
+            .execute()
+        )
+        conflicts.update(
+            row["supermarket_id"]
+            for row in (targets_resp.data or [])
+            if row.get("supermarket_id")
+        )
+    return conflicts
+
+
+def _replace_flyer_targets(
+    sb,
+    *,
+    flyer_id: str,
+    supermarket_ids: list[str],
+) -> None:
+    sb.table("flyer_targets").delete().eq("flyer_id", flyer_id).execute()
+    if supermarket_ids:
+        sb.table("flyer_targets").insert(
+            [
+                {"flyer_id": flyer_id, "supermarket_id": supermarket_id}
+                for supermarket_id in supermarket_ids
+            ]
+        ).execute()
+
+
+def _sync_flyer_validity(
+    sb,
+    *,
+    source_flyer_id: str,
+    valid_from: str | None,
+    valid_to: str | None,
+) -> None:
+    flyer_update = {"valid_from": valid_from, "valid_to": valid_to}
+    sb.table("flyers").update(flyer_update).eq("id", source_flyer_id).execute()
+    sb.table("offers").update(flyer_update).eq("flyer_id", source_flyer_id).execute()
+
+    published_targets_resp = (
+        sb.table("flyers")
+        .select("id")
+        .eq("source_flyer_id", source_flyer_id)
+        .eq("flyer_kind", "published_target")
+        .execute()
+    )
+    for row in published_targets_resp.data or []:
+        published_flyer_id = row.get("id")
+        if not published_flyer_id:
+            continue
+        sb.table("flyers").update(flyer_update).eq("id", published_flyer_id).execute()
+        sb.table("offers").update(flyer_update).eq("flyer_id", published_flyer_id).execute()
+
+
 def _upload_product_image_to_storage(
     sb,
     *,
@@ -118,35 +293,19 @@ def _normalize_name(value: str | None) -> str | None:
     return normalized or None
 
 
-def _managed_supermarket_name(sb, managed_id: str | None) -> str | None:
-    if not managed_id:
-        return None
-    result = (
-        sb.table("supermarkets")
-        .select("name")
-        .eq("id", managed_id)
-        .maybe_single()
-        .execute()
-    )
-    if not result or not result.data:
-        return None
-    return result.data.get("name")
-
-
 def _manager_can_access_flyer(sb, profile: dict, flyer: dict) -> bool:
     if profile.get("role") != "supermarket_manager":
         return True
 
-    managed_id = profile.get("managed_supermarket_id")
-    if flyer.get("supermarket_id") == managed_id:
+    managed_ids = set(_profile_supermarket_ids(profile))
+    if flyer.get("supermarket_id") in managed_ids:
         return True
 
-    if flyer.get("supermarket_id") is not None:
-        return False
+    if (flyer.get("flyer_kind") or "source") == "source":
+        target_ids = _manager_target_ids(sb, flyer["id"])
+        return bool(target_ids.intersection(managed_ids))
 
-    managed_name = _normalize_name(_managed_supermarket_name(sb, managed_id))
-    flyer_name = _normalize_name(flyer.get("supermarket_name"))
-    return managed_name is not None and managed_name == flyer_name
+    return False
 
 
 def _assert_flyer_access(sb, profile: dict, flyer: dict) -> None:
@@ -161,9 +320,14 @@ async def list_flyers(
 ) -> list[dict]:
     """Return flyers for admin/manager. Managers see only their supermarket's flyers."""
     sb = get_supabase()
-    query = sb.table("flyers").select("*").order("created_at", desc=True)
+    query = (
+        sb.table("flyers")
+        .select("*")
+        .eq("flyer_kind", "source")
+        .order("created_at", desc=True)
+    )
     response = query.execute()
-    flyers = response.data or []
+    flyers = [_enrich_flyer(sb, flyer) for flyer in (response.data or [])]
     if profile.get("role") != "supermarket_manager":
         return flyers
     return [flyer for flyer in flyers if _manager_can_access_flyer(sb, profile, flyer)]
@@ -192,6 +356,7 @@ async def list_public_flyers(
     query = (
         sb.table("flyers")
         .select("*")
+        .eq("flyer_kind", "published_target")
         .eq("status", "done")
         .eq("is_public", True)
         .order("created_at", desc=True)
@@ -250,7 +415,7 @@ async def download_flyer(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
         profile_result = (
             sb.table("user_profiles")
-            .select("id, role, managed_supermarket_id")
+            .select("*")
             .eq("id", user_id)
             .maybe_single()
             .execute()
@@ -258,9 +423,21 @@ async def download_flyer(
         if not profile_result or not profile_result.data:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
         profile = profile_result.data
+        profile["managed_supermarket_ids"] = _profile_supermarket_ids(profile) or [
+            row["supermarket_id"]
+            for row in (
+                sb.table("manager_supermarkets")
+                .select("supermarket_id")
+                .eq("user_id", user_id)
+                .execute()
+                .data
+                or []
+            )
+            if row.get("supermarket_id")
+        ]
         if profile.get("role") not in {"admin", "supermarket_manager"}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-        assert_flyer_access(profile, flyer)
+        _assert_flyer_access(sb, profile, flyer)
 
     prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/flyers/"
     file_url = flyer.get("file_url", "")
@@ -279,6 +456,7 @@ async def download_flyer(
 @router.post("/upload", status_code=status.HTTP_201_CREATED)
 async def upload_flyer(
     file: Annotated[UploadFile, File()],
+    supermarket_ids: Annotated[list[str] | None, Form()] = None,
     supermarket_name: str | None = Form(None),
     supermarket_id: str | None = Form(None),
     valid_from: str | None = Form(None),
@@ -286,23 +464,17 @@ async def upload_flyer(
     user_id: str = Depends(get_current_user_id),
     profile: dict = Depends(require_admin_or_manager),
 ) -> dict:
-    """Upload a flyer PDF or image. Requires admin or manager role.
-
-    Managers:
-    - Auto-fill supermarket_id from managed_supermarket_id if not provided.
-    - Cannot upload for a different supermarket.
-    """
-    role = profile.get("role")
-    managed_id = profile.get("managed_supermarket_id")
-
-    if role == "supermarket_manager":
-        if supermarket_id is None:
-            supermarket_id = managed_id
-        elif supermarket_id != managed_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Managers can only upload flyers for their own supermarket",
-            )
+    """Upload a flyer source and attach one or more target supermarkets."""
+    requested_ids = list(supermarket_ids or [])
+    if supermarket_id:
+        requested_ids.append(supermarket_id)
+    requested_ids = list(dict.fromkeys(requested_ids))
+    requested_ids = _resolve_upload_supermarket_ids(profile, requested_ids)
+    if not requested_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Select at least one supermarket",
+        )
 
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
@@ -318,35 +490,26 @@ async def upload_flyer(
         )
 
     file_hash = hashlib.sha256(content).hexdigest()
-
-    if supermarket_name:
-        sb = get_supabase()
-        existing = (
-            sb.table("flyers")
-            .select("id")
-            .eq("file_hash", file_hash)
-            .eq("supermarket_name", supermarket_name)
-            .maybe_single()
-            .execute()
-        )
-        if existing:
-            existing_id = existing.data.get("id") if existing.data else None
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Flyer with hash {file_hash} and supermarket '{supermarket_name}' already exists (id={existing_id})",
-            )
-
     sb = get_supabase()
-    if supermarket_id and not supermarket_name:
-        supermarket_result = (
-            sb.table("supermarkets")
-            .select("name")
-            .eq("id", supermarket_id)
-            .maybe_single()
-            .execute()
+    conflicts = _duplicate_target_conflicts(
+        sb,
+        file_hash=file_hash,
+        supermarket_ids=requested_ids,
+    )
+    accepted_ids = [value for value in requested_ids if value not in conflicts]
+    if not accepted_ids:
+        supermarket_names = _supermarket_name_map(sb, requested_ids)
+        blocked_names = [
+            supermarket_names.get(supermarket_id, supermarket_id)
+            for supermarket_id in requested_ids
+        ]
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Flyer already exists for: {', '.join(blocked_names)}",
         )
-        if supermarket_result and supermarket_result.data:
-            supermarket_name = supermarket_result.data.get("name")
+    supermarket_names = _supermarket_name_map(sb, accepted_ids)
+    first_target_id = accepted_ids[0]
+    supermarket_name = supermarket_names.get(first_target_id, supermarket_name)
     ext = "pdf" if file.content_type == "application/pdf" else "jpg"
     storage_path = f"{user_id}/{uuid.uuid4()}.{ext}"
     sb.storage.from_("flyers").upload(
@@ -364,7 +527,7 @@ async def upload_flyer(
             {
                 "user_id": user_id,
                 "supermarket_name": supermarket_name,
-                "supermarket_id": supermarket_id,
+                "supermarket_id": first_target_id,
                 "file_url": file_url,
                 "file_type": file_type,
                 "file_name": file.filename,
@@ -373,12 +536,31 @@ async def upload_flyer(
                 "status": "pending",
                 "is_public": False,
                 "file_hash": file_hash,
+                "flyer_kind": "source",
             }
         )
         .execute()
     )
-
-    return row.data[0]
+    source_flyer = row.data[0]
+    sb.table("flyer_targets").insert(
+        [
+            {"flyer_id": source_flyer["id"], "supermarket_id": supermarket_target_id}
+            for supermarket_target_id in accepted_ids
+        ]
+    ).execute()
+    enriched = _enrich_flyer(sb, source_flyer)
+    enriched["rejected_targets"] = [
+        {
+            "supermarket_id": supermarket_target_id,
+            "supermarket_name": _supermarket_name_map(sb, [supermarket_target_id]).get(
+                supermarket_target_id,
+                supermarket_target_id,
+            ),
+        }
+        for supermarket_target_id in requested_ids
+        if supermarket_target_id in conflicts
+    ]
+    return enriched
 
 
 @router.get("/{flyer_id}")
@@ -393,7 +575,105 @@ async def get_flyer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
     flyer = result.data
     _assert_flyer_access(sb, profile, flyer)
-    return flyer
+    return _enrich_flyer(sb, flyer)
+
+
+@router.patch("/{flyer_id}")
+async def update_flyer_validity(
+    flyer_id: str,
+    payload: FlyerValidityUpdate,
+    profile: dict = Depends(require_admin_or_manager),
+) -> dict:
+    sb = get_supabase()
+    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    flyer = result.data
+    _source_flyer_required(flyer)
+    _assert_flyer_access(sb, profile, flyer)
+
+    _sync_flyer_validity(
+        sb,
+        source_flyer_id=flyer_id,
+        valid_from=payload.valid_from,
+        valid_to=payload.valid_to,
+    )
+    updated = sb.table("flyers").select("*").eq("id", flyer_id).single().execute().data
+    return _enrich_flyer(sb, updated)
+
+
+@router.get("/{flyer_id}/targets")
+async def get_flyer_targets(
+    flyer_id: str,
+    profile: dict = Depends(require_admin_or_manager),
+) -> list[dict]:
+    sb = get_supabase()
+    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+    flyer = result.data
+    _source_flyer_required(flyer)
+    _assert_flyer_access(sb, profile, flyer)
+    return _flyer_targets(sb, flyer_id)
+
+
+@router.put("/{flyer_id}/targets")
+@router.patch("/{flyer_id}/targets")
+async def update_flyer_targets(
+    flyer_id: str,
+    payload: FlyerTargetsUpdate,
+    profile: dict = Depends(require_admin_or_manager),
+) -> dict:
+    sb = get_supabase()
+    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+    flyer = result.data
+    _source_flyer_required(flyer)
+    _assert_flyer_access(sb, profile, flyer)
+    if flyer.get("is_public"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot modify targets after publication",
+        )
+
+    requested_ids = _resolve_upload_supermarket_ids(profile, payload.supermarket_ids)
+    conflicts = _duplicate_target_conflicts(
+        sb,
+        file_hash=flyer.get("file_hash"),
+        supermarket_ids=requested_ids,
+        exclude_source_flyer_id=flyer_id,
+    )
+    accepted_ids = [value for value in requested_ids if value not in conflicts]
+    if not accepted_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="All selected supermarkets already have this flyer",
+        )
+
+    _replace_flyer_targets(sb, flyer_id=flyer_id, supermarket_ids=accepted_ids)
+    name_map = _supermarket_name_map(sb, accepted_ids)
+    first_target_id = accepted_ids[0]
+    sb.table("flyers").update(
+        {
+            "supermarket_id": first_target_id,
+            "supermarket_name": name_map.get(first_target_id),
+        }
+    ).eq("id", flyer_id).execute()
+
+    updated = sb.table("flyers").select("*").eq("id", flyer_id).single().execute().data
+    enriched = _enrich_flyer(sb, updated)
+    rejected_names = _supermarket_name_map(sb, list(conflicts))
+    enriched["rejected_targets"] = [
+        {
+            "supermarket_id": supermarket_id,
+            "supermarket_name": rejected_names.get(supermarket_id, supermarket_id),
+        }
+        for supermarket_id in requested_ids
+        if supermarket_id in conflicts
+    ]
+    return enriched
 
 
 @router.delete("/{flyer_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
@@ -408,6 +688,7 @@ async def delete_flyer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
     flyer = result.data
+    _source_flyer_required(flyer)
     _assert_flyer_access(sb, profile, flyer)
 
     file_url = flyer.get("file_url") or ""
@@ -435,6 +716,7 @@ async def trigger_extraction(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
     flyer = result.data
+    _source_flyer_required(flyer)
     _assert_flyer_access(sb, profile, flyer)
 
     allowed_statuses = {"pending", "error"}
@@ -459,10 +741,11 @@ async def list_draft_offers(
 ) -> list[dict]:
     """Return all unconfirmed offers for a flyer."""
     sb = get_supabase()
-    result = sb.table("flyers").select("id, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
+    result = sb.table("flyers").select("id, supermarket_id, supermarket_name, flyer_kind").eq("id", flyer_id).maybe_single().execute()
     if not result or not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
+    _source_flyer_required(result.data)
     _assert_flyer_access(sb, profile, result.data)
 
     offers_resp = (
@@ -482,10 +765,11 @@ async def list_confirmed_offers(
 ) -> list[dict]:
     """Return all confirmed offers for a flyer."""
     sb = get_supabase()
-    result = sb.table("flyers").select("id, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
+    result = sb.table("flyers").select("id, supermarket_id, supermarket_name, flyer_kind").eq("id", flyer_id).maybe_single().execute()
     if not result or not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
+    _source_flyer_required(result.data)
     _assert_flyer_access(sb, profile, result.data)
 
     offers_resp = (
@@ -508,7 +792,7 @@ async def create_draft_offer(
     sb = get_supabase()
     flyer_result = (
         sb.table("flyers")
-        .select("id, supermarket_id, supermarket_name, valid_from, valid_to")
+        .select("id, supermarket_id, supermarket_name, valid_from, valid_to, flyer_kind")
         .eq("id", flyer_id)
         .maybe_single()
         .execute()
@@ -516,6 +800,7 @@ async def create_draft_offer(
     if not flyer_result or not flyer_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
     flyer = flyer_result.data
+    _source_flyer_required(flyer)
     _assert_flyer_access(sb, profile, flyer)
 
     normalized_unit = normalize_unit_price_measure(payload.unit_price_unit) if payload.unit_price_unit else None
@@ -538,10 +823,11 @@ async def update_draft_offer(
 ) -> dict:
     """Inline-edit a single draft offer (and its canonical product if needed)."""
     sb = get_supabase()
-    flyer_result = sb.table("flyers").select("id, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
+    flyer_result = sb.table("flyers").select("id, supermarket_id, supermarket_name, flyer_kind").eq("id", flyer_id).maybe_single().execute()
     if not flyer_result or not flyer_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
+    _source_flyer_required(flyer_result.data)
     _assert_flyer_access(sb, profile, flyer_result.data)
 
     offer_result = (
@@ -571,8 +857,6 @@ async def update_draft_offer(
             "unit_price_value": payload.unit_price_value,
             "unit_price_unit": payload.unit_price_unit,
             "offer_notes": payload.offer_notes,
-            "valid_from": payload.valid_from,
-            "valid_to": payload.valid_to,
             "is_reviewed": payload.is_reviewed,
             "product_id": None if payload.detach_product else None,
         }.items()
@@ -645,7 +929,7 @@ async def upload_draft_offer_image(
     sb = get_supabase()
     flyer_result = (
         sb.table("flyers")
-        .select("id, supermarket_id, supermarket_name")
+        .select("id, supermarket_id, supermarket_name, flyer_kind")
         .eq("id", flyer_id)
         .maybe_single()
         .execute()
@@ -653,6 +937,7 @@ async def upload_draft_offer_image(
     if not flyer_result or not flyer_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
+    _source_flyer_required(flyer_result.data)
     _assert_flyer_access(sb, profile, flyer_result.data)
 
     offer_result = (
@@ -717,10 +1002,11 @@ async def delete_draft_offer(
 ) -> None:
     """Delete a single unconfirmed draft offer. Cannot delete already-confirmed offers."""
     sb = get_supabase()
-    flyer_result = sb.table("flyers").select("id, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
+    flyer_result = sb.table("flyers").select("id, supermarket_id, supermarket_name, flyer_kind").eq("id", flyer_id).maybe_single().execute()
     if not flyer_result or not flyer_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
+    _source_flyer_required(flyer_result.data)
     _assert_flyer_access(sb, profile, flyer_result.data)
 
     offer_result = (
@@ -742,15 +1028,15 @@ async def confirm_offers(
     flyer_id: str,
     profile: dict = Depends(require_admin_or_manager),
 ) -> dict:
-    """Confirm all draft offers for a flyer (sets is_confirmed=True)."""
+    """Confirm source flyer offers and publish one derived flyer per target."""
     sb = get_supabase()
     flyer_result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
     if not flyer_result or not flyer_result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
     flyer = flyer_result.data
+    _source_flyer_required(flyer)
     _assert_flyer_access(sb, profile, flyer)
-    was_public = bool(flyer.get("is_public"))
 
     if flyer.get("status") != "done":
         raise HTTPException(
@@ -758,9 +1044,16 @@ async def confirm_offers(
             detail=f"Cannot confirm offers: flyer status is '{flyer.get('status')}' (must be 'done')",
         )
 
+    targets = _flyer_targets(sb, flyer_id)
+    if not targets:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Add at least one supermarket target before confirmation",
+        )
+
     drafts = (
         sb.table("offers")
-        .select("id, product_id, draft_name, draft_brand, draft_category, draft_subcategory, draft_image_url")
+        .select("*")
         .eq("flyer_id", flyer_id)
         .eq("is_confirmed", False)
         .execute()
@@ -782,25 +1075,128 @@ async def confirm_offers(
         sb.table("offers").update({"is_confirmed": True}).eq("flyer_id", flyer_id).eq("is_confirmed", False).execute()
     confirmed_count = len(draft_rows)
 
-    total_confirmed = (
+    source_confirmed = (
         sb.table("offers")
-        .select("id", count="exact")
+        .select("*", count="exact")
         .eq("flyer_id", flyer_id)
         .eq("is_confirmed", True)
         .execute()
     )
-    if (total_confirmed.count or 0) > 0:
-        sb.table("flyers").update({"is_public": True}).eq("id", flyer_id).execute()
-        if draft_rows and not was_public:
-            notify_public_flyer_published(
-                sb,
-                flyer_id=flyer_id,
-                supermarket_id=flyer["supermarket_id"],
-                supermarket_name=flyer.get("supermarket_name") or "Supermercato",
-                products_count=total_confirmed.count or 0,
-            )
+    source_offers = source_confirmed.data or []
+    source_offer_count = source_confirmed.count or len(source_offers)
+    if source_offer_count <= 0:
+        return {
+            "confirmed": confirmed_count,
+            "flyer_id": flyer_id,
+            "published_flyers": [],
+        }
 
-    return {"confirmed": confirmed_count, "flyer_id": flyer_id}
+    existing_targets_resp = (
+        sb.table("flyers")
+        .select("id, supermarket_id")
+        .eq("source_flyer_id", flyer_id)
+        .eq("flyer_kind", "published_target")
+        .execute()
+    )
+    existing_target_flyer_by_supermarket = {
+        row["supermarket_id"]: row["id"]
+        for row in (existing_targets_resp.data or [])
+        if row.get("supermarket_id") and row.get("id")
+    }
+
+    published_flyers: list[dict] = []
+    for target in targets:
+        target_supermarket_id = target["supermarket_id"]
+        target_supermarket_name = target.get("supermarket_name") or "Supermercato"
+        published_flyer_id = existing_target_flyer_by_supermarket.get(target_supermarket_id)
+
+        if not published_flyer_id:
+            inserted = (
+                sb.table("flyers")
+                .insert(
+                    {
+                        "user_id": flyer.get("user_id"),
+                        "supermarket_id": target_supermarket_id,
+                        "supermarket_name": target_supermarket_name,
+                        "file_url": flyer.get("file_url"),
+                        "file_type": flyer.get("file_type"),
+                        "file_name": flyer.get("file_name"),
+                        "valid_from": flyer.get("valid_from"),
+                        "valid_to": flyer.get("valid_to"),
+                        "status": "done",
+                        "error_message": None,
+                        "products_count": source_offer_count,
+                        "pages_count": flyer.get("pages_count"),
+                        "extraction_metadata": flyer.get("extraction_metadata"),
+                        "is_public": True,
+                        "file_hash": flyer.get("file_hash"),
+                        "flyer_kind": "published_target",
+                        "source_flyer_id": flyer_id,
+                    }
+                )
+                .execute()
+            )
+            published_flyer_id = inserted.data[0]["id"]
+
+            clone_rows: list[dict] = []
+            for source_offer in source_offers:
+                clone_rows.append(
+                    {
+                        "product_id": source_offer.get("product_id"),
+                        "supermarket_id": target_supermarket_id,
+                        "supermarket_name": target_supermarket_name,
+                        "flyer_id": published_flyer_id,
+                        "price_original": source_offer.get("price_original"),
+                        "price_offer": source_offer.get("price_offer"),
+                        "discount_pct": source_offer.get("discount_pct"),
+                        "unit_price": source_offer.get("unit_price"),
+                        "unit_price_value": source_offer.get("unit_price_value"),
+                        "unit_price_unit": source_offer.get("unit_price_unit"),
+                        "offer_type": source_offer.get("offer_type"),
+                        "offer_notes": source_offer.get("offer_notes"),
+                        "valid_from": source_offer.get("valid_from"),
+                        "valid_to": source_offer.get("valid_to"),
+                        "is_active": source_offer.get("is_active"),
+                        "raw_text": source_offer.get("raw_text"),
+                        "confidence_score": source_offer.get("confidence_score"),
+                        "draft_name": source_offer.get("draft_name"),
+                        "draft_brand": source_offer.get("draft_brand"),
+                        "draft_category": source_offer.get("draft_category"),
+                        "draft_subcategory": source_offer.get("draft_subcategory"),
+                        "draft_product_key": source_offer.get("draft_product_key"),
+                        "draft_image_url": source_offer.get("draft_image_url"),
+                        "format": source_offer.get("format"),
+                        "format_key": source_offer.get("format_key"),
+                        "format_label": source_offer.get("format_label"),
+                        "is_confirmed": True,
+                        "is_reviewed": source_offer.get("is_reviewed", False),
+                    }
+                )
+            if clone_rows:
+                sb.table("offers").insert(clone_rows).execute()
+
+            if draft_rows and not flyer.get("is_public"):
+                notify_public_flyer_published(
+                    sb,
+                    flyer_id=published_flyer_id,
+                    supermarket_id=target_supermarket_id,
+                    supermarket_name=target_supermarket_name,
+                    products_count=source_offer_count,
+                )
+
+        published_flyers.append(
+            {
+                "flyer_id": published_flyer_id,
+                "supermarket_id": target_supermarket_id,
+                "supermarket_name": target_supermarket_name,
+            }
+        )
+
+    return {
+        "confirmed": confirmed_count,
+        "flyer_id": flyer_id,
+        "published_flyers": published_flyers,
+    }
 
 
 @router.post("/admin/cleanup", status_code=200)

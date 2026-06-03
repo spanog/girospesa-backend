@@ -39,9 +39,12 @@
 ## Flyer Review
 
 - Manual draft-offer create/update endpoints on `/flyers/{flyer_id}/draft-offers` own draft product fields on `offers`: `draft_name`, `draft_brand`, `draft_category`, `draft_subcategory`. Format fields (`format`, `format_key`, `format_label`) belong to the offer, not the product.
+- In flyer review, offer validity is flyer-scoped: manual draft creation inherits `flyers.valid_from`/`flyers.valid_to`, per-offer PATCH must not own dates, and `PATCH /flyers/{flyer_id}` propagates validity changes to every offer linked to that source flyer, including published target clones.
 - Draft review can also stage `draft_image_url` on `offers`. Review responses expose `image_url` with precedence `draft_image_url -> products.image_url`, so unbound drafts can preview a product image before the canonical product exists.
 - Draft offers may have `product_id = NULL`. `product_id` is required only when `is_confirmed = true`. A draft bound to an existing product exposes `binding_status='existing'` plus `linked_product`; an unbound draft exposes `binding_status='new_on_confirm'`.
 - Detaching a draft offer sets `product_id = NULL` only. It must not create a product. On `POST /flyers/{flyer_id}/offers/confirm`, every unbound draft creates/upserts the canonical product from current draft fields, then the offer is confirmed.
+- Flyer upload/review is now multi-supermarket. `flyers` rows with `flyer_kind='source'` own one extraction/review flow, while `flyer_targets` stores the selected supermarket branches. `POST /flyers/upload` accepts repeated `supermarket_ids`, `GET|PUT|PATCH /flyers/{flyer_id}/targets` manages targets before publication, and `POST /flyers/{flyer_id}/offers/confirm` must clone one published flyer plus one confirmed-offer set per target supermarket.
+- Supermarket managers can belong to multiple branches through `manager_supermarkets`. Auth/session payloads should expose `managed_supermarket_ids`; `managed_supermarket_id` remains fallback-only for older rows/tests.
 - `POST /flyers/{flyer_id}/draft-offers/{offer_id}/image` accepts `multipart/form-data` only for `binding_status='new_on_confirm'` drafts. Bound or already-confirmed offers must not mutate catalog images from flyer review.
 - `format` must be structured `ProductFormat` JSON. Plain text format is forbidden.
 - **Canonical product identity is `name + brand`** — products are uniquely keyed on `UNIQUE NULLS NOT DISTINCT (name, brand)`. Format is an attribute of the offer, not the product.

@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from core.auth import require_admin_or_manager
+from core.auth import managed_supermarket_ids, require_admin_or_manager
 from core.database import get_supabase
 from services.extraction.normalizer import normalize_unit_price_measure
 from services.product_format import ProductFormat
@@ -37,7 +37,7 @@ async def create_manual_offer(
     profile: Annotated[dict, Depends(require_admin_or_manager)],
 ) -> dict:
     if profile.get("role") == "supermarket_manager":
-        if payload.supermarket_id != profile.get("managed_supermarket_id"):
+        if payload.supermarket_id not in managed_supermarket_ids(profile):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="Managers can only create offers for their own supermarket")
     sb = get_supabase()

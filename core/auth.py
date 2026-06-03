@@ -119,13 +119,13 @@ async def require_admin(
 async def get_current_user_profile(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict:
-    """Fetch user_profiles(id, role, managed_supermarket_id). Raises 403 if missing."""
+    """Fetch user profile plus managed supermarket assignments."""
     from core.database import get_supabase
 
     sb = get_supabase()
     result = (
         sb.table("user_profiles")
-        .select("id, role, managed_supermarket_id")
+        .select("*")
         .eq("id", user_id)
         .maybe_single()
         .execute()
@@ -135,7 +135,22 @@ async def get_current_user_profile(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User profile not found",
         )
-    return result.data
+    profile = result.data
+    manager_ids_result = (
+        sb.table("manager_supermarkets")
+        .select("supermarket_id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    manager_ids = [
+        row["supermarket_id"]
+        for row in (manager_ids_result.data or [])
+        if row.get("supermarket_id")
+    ]
+    if not manager_ids and profile.get("managed_supermarket_id"):
+        manager_ids = [profile["managed_supermarket_id"]]
+    profile["managed_supermarket_ids"] = manager_ids
+    return profile
 
 
 _PRIVILEGED_ROLES = frozenset({"admin", "supermarket_manager"})
@@ -153,12 +168,19 @@ async def require_admin_or_manager(
     return profile
 
 
+def managed_supermarket_ids(profile: dict) -> list[str]:
+    ids = profile.get("managed_supermarket_ids")
+    if isinstance(ids, list):
+        return [value for value in ids if isinstance(value, str) and value]
+    managed = profile.get("managed_supermarket_id")
+    return [managed] if isinstance(managed, str) and managed else []
+
+
 def assert_flyer_access(profile: dict, flyer: dict) -> None:
-    """If manager: flyer.supermarket_id must match managed_supermarket_id."""
+    """If manager: flyer.supermarket_id must be in assigned supermarkets."""
     if profile.get("role") != "supermarket_manager":
         return
-    managed = profile.get("managed_supermarket_id")
-    if flyer.get("supermarket_id") != managed:
+    if flyer.get("supermarket_id") not in managed_supermarket_ids(profile):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied: flyer belongs to a different supermarket",

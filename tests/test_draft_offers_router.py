@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import os
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -24,6 +24,7 @@ _settings_obj.gemini_model = "gemma-4-31b-it"
 _config_mod.settings = _settings_obj  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
+sys.modules.pop("core.auth", None)
 _normalizer_mod = types.ModuleType("services.extraction.normalizer")
 _normalizer_mod.format_unit_price_label = lambda value, unit: None  # type: ignore[attr-defined]
 _normalizer_mod.normalize_unit_price_measure = lambda value: value  # type: ignore[attr-defined]
@@ -232,6 +233,25 @@ class TestCreateDraftOffer:
                 "/flyers/flyer-1/draft-offers",
                 {_DEP_PROFILE: lambda: ADMIN_PROFILE},
                 json={"name": "Mozzarella", "price_offer": 1.99},
+            )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["valid_from"] == "2026-04-01"
+        assert data["valid_to"] == "2026-04-30"
+
+    @pytest.mark.asyncio
+    async def test_create_ignores_offer_level_dates_and_uses_flyer_dates(self):
+        sb = self._make_sb()
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post(
+                "/flyers/flyer-1/draft-offers",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                json={
+                    "name": "Mozzarella",
+                    "price_offer": 1.99,
+                    "valid_from": "2026-06-01",
+                    "valid_to": "2026-06-30",
+                },
             )
         assert resp.status_code == 201
         data = resp.json()
@@ -584,7 +604,20 @@ class TestConfirmOffers:
     def _make_sb(self, flyer_status: str = "done", confirmed_count: int = 3) -> MagicMock:
         sb = MagicMock()
         flyer_result = MagicMock()
-        flyer_result.data = {"id": "flyer-1", "supermarket_id": "sup-1", "status": flyer_status}
+        flyer_result.data = {
+            "id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "status": flyer_status,
+            "flyer_kind": "source",
+            "user_id": "admin-1",
+            "file_url": "https://storage.test/flyer.pdf",
+            "file_type": "pdf",
+            "file_name": "flyer.pdf",
+            "valid_from": None,
+            "valid_to": None,
+            "pages_count": 1,
+            "file_hash": "hash-1",
+        }
         sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
 
         updated_result = MagicMock()
@@ -604,6 +637,7 @@ class TestConfirmOffers:
         sb = self._make_sb("done", 3)
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._flyer_targets", return_value=[{"supermarket_id": "sup-1", "supermarket_name": "Coop"}]),
             patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
         ):
             resp = await _post(
@@ -616,9 +650,9 @@ class TestConfirmOffers:
         assert data["flyer_id"] == "flyer-1"
         notify_mock.assert_called_once_with(
             sb,
-            flyer_id="flyer-1",
+            flyer_id=ANY,
             supermarket_id="sup-1",
-            supermarket_name="Supermercato",
+            supermarket_name="Coop",
             products_count=3,
         )
 
@@ -627,6 +661,7 @@ class TestConfirmOffers:
         sb = self._make_sb("done", 0)
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._flyer_targets", return_value=[{"supermarket_id": "sup-1", "supermarket_name": "Coop"}]),
             patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
         ):
             resp = await _post(
@@ -647,6 +682,13 @@ class TestConfirmOffers:
             "supermarket_name": "Coop",
             "status": "done",
             "is_public": True,
+            "flyer_kind": "source",
+            "user_id": "admin-1",
+            "file_url": "https://storage.test/flyer.pdf",
+            "file_type": "pdf",
+            "file_name": "flyer.pdf",
+            "pages_count": 1,
+            "file_hash": "hash-1",
         }
         sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = (
             flyer_result
@@ -654,6 +696,7 @@ class TestConfirmOffers:
 
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._flyer_targets", return_value=[{"supermarket_id": "sup-1", "supermarket_name": "Coop"}]),
             patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
         ):
             resp = await _post(
@@ -668,7 +711,18 @@ class TestConfirmOffers:
     async def test_confirm_passes_draft_image_to_new_product(self):
         sb = MagicMock()
         flyer_result = MagicMock()
-        flyer_result.data = {"id": "flyer-1", "supermarket_id": "sup-1", "status": "done"}
+        flyer_result.data = {
+            "id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "status": "done",
+            "flyer_kind": "source",
+            "user_id": "admin-1",
+            "file_url": "https://storage.test/flyer.pdf",
+            "file_type": "pdf",
+            "file_name": "flyer.pdf",
+            "pages_count": 1,
+            "file_hash": "hash-1",
+        }
         drafts_result = MagicMock()
         drafts_result.data = [
             {
@@ -704,6 +758,7 @@ class TestConfirmOffers:
 
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._flyer_targets", return_value=[{"supermarket_id": "sup-1", "supermarket_name": "Coop"}]),
             patch("api.routers.flyers.upsert_product", return_value="prod-new") as mock_upsert,
         ):
             resp = await _post(

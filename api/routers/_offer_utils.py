@@ -94,7 +94,7 @@ def upsert_product(sb, product_row: dict) -> str:
 
 
 def build_offer_row(payload, product_id: str | None, supermarket_id: str, supermarket_name: str | None, flyer_id: str | None, normalized_unit: str | None, format_fields: dict | None = None) -> dict:
-    """Build offer dict for insert. valid_from/valid_to from payload only."""
+    """Build offer dict for insert. Date fields are optional on payload."""
     unit_price_label = format_unit_price_label(payload.unit_price_value, normalized_unit) if payload.unit_price_value else None
     row: dict = {
         "id": str(uuid.uuid4()),
@@ -113,8 +113,8 @@ def build_offer_row(payload, product_id: str | None, supermarket_id: str, superm
         "unit_price_unit": normalized_unit,
         "unit_price": unit_price_label,
         "offer_notes": payload.offer_notes,
-        "valid_from": payload.valid_from,
-        "valid_to": payload.valid_to,
+        "valid_from": getattr(payload, "valid_from", None),
+        "valid_to": getattr(payload, "valid_to", None),
         "is_confirmed": False,
     }
     if format_fields:

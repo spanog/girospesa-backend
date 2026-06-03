@@ -58,15 +58,24 @@ _auth_mod.require_admin_or_manager = MagicMock()  # type: ignore[attr-defined]
 def _assert_flyer_access_real(profile: dict, flyer: dict) -> None:
     if profile.get("role") != "supermarket_manager":
         return
-    managed = profile.get("managed_supermarket_id")
-    if flyer.get("supermarket_id") != managed:
+    managed_ids = _managed_supermarket_ids_real(profile)
+    if flyer.get("supermarket_id") not in managed_ids:
         raise HTTPException(
             status_code=403,
             detail="Access denied: flyer belongs to a different supermarket",
         )
 
 
+def _managed_supermarket_ids_real(profile: dict) -> list[str]:
+    ids = profile.get("managed_supermarket_ids")
+    if isinstance(ids, list):
+        return ids
+    managed = profile.get("managed_supermarket_id")
+    return [managed] if managed else []
+
+
 _auth_mod.assert_flyer_access = _assert_flyer_access_real  # type: ignore[attr-defined]
+_auth_mod.managed_supermarket_ids = _managed_supermarket_ids_real  # type: ignore[attr-defined]
 _auth_mod.get_optional_user_id = MagicMock()  # type: ignore[attr-defined]
 
 
@@ -100,7 +109,12 @@ test_app.include_router(router, prefix="/flyers")
 # Helpers
 # ---------------------------------------------------------------------------
 ADMIN_PROFILE = {"id": "admin-456", "role": "admin", "managed_supermarket_id": None}
-MANAGER_PROFILE = {"id": "mgr-123", "role": "supermarket_manager", "managed_supermarket_id": "sup-1"}
+MANAGER_PROFILE = {
+    "id": "mgr-123",
+    "role": "supermarket_manager",
+    "managed_supermarket_id": "sup-1",
+    "managed_supermarket_ids": ["sup-1"],
+}
 
 _SMALL_PDF = b"%PDF-1.4 fake pdf content"
 
@@ -142,6 +156,13 @@ async def _get(url: str, dep_overrides: dict | None = None) -> httpx.Response:
         return await client.get(url)
 
 
+async def _patch(url: str, dep_overrides: dict, json: dict) -> httpx.Response:
+    test_app.dependency_overrides = dep_overrides
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.patch(url, json=json)
+
+
 # ---------------------------------------------------------------------------
 # Tests — upload privacy
 # ---------------------------------------------------------------------------
@@ -157,10 +178,11 @@ class TestUploadFlyerPrivacy:
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
                 [_make_upload_file()],
+                data={"supermarket_ids": "sup-1"},
             )
 
         assert resp.status_code == 201
-        insert_call_kwargs = sb.table.return_value.insert.call_args[0][0]
+        insert_call_kwargs = sb.table.return_value.insert.call_args_list[0][0][0]
         assert insert_call_kwargs["is_public"] is False
 
     @pytest.mark.asyncio
@@ -172,11 +194,11 @@ class TestUploadFlyerPrivacy:
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
                 [_make_upload_file()],
-                data={"is_public": "true"},
+                data={"is_public": "true", "supermarket_ids": "sup-1"},
             )
 
         assert resp.status_code == 201
-        insert_call_kwargs = sb.table.return_value.insert.call_args[0][0]
+        insert_call_kwargs = sb.table.return_value.insert.call_args_list[0][0][0]
         assert insert_call_kwargs["is_public"] is False
 
     @pytest.mark.asyncio
@@ -194,9 +216,8 @@ class TestUploadFlyerPrivacy:
             )
 
         assert resp.status_code == 201
-        insert_call_kwargs = sb.table.return_value.insert.call_args[0][0]
+        insert_call_kwargs = sb.table.return_value.insert.call_args_list[0][0][0]
         assert insert_call_kwargs["supermarket_id"] == "sup-1"
-        assert insert_call_kwargs["supermarket_name"] == "Manager Market"
 
     @pytest.mark.asyncio
     async def test_manager_wrong_supermarket_id_403(self):
@@ -207,7 +228,7 @@ class TestUploadFlyerPrivacy:
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "mgr-123", _DEP_PROFILE: lambda: MANAGER_PROFILE},
                 [_make_upload_file()],
-                data={"supermarket_id": "sup-other"},
+                data={"supermarket_ids": "sup-other"},
             )
 
         assert resp.status_code == 403
@@ -220,6 +241,7 @@ class TestUploadFlyerValidation:
         resp = await _post_upload(
             {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
             [_make_upload_file(content=b"data", content_type="text/plain", filename="test.txt")],
+            data={"supermarket_ids": "sup-1"},
         )
         assert resp.status_code == 422
 
@@ -230,6 +252,7 @@ class TestUploadFlyerValidation:
         resp = await _post_upload(
             {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
             [_make_upload_file(content=large_content)],
+            data={"supermarket_ids": "sup-1"},
         )
         assert resp.status_code == 413
 
@@ -241,15 +264,14 @@ class TestUploadFlyerDuplicate:
         sb = MagicMock()
         sb.storage.from_.return_value.upload.return_value = MagicMock()
         sb.storage.from_.return_value.get_public_url.return_value = "https://storage.example.com/flyers/dup.pdf"
-        existing_response = MagicMock()
-        existing_response.data = {"id": "existing-flyer-uuid"}
-        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = existing_response
-
-        with patch("api.routers.flyers.get_supabase", return_value=sb):
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._duplicate_target_conflicts", return_value={"sup-1"}),
+        ):
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
                 [_make_upload_file()],
-                data={"supermarket_name": "Esselunga"},
+                data={"supermarket_ids": "sup-1"},
             )
 
         assert resp.status_code == 409
@@ -264,10 +286,11 @@ class TestUploadFlyerDuplicate:
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
                 [_make_upload_file()],
+                data={"supermarket_ids": "sup-1"},
             )
 
         assert resp.status_code == 201
-        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.assert_not_called()
+        assert sb.table.return_value.insert.call_count >= 1
 
 
 class TestPublicFlyersVisibility:
@@ -278,10 +301,10 @@ class TestPublicFlyersVisibility:
         flyers_table = MagicMock()
         flyers_result = MagicMock()
         flyers_result.data = [
-            {"id": "flyer-hidden", "status": "done", "is_public": True},
-            {"id": "flyer-visible", "status": "done", "is_public": True},
+            {"id": "flyer-hidden", "status": "done", "is_public": True, "flyer_kind": "published_target"},
+            {"id": "flyer-visible", "status": "done", "is_public": True, "flyer_kind": "published_target"},
         ]
-        flyers_table.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
+        flyers_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
             flyers_result
         )
 
@@ -306,6 +329,7 @@ class TestPublicFlyersVisibility:
                 "id": "flyer-visible",
                 "status": "done",
                 "is_public": True,
+                "flyer_kind": "published_target",
                 "confirmed_count": 1,
             }
         ]
@@ -317,10 +341,10 @@ class TestPublicFlyersVisibility:
         flyers_table = MagicMock()
         flyers_result = MagicMock()
         flyers_result.data = [
-            {"id": "flyer-future", "status": "done", "is_public": True},
-            {"id": "flyer-visible", "status": "done", "is_public": True},
+            {"id": "flyer-future", "status": "done", "is_public": True, "flyer_kind": "published_target"},
+            {"id": "flyer-visible", "status": "done", "is_public": True, "flyer_kind": "published_target"},
         ]
-        flyers_table.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
+        flyers_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
             flyers_result
         )
 
@@ -347,6 +371,7 @@ class TestPublicFlyersVisibility:
                 "id": "flyer-visible",
                 "status": "done",
                 "is_public": True,
+                "flyer_kind": "published_target",
                 "confirmed_count": 1,
             }
         ]
@@ -386,41 +411,45 @@ class TestPublicFlyersVisibility:
         assert resp.json()["detail"] == "Authentication required"
 
 
-class TestManagerLegacyFlyerAccess:
+class TestManagerFlyerTargetsAccess:
     @pytest.mark.asyncio
-    async def test_list_flyers_includes_legacy_null_supermarket_id_when_name_matches(self):
+    async def test_list_flyers_includes_source_flyer_when_manager_owns_one_target(self):
         sb = MagicMock()
 
         flyers_table = MagicMock()
-        flyers_table.select.return_value.order.return_value.execute.return_value = MagicMock(
+        flyers_table.select.return_value.eq.return_value.order.return_value.execute.return_value = MagicMock(
             data=[
                 {
-                    "id": "flyer-legacy",
-                    "supermarket_id": None,
+                    "id": "flyer-source",
+                    "supermarket_id": "sup-1",
                     "supermarket_name": "Manager Market",
                     "status": "done",
-                    "is_public": True,
+                    "is_public": False,
+                    "flyer_kind": "source",
                 },
                 {
                     "id": "flyer-other",
-                    "supermarket_id": None,
+                    "supermarket_id": "sup-other",
                     "supermarket_name": "Other Market",
                     "status": "done",
-                    "is_public": True,
+                    "is_public": False,
+                    "flyer_kind": "source",
                 },
             ]
         )
 
-        supermarkets_table = MagicMock()
-        supermarkets_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
-            data={"name": "Manager Market"}
-        )
+        flyer_targets_table = MagicMock()
+        flyer_targets_table.select.return_value.eq.return_value.execute.side_effect = [
+            MagicMock(data=[{"supermarket_id": "sup-1", "supermarkets": {"name": "Manager Market"}}]),
+            MagicMock(data=[{"supermarket_id": "sup-other", "supermarkets": {"name": "Other Market"}}]),
+            MagicMock(data=[{"supermarket_id": "sup-other", "supermarkets": {"name": "Other Market"}}]),
+        ]
 
         def _dispatch(table_name: str) -> MagicMock:
             if table_name == "flyers":
                 return flyers_table
-            if table_name == "supermarkets":
-                return supermarkets_table
+            if table_name == "flyer_targets":
+                return flyer_targets_table
             raise AssertionError(f"unexpected table {table_name}")
 
         sb.table.side_effect = _dispatch
@@ -432,42 +461,126 @@ class TestManagerLegacyFlyerAccess:
             )
 
         assert resp.status_code == 200
-        assert [row["id"] for row in resp.json()] == ["flyer-legacy"]
+        assert [row["id"] for row in resp.json()] == ["flyer-source"]
 
     @pytest.mark.asyncio
-    async def test_get_flyer_allows_legacy_null_supermarket_id_when_name_matches(self):
+    async def test_get_flyer_allows_source_flyer_when_manager_owns_one_target(self):
         sb = MagicMock()
 
         flyers_table = MagicMock()
         flyers_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
             data={
-                "id": "flyer-legacy",
-                "supermarket_id": None,
+                "id": "flyer-source",
+                "supermarket_id": "sup-1",
                 "supermarket_name": "Manager Market",
                 "status": "done",
-                "is_public": True,
+                "is_public": False,
+                "flyer_kind": "source",
             }
         )
 
-        supermarkets_table = MagicMock()
-        supermarkets_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
-            data={"name": "Manager Market"}
+        flyer_targets_table = MagicMock()
+        flyer_targets_table.select.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"supermarket_id": "sup-1", "supermarkets": {"name": "Manager Market"}}]
         )
 
         def _dispatch(table_name: str) -> MagicMock:
             if table_name == "flyers":
                 return flyers_table
-            if table_name == "supermarkets":
-                return supermarkets_table
+            if table_name == "flyer_targets":
+                return flyer_targets_table
             raise AssertionError(f"unexpected table {table_name}")
 
         sb.table.side_effect = _dispatch
 
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _get(
-                "/flyers/flyer-legacy",
+                "/flyers/flyer-source",
                 {_DEP_PROFILE: lambda: MANAGER_PROFILE},
             )
 
         assert resp.status_code == 200
-        assert resp.json()["id"] == "flyer-legacy"
+        assert resp.json()["id"] == "flyer-source"
+
+
+class TestUpdateFlyerValidity:
+    @pytest.mark.asyncio
+    async def test_patch_updates_source_and_published_offer_dates(self):
+        sb = MagicMock()
+
+        source_flyer = {
+            "id": "flyer-source",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Coop",
+            "status": "done",
+            "is_public": False,
+            "flyer_kind": "source",
+            "valid_from": "2026-04-01",
+            "valid_to": "2026-04-07",
+        }
+        updated_flyer = {
+            **source_flyer,
+            "valid_from": "2026-05-01",
+            "valid_to": "2026-05-10",
+        }
+
+        flyers_table = MagicMock()
+
+        select_call = 0
+
+        def flyers_select_side_effect(*_args, **_kwargs):
+            nonlocal select_call
+            select_call += 1
+            chain = MagicMock()
+            if select_call == 1:
+                chain.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+                    data=source_flyer
+                )
+            elif select_call == 2:
+                chain.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+                    data=[{"id": "flyer-published-1"}]
+                )
+            else:
+                chain.eq.return_value.single.return_value.execute.return_value = MagicMock(
+                    data=updated_flyer
+                )
+            return chain
+
+        flyers_table.select.side_effect = flyers_select_side_effect
+        flyers_table.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+
+        offers_table = MagicMock()
+        offers_table.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+
+        flyer_targets_table = MagicMock()
+        flyer_targets_table.select.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[]
+        )
+
+        def _dispatch(table_name: str) -> MagicMock:
+            if table_name == "flyers":
+                return flyers_table
+            if table_name == "offers":
+                return offers_table
+            if table_name == "flyer_targets":
+                return flyer_targets_table
+            raise AssertionError(f"unexpected table {table_name}")
+
+        sb.table.side_effect = _dispatch
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _patch(
+                "/flyers/flyer-source",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                {"valid_from": "2026-05-01", "valid_to": "2026-05-10"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["valid_from"] == "2026-05-01"
+        assert resp.json()["valid_to"] == "2026-05-10"
+        assert flyers_table.update.call_count == 2
+        assert offers_table.update.call_count == 2
+        assert all(
+            call.args[0] == {"valid_from": "2026-05-01", "valid_to": "2026-05-10"}
+            for call in flyers_table.update.call_args_list + offers_table.update.call_args_list
+        )
