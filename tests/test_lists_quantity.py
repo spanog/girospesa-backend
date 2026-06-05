@@ -219,6 +219,68 @@ async def test_patch_quantity_returns_updated_item():
     rpc_mock.assert_awaited_once_with(_LIST_ID, _ITEM_ID, {"quantity": 3.0}, _USER_ID)
 
 
+async def test_clear_stale_offers_uses_update_list_item_rpc_patch():
+    list_items = [
+        {
+            "id": _ITEM_ID,
+            "name": "Caciocavallo Silano D.O.P. Campolongo",
+            "pinned_offer_id": "offer-1",
+            "pinned_product_id": "prod-1",
+            "found_deals": [{"offer_id": "offer-1", "price_offer": 1.69}],
+        }
+    ]
+    shopping_lists_table = MagicMock()
+    shopping_lists_table.select.return_value.eq.return_value.single.return_value.execute.return_value = (
+        MagicMock(data={"items": list_items})
+    )
+    offers_table = MagicMock()
+    offers_table.select.return_value.in_.return_value.execute.return_value = MagicMock(
+        data=[
+            {
+                "id": "offer-1",
+                "price_offer": 1.69,
+                "valid_to": "2026-06-04",
+                "is_active": False,
+            }
+        ]
+    )
+    sb_mock = MagicMock()
+    sb_mock.table.side_effect = (
+        lambda table_name: {
+            "shopping_lists": shopping_lists_table,
+            "offers": offers_table,
+        }[table_name]
+    )
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None), \
+         patch.object(_lists_module, "_hidden_offer_ids_for_viewer", return_value=set()), \
+         patch.object(_lists_module, "_rpc_update_list_item", new=AsyncMock()) as rpc_mock, \
+         patch.object(_lists_module, "_publish_list_sync_event") as publish_mock:
+        resp = await _post_req(
+            f"/lists/{_LIST_ID}/clear-stale-offers",
+            json={},
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "cleared": 1,
+        "cleared_names": ["Caciocavallo Silano D.O.P. Campolongo"],
+    }
+    rpc_mock.assert_awaited_once_with(
+        _LIST_ID,
+        _ITEM_ID,
+        {"pinned_offer_id": None, "found_deals": []},
+        _USER_ID,
+    )
+    publish_mock.assert_called_once_with(
+        _LIST_ID,
+        "list_updated",
+        "stale_offers_cleared",
+    )
+
+
 async def test_patch_selected_offer_returns_coherent_item():
     initial_items = [
         {

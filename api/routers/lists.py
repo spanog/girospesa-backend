@@ -1718,14 +1718,12 @@ async def clear_stale_offers(
 
     cleared_names: list[str] = []
     for entry in stale:
-        sb.rpc(
-            "update_list_item",
-            {
-                "p_list_id": list_id,
-                "p_item_id": entry["list_item_id"],
-                "p_updates": {"pinned_offer_id": None, "found_deals": []},
-            },
-        ).execute()
+        await _rpc_update_list_item(
+            list_id,
+            entry["list_item_id"],
+            {"pinned_offer_id": None, "found_deals": []},
+            user_id,
+        )
         cleared_names.append(entry["list_item_name"])
 
     if stale:

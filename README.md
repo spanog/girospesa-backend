@@ -130,6 +130,7 @@ Per sync quasi immediato tra membri, il backend espone anche `GET /lists/{list_i
 | `GET` | `/lists/{id}/members` | ✅ member | Lista membri lista condivisa con campi flatten `display_name`, `avatar_url` ed `email` pronti per UI |
 | `DELETE` | `/lists/{id}/members/{user_id}` | ✅ owner/member(self) | Owner rimuove un altro membro oppure un member lascia la lista da solo; riallinea `active_list_id` del target alla `Lista principale` e notifica solo parte interessata (utente rimosso oppure proprietario) |
 | `GET` | `/lists/{id}/deal-freshness` | ✅ member | Freshness di tutte le offerte pinnate nella lista; le offerte fuori raggio per il viewer corrente risultano `unavailable` con flag risposta `offer_visibility_status='hidden_for_viewer'`, senza esporre prezzo attuale |
+| `POST` | `/lists/{id}/clear-stale-offers` | ✅ member | Pulisce `pinned_offer_id` e `found_deals` degli item con offerte `expired`/`unavailable` tramite la stessa RPC concorrente-safe `update_list_item` usata dalle patch item, cosi' la vista "Per negozio" non mantiene snapshot scaduti |
 
 ### Prodotti e offerte (`/products`)
 
