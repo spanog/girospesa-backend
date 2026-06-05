@@ -125,6 +125,7 @@ async def list_products(
     category: str | None = Query(None),
     subcategory: str | None = Query(None),
     supermarket: str | None = Query(None, description="Supermarket slug"),
+    supermarket_id: str | None = Query(None, description="Exact supermarket id"),
     lat: float | None = Query(None, description="User latitude for distance filtering"),
     lng: float | None = Query(None, description="User longitude for distance filtering"),
     max_distance_km: float = Query(10.0, gt=0, le=100, description="Max supermarket distance in km"),
@@ -139,10 +140,10 @@ async def list_products(
     """
     sb = get_supabase()
 
-    supermarket_id: str | None = None
-    if supermarket:
-        supermarket_id = _resolve_supermarket_id(sb, supermarket)
-        if not supermarket_id:
+    resolved_supermarket_id = supermarket_id
+    if resolved_supermarket_id is None and supermarket:
+        resolved_supermarket_id = _resolve_supermarket_id(sb, supermarket)
+        if not resolved_supermarket_id:
             return {"items": [], "nextPage": None, "total": 0, "supermarket_count": 0, "expiring_soon_count": 0}
 
     nearby_ids: list[str] | None = None
@@ -160,7 +161,7 @@ async def list_products(
         product_ids=product_ids,
         category=category,
         subcategory=subcategory,
-        supermarket_id=supermarket_id,
+        supermarket_id=resolved_supermarket_id,
         nearby_ids=nearby_ids,
     )
     today = date.today()
