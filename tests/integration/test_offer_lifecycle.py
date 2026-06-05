@@ -187,6 +187,29 @@ def _make_mock_extraction_service(supabase_client):
     return MockExtractionService
 
 
+@pytest.fixture()
+def admin_profile(supabase_client):
+    email = f"admin_{uuid.uuid4().hex[:8]}@test.local"
+    resp = supabase_client.auth.admin.create_user(
+        {"email": email, "password": "Test_password_123!", "email_confirm": True}
+    )
+    user_id = resp.user.id
+    wait_for_user_bootstrap(user_id)
+    (
+        supabase_client.table("user_profiles")
+        .update({"role": "admin", "managed_supermarket_id": None})
+        .eq("id", user_id)
+        .execute()
+    )
+    profile = {
+        "id": user_id,
+        "role": "admin",
+        "managed_supermarket_id": None,
+    }
+    yield profile
+    supabase_client.auth.admin.delete_user(user_id)
+
+
 class TestOfferLifecycleIntegration:
     async def test_manager_offer_review_lifecycle(
         self,
@@ -278,17 +301,21 @@ class TestOfferLifecycleIntegration:
 
                 confirm_resp = await client.post(f"/flyers/{flyer_id}/offers/confirm")
                 assert confirm_resp.status_code == 200
-                assert confirm_resp.json() == {"confirmed": 1, "flyer_id": flyer_id}
+                confirm_body = confirm_resp.json()
+                assert confirm_body["confirmed"] == 1
+                assert confirm_body["flyer_id"] == flyer_id
+                assert len(confirm_body["published_flyers"]) == 1
 
                 confirmed_offer = (
                     supabase_client.table("offers")
-                    .select("is_confirmed, price_offer")
+                    .select("is_confirmed, price_offer, offer_kind")
                     .eq("id", offer_id)
                     .single()
                     .execute()
                 ).data
                 assert confirmed_offer["is_confirmed"] is True
                 assert confirmed_offer["price_offer"] == pytest.approx(2.49)
+                assert confirmed_offer["offer_kind"] == "source_master"
 
                 created_product = (
                     supabase_client.table("products")
@@ -304,3 +331,133 @@ class TestOfferLifecycleIntegration:
                 after_confirm_resp = await client.get("/products")
                 assert after_confirm_resp.status_code == 200
                 assert after_confirm_resp.json()["items"] == []
+
+    async def test_confirm_multi_supermarket_creates_two_published_clones(
+        self,
+        supabase_client,
+        clean_db,
+        admin_profile,
+    ):
+        primary_store = (
+            supabase_client.table("supermarkets")
+            .insert(
+                {
+                    "name": f"Primogenito {uuid.uuid4().hex[:6]}",
+                    "slug": f"primogenito-{uuid.uuid4().hex[:8]}",
+                    "lat": 45.0,
+                    "lng": 9.0,
+                }
+            )
+            .execute()
+        ).data[0]
+        secondary_store = (
+            supabase_client.table("supermarkets")
+            .insert(
+                {
+                    "name": f"Superstore {uuid.uuid4().hex[:6]}",
+                    "slug": f"superstore-{uuid.uuid4().hex[:8]}",
+                    "lat": 45.1,
+                    "lng": 9.1,
+                }
+            )
+            .execute()
+        ).data[0]
+        flyer = (
+            supabase_client.table("flyers")
+            .insert(
+                {
+                    "user_id": admin_profile["id"],
+                    "supermarket_id": primary_store["id"],
+                    "supermarket_name": primary_store["name"],
+                    "file_url": "https://storage.test/flyers/conad.pdf",
+                    "file_type": "pdf",
+                    "file_name": "conad.pdf",
+                    "valid_from": "2026-06-01",
+                    "valid_to": "2026-06-30",
+                    "status": "done",
+                    "is_public": False,
+                    "flyer_kind": "source",
+                    "file_hash": f"hash-{uuid.uuid4().hex}",
+                }
+            )
+            .execute()
+        ).data[0]
+        (
+            supabase_client.table("flyer_targets")
+            .insert(
+                [
+                    {"flyer_id": flyer["id"], "supermarket_id": primary_store["id"]},
+                    {"flyer_id": flyer["id"], "supermarket_id": secondary_store["id"]},
+                ]
+            )
+            .execute()
+        )
+        product = (
+            supabase_client.table("products")
+            .insert({"name": "Pasta Barilla", "brand": "Barilla", "category": "dispensa"})
+            .execute()
+        ).data[0]
+        source_offer = (
+            supabase_client.table("offers")
+            .insert(
+                {
+                    "product_id": product["id"],
+                    "draft_name": "Pasta Barilla",
+                    "draft_brand": "Barilla",
+                    "draft_category": "dispensa",
+                    "draft_subcategory": None,
+                    "draft_product_key": "pasta barilla|barilla",
+                    "flyer_id": flyer["id"],
+                    "supermarket_id": primary_store["id"],
+                    "supermarket_name": primary_store["name"],
+                    "price_offer": 1.99,
+                    "price_original": 2.99,
+                    "valid_from": "2026-06-01",
+                    "valid_to": "2026-06-30",
+                    "is_confirmed": False,
+                    "format_key": "fmt-1",
+                    "format_label": "500 g",
+                }
+            )
+            .execute()
+        ).data[0]
+
+        app = _create_test_app(admin_profile)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch("api.routers.flyers.get_supabase", return_value=supabase_client):
+                confirm_resp = await client.post(f"/flyers/{flyer['id']}/offers/confirm")
+
+        assert confirm_resp.status_code == 200
+        body = confirm_resp.json()
+        assert body["confirmed"] == 1
+        assert len(body["published_flyers"]) == 2
+
+        offers = (
+            supabase_client.table("offers")
+            .select("id, flyer_id, supermarket_id, is_confirmed, offer_kind, source_offer_id")
+            .eq("product_id", product["id"])
+            .order("created_at")
+            .execute()
+        ).data
+        assert len(offers) == 3
+        source_rows = [offer for offer in offers if offer["offer_kind"] == "source_master"]
+        published_rows = [offer for offer in offers if offer["offer_kind"] == "published_target"]
+        assert len(source_rows) == 1
+        assert source_rows[0]["id"] == source_offer["id"]
+        assert len(published_rows) == 2
+        assert {offer["supermarket_id"] for offer in published_rows} == {
+            primary_store["id"],
+            secondary_store["id"],
+        }
+        assert {offer["source_offer_id"] for offer in published_rows} == {source_offer["id"]}
+
+        visible_product_offers = (
+            supabase_client.table("offers")
+            .select("id")
+            .eq("product_id", product["id"])
+            .eq("is_confirmed", True)
+            .eq("offer_kind", "published_target")
+            .execute()
+        ).data
+        assert len(visible_product_offers) == 2

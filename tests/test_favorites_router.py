@@ -142,7 +142,8 @@ class TestListFavorites:
         table.select.return_value.eq.return_value.execute.return_value = favorites_resp
         (
             table.select.return_value
-            .eq.return_value.order.return_value
+            .eq.return_value.eq.return_value
+            .order.return_value
             .order.return_value.execute.return_value
         ) = offer_resp
 

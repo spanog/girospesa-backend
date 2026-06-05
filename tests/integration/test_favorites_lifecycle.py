@@ -117,6 +117,8 @@ def _insert_offer(
         "price_offer": price,
         "price_original": 1.49,
         "valid_to": valid_to,
+        "offer_kind": "published_target",
+        "is_confirmed": True,
     }
     if flyer_id:
         payload["flyer_id"] = flyer_id

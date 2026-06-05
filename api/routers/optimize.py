@@ -15,6 +15,7 @@ from services.offer_visibility import apply_current_offer_window
 from services.repositories import lists_repository as lists_repo
 
 router = APIRouter()
+_PUBLIC_OFFER_KIND = "published_target"
 
 _OFFER_SELECT = (
     "id, product_id, supermarket_id, supermarket_name, price_offer, "
@@ -74,7 +75,10 @@ def _load_active_offers(
     visible_supermarket_ids: set[str] | None,
 ) -> list[OfferCandidate]:
     query = apply_current_offer_window(
-        sb.table("offers").select(_OFFER_SELECT).eq("is_confirmed", True)
+        sb.table("offers")
+        .select(_OFFER_SELECT)
+        .eq("is_confirmed", True)
+        .eq("offer_kind", _PUBLIC_OFFER_KIND)
     )
     if visible_supermarket_ids is not None:
         if not visible_supermarket_ids:

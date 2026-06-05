@@ -157,6 +157,7 @@ def seeded_offer(supabase_client, seeded_product, seeded_supermarket):
             "unit_price_unit": "l",
             "valid_to": _FUTURE_DATE,
             "is_confirmed": True,
+            "offer_kind": "published_target",
         })
         .execute()
     ).data[0]
@@ -438,6 +439,7 @@ class TestOptimizeIntegration:
                 "price_original": 1.69,
                 "valid_to": _FUTURE_DATE,
                 "is_confirmed": True,
+                "offer_kind": "published_target",
             })
             .execute()
         ).data[0]
@@ -451,6 +453,7 @@ class TestOptimizeIntegration:
                 "price_original": 1.59,
                 "valid_to": _FUTURE_DATE,
                 "is_confirmed": True,
+                "offer_kind": "published_target",
             })
             .execute()
         ).data[0]

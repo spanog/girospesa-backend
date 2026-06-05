@@ -82,7 +82,7 @@ def _dev_allow_origins() -> list[str]:
 
 
 def _allow_origins() -> list[str]:
-    if settings.environment == "production":
+    if getattr(settings, "environment", "development") == "production":
         return [_frontend_origin()]
     return _dev_allow_origins()
 

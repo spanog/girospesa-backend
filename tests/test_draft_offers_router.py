@@ -630,6 +630,7 @@ class TestConfirmOffers:
         ]
         total_confirmed_result.count = confirmed_count
         sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value = total_confirmed_result
+        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = total_confirmed_result
         return sb
 
     @pytest.mark.asyncio
@@ -637,7 +638,21 @@ class TestConfirmOffers:
         sb = self._make_sb("done", 3)
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
-            patch("api.routers.flyers._flyer_targets", return_value=[{"supermarket_id": "sup-1", "supermarket_name": "Coop"}]),
+            patch("api.routers.flyers._flyer_targets", return_value=[
+                {"supermarket_id": "sup-1", "supermarket_name": "Coop"},
+                {"supermarket_id": "sup-2", "supermarket_name": "Conad"},
+            ]),
+            patch(
+                "api.routers.flyers._published_target_flyers",
+                side_effect=[
+                    {},
+                    {
+                        "sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"},
+                        "sup-2": {"flyer_id": "published-2", "supermarket_name": "Conad"},
+                    },
+                ],
+            ),
+            patch("api.routers.flyers._sync_published_clones_for_source_offer") as sync_mock,
             patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
         ):
             resp = await _post(
@@ -648,12 +663,25 @@ class TestConfirmOffers:
         data = resp.json()
         assert data["confirmed"] == 3
         assert data["flyer_id"] == "flyer-1"
-        notify_mock.assert_called_once_with(
+        assert len(data["published_flyers"]) == 2
+        notify_mock.assert_any_call(
             sb,
             flyer_id=ANY,
             supermarket_id="sup-1",
             supermarket_name="Coop",
             products_count=3,
+        )
+        notify_mock.assert_any_call(
+            sb,
+            flyer_id=ANY,
+            supermarket_id="sup-2",
+            supermarket_name="Conad",
+            products_count=3,
+        )
+        sync_mock.assert_called()
+        assert any(
+            call.args[0] == {"is_confirmed": True, "offer_kind": "source_master"}
+            for call in sb.table.return_value.update.call_args_list
         )
 
     @pytest.mark.asyncio
@@ -697,6 +725,14 @@ class TestConfirmOffers:
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
             patch("api.routers.flyers._flyer_targets", return_value=[{"supermarket_id": "sup-1", "supermarket_name": "Coop"}]),
+            patch(
+                "api.routers.flyers._published_target_flyers",
+                side_effect=[
+                    {"sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"}},
+                    {"sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"}},
+                ],
+            ),
+            patch("api.routers.flyers._sync_published_clones_for_source_offer"),
             patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
         ):
             resp = await _post(
@@ -759,6 +795,14 @@ class TestConfirmOffers:
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
             patch("api.routers.flyers._flyer_targets", return_value=[{"supermarket_id": "sup-1", "supermarket_name": "Coop"}]),
+            patch(
+                "api.routers.flyers._published_target_flyers",
+                side_effect=[
+                    {},
+                    {"sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"}},
+                ],
+            ),
+            patch("api.routers.flyers._sync_published_clones_for_source_offer"),
             patch("api.routers.flyers.upsert_product", return_value="prod-new") as mock_upsert,
         ):
             resp = await _post(
@@ -770,6 +814,158 @@ class TestConfirmOffers:
         assert mock_upsert.call_args.args[1]["image_url"] == (
             "https://storage.test/product-images/draft-offers/offer-1/prod.png"
         )
+
+    def test_sync_published_clones_updates_existing_rows_without_inserting_duplicates(self):
+        sb = MagicMock()
+        clone_result = MagicMock()
+        clone_result.data = [{"id": "clone-1", "supermarket_id": "sup-1", "source_offer_id": "offer-1"}]
+        sb.table.return_value.select.return_value.eq.return_value.execute.return_value = clone_result
+
+        _flyers_module._sync_published_clones_for_source_offer(
+            sb,
+            source_offer={
+                "id": "offer-1",
+                "product_id": "prod-1",
+                "draft_name": "Pasta",
+                "draft_brand": "Barilla",
+                "draft_category": "dispensa",
+                "draft_subcategory": None,
+                "draft_product_key": "pasta|barilla",
+                "draft_image_url": None,
+                "price_original": 2.99,
+                "price_offer": 1.99,
+                "discount_pct": 33,
+                "unit_price": None,
+                "unit_price_value": None,
+                "unit_price_unit": None,
+                "offer_type": None,
+                "offer_notes": None,
+                "valid_from": "2026-06-01",
+                "valid_to": "2026-06-10",
+                "is_active": True,
+                "raw_text": None,
+                "confidence_score": None,
+                "format": None,
+                "format_key": "fmt-1",
+                "format_label": "500 g",
+                "is_reviewed": False,
+            },
+            target_flyers={"sup-1": {"flyer_id": "flyer-target-1", "supermarket_name": "Coop"}},
+        )
+
+        sb.table.return_value.update.assert_called_once()
+        sb.table.return_value.insert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_patch_confirmed_source_offer_syncs_published_clones(self):
+        sb = MagicMock()
+        flyer_result = MagicMock()
+        flyer_result.data = {
+            "id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Coop",
+            "flyer_kind": "source",
+        }
+        offer_result = MagicMock()
+        offer_result.data = {
+            "id": "offer-1",
+            "product_id": "prod-1",
+            "flyer_id": "flyer-1",
+            "is_confirmed": True,
+        }
+        updated_offer = {
+            "id": "offer-1",
+            "flyer_id": "flyer-1",
+            "product_id": "prod-1",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Coop",
+            "draft_name": "Pasta Integrale",
+            "draft_brand": "Barilla",
+            "draft_category": "dispensa",
+            "draft_subcategory": None,
+            "draft_product_key": "pasta integrale|barilla",
+            "draft_image_url": None,
+            "price_offer": 1.99,
+            "price_original": None,
+            "discount_pct": None,
+            "unit_price": None,
+            "unit_price_value": None,
+            "unit_price_unit": None,
+            "offer_notes": None,
+            "valid_from": None,
+            "valid_to": None,
+            "is_confirmed": True,
+            "offer_kind": "source_master",
+            "is_reviewed": False,
+            "format": None,
+            "format_key": None,
+            "format_label": "",
+            "created_at": "2026-05-14T00:00:00Z",
+            "products": {
+                "id": "prod-1",
+                "name": "Pasta Integrale",
+                "brand": "Barilla",
+                "category": "dispensa",
+                "subcategory": None,
+                "image_url": None,
+            },
+        }
+        final_result = MagicMock()
+        final_result.data = updated_offer
+
+        sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = offer_result
+        sb.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = final_result
+        sb.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch(
+                "api.routers.flyers._published_target_flyers",
+                return_value={"sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"}},
+            ),
+            patch("api.routers.flyers._sync_published_clones_for_source_offer") as sync_mock,
+        ):
+            resp = await _patch_req(
+                "/flyers/flyer-1/draft-offers/offer-1",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                json={"name": "Pasta Integrale"},
+            )
+
+        assert resp.status_code == 200
+        sync_mock.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_delete_confirmed_source_offer_removes_published_clones(self):
+        sb = MagicMock()
+        flyer_result = MagicMock()
+        flyer_result.data = {
+            "id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Coop",
+            "flyer_kind": "source",
+        }
+        offer_result = MagicMock()
+        offer_result.data = {
+            "id": "offer-1",
+            "flyer_id": "flyer-1",
+            "is_confirmed": True,
+        }
+        sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = offer_result
+        sb.table.return_value.delete.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _flyers_module.delete_draft_offer(
+                "flyer-1",
+                "offer-1",
+                profile=ADMIN_PROFILE,
+            )
+
+        assert resp is None
+        eq_calls = sb.table.return_value.delete.return_value.eq.call_args_list
+        assert any(call.args == ("source_offer_id", "offer-1") for call in eq_calls)
+        assert any(call.args == ("id", "offer-1") for call in eq_calls)
 
 
 # ---------------------------------------------------------------------------

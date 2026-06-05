@@ -107,7 +107,22 @@ class TestFlyerUploadIntegration:
         app.dependency_overrides.clear()
         supabase_client.auth.admin.delete_user(user_id)
 
-    async def test_pdf_upload_creates_pending_row(self, supabase_client, clean_db):
+    @pytest.fixture()
+    def supermarket(self, supabase_client, clean_db):
+        return (
+            supabase_client.table("supermarkets")
+            .insert(
+                {
+                    "name": f"Upload Market {uuid.uuid4().hex[:6]}",
+                    "slug": f"upload-market-{uuid.uuid4().hex[:8]}",
+                    "lat": 45.0,
+                    "lng": 9.0,
+                }
+            )
+            .execute()
+        ).data[0]
+
+    async def test_pdf_upload_creates_pending_row(self, supabase_client, clean_db, supermarket):
         """Uploading a PDF creates a flyers row with status='pending' and file_type='pdf'."""
         sb = _make_supabase_real_db_mock_storage()
 
@@ -116,13 +131,13 @@ class TestFlyerUploadIntegration:
                 resp = await client.post(
                     "/flyers/upload",
                     files={"file": ("volantino.pdf", io.BytesIO(_unique_pdf()), "application/pdf")},
-                    data={"supermarket_name": "Esselunga"},
+                    data={"supermarket_ids": supermarket["id"]},
                 )
 
         assert resp.status_code == 201
         body = resp.json()
         assert body["status"] == "pending"
-        assert body["supermarket_name"] == "Esselunga"
+        assert body["supermarket_name"] == supermarket["name"]
         assert body["file_type"] == "pdf"
         assert body["user_id"] == app.dependency_overrides[get_current_user_id]()
 
@@ -136,11 +151,11 @@ class TestFlyerUploadIntegration:
         assert len(rows.data) == 1
         db_row = rows.data[0]
         assert db_row["status"] == "pending"
-        assert db_row["supermarket_name"] == "Esselunga"
+        assert db_row["supermarket_name"] == supermarket["name"]
         assert db_row["user_id"] == app.dependency_overrides[get_current_user_id]()
         assert db_row["file_type"] == "pdf"
 
-    async def test_image_upload_creates_pending_row(self, supabase_client, clean_db):
+    async def test_image_upload_creates_pending_row(self, supabase_client, clean_db, supermarket):
         """Uploading a JPEG image creates a row with file_type='image'."""
         sb = _make_supabase_real_db_mock_storage()
         jpeg_bytes = b"\xff\xd8\xff" + uuid.uuid4().bytes  # unique JPEG header
@@ -150,6 +165,7 @@ class TestFlyerUploadIntegration:
                 resp = await client.post(
                     "/flyers/upload",
                     files={"file": ("volantino.jpg", io.BytesIO(jpeg_bytes), "image/jpeg")},
+                    data={"supermarket_ids": supermarket["id"]},
                 )
 
         assert resp.status_code == 201
@@ -166,8 +182,8 @@ class TestFlyerUploadIntegration:
         assert rows.data[0]["status"] == "pending"
         assert rows.data[0]["file_type"] == "image"
 
-    async def test_upload_without_supermarket_creates_row(self, supabase_client, clean_db):
-        """Omitting supermarket_name is valid; the row is created with supermarket_name=NULL."""
+    async def test_upload_without_supermarket_name_uses_target_name(self, supabase_client, clean_db, supermarket):
+        """Omitting supermarket_name is valid when supermarket_ids are provided."""
         sb = _make_supabase_real_db_mock_storage()
 
         async with httpx.AsyncClient(app=app, base_url="http://test") as client:
@@ -175,22 +191,24 @@ class TestFlyerUploadIntegration:
                 resp = await client.post(
                     "/flyers/upload",
                     files={"file": ("v.pdf", io.BytesIO(_unique_pdf()), "application/pdf")},
+                    data={"supermarket_ids": supermarket["id"]},
                 )
 
         assert resp.status_code == 201
         body = resp.json()
         assert body["status"] == "pending"
-        assert body["supermarket_name"] is None
+        assert body["supermarket_name"] == supermarket["name"]
 
         rows = (
             supabase_client.table("flyers")
-            .select("supermarket_name")
+            .select("supermarket_name, supermarket_id")
             .eq("id", body["id"])
             .execute()
         )
-        assert rows.data[0]["supermarket_name"] is None
+        assert rows.data[0]["supermarket_name"] == supermarket["name"]
+        assert rows.data[0]["supermarket_id"] == supermarket["id"]
 
-    async def test_duplicate_hash_and_supermarket_returns_409(self, supabase_client, clean_db):
+    async def test_duplicate_hash_and_supermarket_returns_409(self, supabase_client, clean_db, supermarket):
         """Uploading the same file+supermarket combination twice returns 409 Conflict."""
         pdf_content = _unique_pdf()
         sb1 = _make_supabase_real_db_mock_storage()
@@ -202,7 +220,7 @@ class TestFlyerUploadIntegration:
                 r1 = await client.post(
                     "/flyers/upload",
                     files={"file": ("v.pdf", io.BytesIO(pdf_content), "application/pdf")},
-                    data={"supermarket_name": "Coop"},
+                    data={"supermarket_ids": supermarket["id"]},
                 )
             assert r1.status_code == 201
 
@@ -211,13 +229,13 @@ class TestFlyerUploadIntegration:
                 r2 = await client.post(
                     "/flyers/upload",
                     files={"file": ("v.pdf", io.BytesIO(pdf_content), "application/pdf")},
-                    data={"supermarket_name": "Coop"},
+                    data={"supermarket_ids": supermarket["id"]},
                 )
 
         assert r2.status_code == 409
         assert "already exists" in r2.json()["detail"]
 
-    async def test_upload_always_creates_private_flyer(self, supabase_client, clean_db):
+    async def test_upload_always_creates_private_flyer(self, supabase_client, clean_db, supermarket):
         """Upload ignores any is_public field; flyers stay private until offer confirmation."""
         sb = _make_supabase_real_db_mock_storage()
 
@@ -226,7 +244,7 @@ class TestFlyerUploadIntegration:
                 resp = await client.post(
                     "/flyers/upload",
                     files={"file": ("v.pdf", io.BytesIO(_unique_pdf()), "application/pdf")},
-                    data={"is_public": "true"},
+                    data={"is_public": "true", "supermarket_ids": supermarket["id"]},
                 )
 
         assert resp.status_code == 201

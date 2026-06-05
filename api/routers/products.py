@@ -17,6 +17,7 @@ _OFFER_PRODUCT_LIST_SELECT = (
     "products!inner(id, name, brand, category, subcategory, image_url), "
     "supermarkets(name, slug, logo_url, color_hex, address, city)"
 )
+_PUBLIC_OFFER_KIND = "published_target"
 
 
 def _format_supermarket_address(supermarket: dict) -> str | None:
@@ -168,6 +169,7 @@ async def list_products(
         sb.table("offers")
         .select(_OFFER_PRODUCT_LIST_SELECT, count="exact")
         .eq("is_confirmed", True)
+        .eq("offer_kind", _PUBLIC_OFFER_KIND)
     )
     if score_map is None:
         # Apply DB sort early (original chain order preserved for non-search path)
@@ -200,6 +202,7 @@ async def list_products(
                 sb.table("offers")
                 .select("supermarket_id, products!inner(id)")
                 .eq("is_confirmed", True)
+                .eq("offer_kind", _PUBLIC_OFFER_KIND)
             ),
             **filter_kwargs,
         )
@@ -210,6 +213,7 @@ async def list_products(
             sb.table("offers")
             .select("id, products!inner(id)", count="exact")
             .eq("is_confirmed", True)
+            .eq("offer_kind", _PUBLIC_OFFER_KIND)
         )
         es_query = apply_current_offer_window(es_query, today=today)
         es_query = _apply_offer_filters(es_query, **filter_kwargs)
@@ -233,6 +237,7 @@ async def get_product(product_id: str) -> dict:
             .select(_OFFER_PRODUCT_SELECT)
             .eq("id", product_id)
             .eq("is_confirmed", True)
+            .eq("offer_kind", _PUBLIC_OFFER_KIND)
         )
         .limit(1)
         .execute()
@@ -258,6 +263,7 @@ async def get_similar_products(product_id: str) -> list[dict]:
             .select("product_id, supermarket_id")
             .eq("id", product_id)
             .eq("is_confirmed", True)
+            .eq("offer_kind", _PUBLIC_OFFER_KIND)
         )
         .limit(1)
         .execute()
@@ -275,6 +281,7 @@ async def get_similar_products(product_id: str) -> list[dict]:
             .select(_OFFER_PRODUCT_SELECT)
             .eq("product_id", canonical_product_id)
             .eq("is_confirmed", True)
+            .eq("offer_kind", _PUBLIC_OFFER_KIND)
             .neq("id", product_id)
             .neq("supermarket_id", current_supermarket_id)
             .order("price_offer", desc=False)

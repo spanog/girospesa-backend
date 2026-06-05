@@ -11,6 +11,7 @@ from services.extraction.normalizer import format_unit_price_label
 from services.offer_visibility import apply_current_offer_window
 
 router = APIRouter()
+_PUBLIC_OFFER_KIND = "published_target"
 
 
 class AddFavoriteBody(BaseModel):
@@ -52,6 +53,7 @@ def _load_active_offers(sb, product_id: str) -> list[dict]:
                 "supermarkets(logo_url, address)"
             )
             .eq("product_id", product_id)
+            .eq("offer_kind", _PUBLIC_OFFER_KIND)
             .order("price_offer")
             .order("created_at", desc=True)
         )

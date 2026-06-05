@@ -3,6 +3,7 @@
   "profile": {
     "display_name": "Mario Rossi",
     "id": "user-1",
+    "managed_supermarket_ids": [],
     "role": "customer"
   },
   "user": {

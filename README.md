@@ -165,7 +165,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 | `GET` | `/flyers/{flyer_id}/draft-offers` | ✅ admin/manager | Lista offerte estratte ma non confermate |
 | `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline di una draft offer; `detach_product=true` rimuove il binding catalogo senza creare prodotti |
 | `POST` | `/flyers/{flyer_id}/draft-offers/{offer_id}/image` | ✅ admin/manager | Upload immagine prodotto staged per una bozza non agganciata; salva `draft_image_url` fino alla conferma |
-| `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma le draft del flyer sorgente, crea/upserta i prodotti canonici mancanti, poi materializza un volantino pubblico distinto e un set di offerte confermate distinto per ogni supermercato target |
+| `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma le draft del flyer sorgente, crea/upserta i prodotti canonici mancanti, marca le righe sorgente come `source_master`, poi materializza/upserta un volantino pubblico distinto e un set di offerte `published_target` distinto per ogni supermercato target |
 | `POST` | `/flyers/admin/cleanup` | 👑 admin | Trigger manuale pulizia volantini scaduti (eseguita automaticamente ogni mezzanotte) |
 
 ### Contratto prezzi estrazione
@@ -179,6 +179,11 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 - Gli endpoint che restituiscono offerte (`/products`, `/flyers/{flyer_id}/draft-offers`, `/favorites`, `/optimize`) espongono anche `unit_price_value`, `unit_price_unit`, `unit_price_label`.
 - `GET /flyers/{flyer_id}/draft-offers` espone `image_url` con precedenza `draft_image_url -> products.image_url`, così la review mostra l'immagine staged anche prima della creazione del prodotto canonico.
 - In review, validità offerte è flyer-scoped: creazione manuale bozza eredita sempre `flyers.valid_from`/`flyers.valid_to`, `PATCH /flyers/{flyer_id}/draft-offers/{offer_id}` non modifica più le date, e `PATCH /flyers/{flyer_id}` aggiorna l'intero set estratto.
+- Dopo la conferma finale esistono due livelli di offerte:
+  - righe sorgente `offers.offer_kind='source_master'` sul flyer `flyer_kind='source'`, usate come master admin per review/edit/delete
+  - cloni pubblici `offers.offer_kind='published_target'` su flyer `flyer_kind='published_target'`, uno per supermercato target
+- Ogni clone pubblico salva `source_offer_id` verso la riga `source_master` da cui deriva. Re-run della conferma e PATCH/DELETE su offerte confermate devono aggiornare o rimuovere i cloni esistenti, non duplicarli.
+- Gli endpoint customer-facing (`/products`, `/favorites`, `/optimize`) e le policy RLS pubbliche considerano offerte reali solo le righe `offer_kind='published_target'`.
 
 ### Contratto formato prodotto
 

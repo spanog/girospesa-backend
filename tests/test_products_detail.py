@@ -130,8 +130,8 @@ def _make_sb(offer_row=None, similar_rows=None, ref_row=None):
     sb = MagicMock()
     chain = sb.table.return_value.select.return_value
 
-    # get_product: .select().eq(id).eq(is_confirmed).limit(1).execute()
-    chain.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+    # get_product: .select().eq(id).eq(is_confirmed).eq(offer_kind).limit(1).execute()
+    chain.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
         data=[offer_row] if offer_row is not None else []
     )
 
@@ -155,13 +155,13 @@ class TestListProducts:
         sb = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
         select_mock = sb.table.return_value.select.return_value
-        eq_mock = select_mock.eq.return_value
-        order_mock = eq_mock.order.return_value
+        eq_kind_mock = select_mock.eq.return_value.eq.return_value
+        order_mock = eq_kind_mock.order.return_value
         order_mock.range.return_value.execute.return_value = execute_result
-        eq_mock.execute.return_value = MagicMock(
+        eq_kind_mock.execute.return_value = MagicMock(
             data=[{"supermarket_id": "sm-1"}]
         )
-        eq_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
+        eq_kind_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
             data=[],
             count=0,
         )
@@ -179,7 +179,8 @@ class TestListProducts:
         assert_matches_json_snapshot(request, "products_list_paginated", data)
 
         select_mock.eq.assert_any_call("is_confirmed", True)
-        select_mock.eq.return_value.order.assert_called_once_with(
+        select_mock.eq.return_value.eq.assert_any_call("offer_kind", "published_target")
+        eq_kind_mock.order.assert_called_once_with(
             "name",
             desc=False,
             foreign_table="products",
@@ -190,13 +191,13 @@ class TestListProducts:
         sb = MagicMock()
         execute_result = MagicMock(data=[], count=0)
         select_mock = sb.table.return_value.select.return_value
-        eq_mock = select_mock.eq.return_value
-        order_mock = eq_mock.order.return_value
+        eq_kind_mock = select_mock.eq.return_value.eq.return_value
+        order_mock = eq_kind_mock.order.return_value
         order_mock.range.return_value.execute.return_value = execute_result
-        eq_mock.execute.return_value = MagicMock(
+        eq_kind_mock.execute.return_value = MagicMock(
             data=[]
         )
-        eq_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
+        eq_kind_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
             data=[],
             count=0,
         )
@@ -213,22 +214,22 @@ class TestListProducts:
         assert resp.status_code == 200
         order_mock.range.assert_called_once()
         apply_window.assert_any_call(order_mock)
-        apply_window.assert_any_call(eq_mock)
-        apply_window.assert_any_call(eq_mock, today=ANY)
+        apply_window.assert_any_call(eq_kind_mock)
+        apply_window.assert_any_call(eq_kind_mock, today=ANY)
 
     @pytest.mark.asyncio
     async def test_expiry_sort_orders_by_valid_to_then_product_name(self):
         sb = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
         select_mock = sb.table.return_value.select.return_value
-        eq_mock = select_mock.eq.return_value
-        order_mock = eq_mock.order.return_value
+        eq_kind_mock = select_mock.eq.return_value.eq.return_value
+        order_mock = eq_kind_mock.order.return_value
         second_order_mock = order_mock.order.return_value
         second_order_mock.range.return_value.execute.return_value = execute_result
-        eq_mock.execute.return_value = MagicMock(
+        eq_kind_mock.execute.return_value = MagicMock(
             data=[]
         )
-        eq_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
+        eq_kind_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
             data=[],
             count=0,
         )
@@ -237,7 +238,7 @@ class TestListProducts:
             resp = await _get("/products?sort=expiry")
 
         assert resp.status_code == 200
-        eq_mock.order.assert_called_once_with(
+        eq_kind_mock.order.assert_called_once_with(
             "valid_to",
             desc=False,
             nullsfirst=False,
@@ -253,13 +254,13 @@ class TestListProducts:
         sb = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
         select_mock = sb.table.return_value.select.return_value
-        eq_mock = select_mock.eq.return_value
-        order_mock = eq_mock.order.return_value
+        eq_kind_mock = select_mock.eq.return_value.eq.return_value
+        order_mock = eq_kind_mock.order.return_value
         order_mock.gte.return_value.lte.return_value.range.return_value.execute.return_value = (
             execute_result
         )
-        eq_mock.execute.return_value = MagicMock(data=[{"supermarket_id": "sm-1"}])
-        eq_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
+        eq_kind_mock.execute.return_value = MagicMock(data=[{"supermarket_id": "sm-1"}])
+        eq_kind_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
             data=[],
             count=1,
         )
@@ -278,15 +279,15 @@ class TestListProducts:
         offers_chain = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
         select_mock = offers_chain.select.return_value
-        eq_mock = select_mock.eq.return_value
-        order_mock = eq_mock.order.return_value
+        eq_kind_mock = select_mock.eq.return_value.eq.return_value
+        order_mock = eq_kind_mock.order.return_value
         order_mock.in_.return_value.range.return_value.execute.return_value = (
             execute_result
         )
-        eq_mock.in_.return_value.execute.return_value = MagicMock(
+        eq_kind_mock.in_.return_value.execute.return_value = MagicMock(
             data=[{"supermarket_id": "sm-1"}]
         )
-        eq_mock.gte.return_value.lte.return_value.in_.return_value.execute.return_value = MagicMock(
+        eq_kind_mock.gte.return_value.lte.return_value.in_.return_value.execute.return_value = MagicMock(
             data=[],
             count=0,
         )
@@ -323,7 +324,7 @@ class TestListProducts:
             "expiring_soon_count": 0,
         }
         # Offers query should never be executed when nearby_ids is empty
-        offers_chain.select.return_value.eq.return_value.order.return_value.range.return_value.execute.assert_not_called()
+        offers_chain.select.return_value.eq.return_value.eq.return_value.order.return_value.range.return_value.execute.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_distance_filtering_uses_postgis_rpc(self):
@@ -331,15 +332,15 @@ class TestListProducts:
         offers_chain = MagicMock()
         execute_result = MagicMock(data=[_LIST_ROW], count=1)
         select_mock = offers_chain.select.return_value
-        eq_mock = select_mock.eq.return_value
-        order_mock = eq_mock.order.return_value
+        eq_kind_mock = select_mock.eq.return_value.eq.return_value
+        order_mock = eq_kind_mock.order.return_value
         order_mock.in_.return_value.range.return_value.execute.return_value = (
             execute_result
         )
-        eq_mock.in_.return_value.execute.return_value = MagicMock(
+        eq_kind_mock.in_.return_value.execute.return_value = MagicMock(
             data=[{"supermarket_id": "sm-1"}]
         )
-        eq_mock.gte.return_value.lte.return_value.in_.return_value.execute.return_value = MagicMock(
+        eq_kind_mock.gte.return_value.lte.return_value.in_.return_value.execute.return_value = MagicMock(
             data=[],
             count=0,
         )
@@ -493,13 +494,13 @@ class TestGetSimilarProducts:
         sb.table.return_value.select.side_effect = [ref_select, similar_select]
 
         ref_id_query = ref_select.eq.return_value
-        ref_confirmed_query = ref_id_query.eq.return_value
+        ref_confirmed_query = ref_id_query.eq.return_value.eq.return_value
         ref_confirmed_query.limit.return_value.execute.return_value = MagicMock(
             data=[{"product_id": "prod-1", "supermarket_id": "sm-1"}]
         )
 
         similar_product_query = similar_select.eq.return_value
-        similar_confirmed_query = similar_product_query.eq.return_value
+        similar_confirmed_query = similar_product_query.eq.return_value.eq.return_value
         similar_offer_exclusion_query = similar_confirmed_query.neq.return_value
         similar_market_exclusion_query = similar_offer_exclusion_query.neq.return_value
         similar_market_exclusion_query.order.return_value.limit.return_value.execute.return_value = MagicMock(
@@ -521,9 +522,11 @@ class TestGetSimilarProducts:
         assert results[0]["supermarket_address"] == "Via Roma 12, Milano"
         ref_select.eq.assert_called_once_with("id", "offer-1")
         ref_id_query.eq.assert_called_once_with("is_confirmed", True)
+        ref_id_query.eq.return_value.eq.assert_called_once_with("offer_kind", "published_target")
         ref_confirmed_query.limit.assert_called_once_with(1)
         similar_select.eq.assert_called_once_with("product_id", "prod-1")
         similar_product_query.eq.assert_called_once_with("is_confirmed", True)
+        similar_product_query.eq.return_value.eq.assert_called_once_with("offer_kind", "published_target")
         similar_confirmed_query.neq.assert_called_once_with("id", "offer-1")
         similar_offer_exclusion_query.neq.assert_called_once_with("supermarket_id", "sm-1")
         apply_window.assert_has_calls(
@@ -536,7 +539,7 @@ class TestGetSimilarProducts:
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_offer_not_found(self):
         sb = MagicMock()
-        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
             data=[]
         )
 
