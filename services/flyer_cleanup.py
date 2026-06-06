@@ -1,9 +1,9 @@
 """
-FlyerCleanupService — nightly deletion of expired flyers.
+FlyerCleanupService — nightly removal of offers from expired flyers.
 
 Scheduled daily at midnight (Europe/Rome) via APScheduler in main.py lifespan.
-Deletes: Supabase Storage file (best-effort) + DB row (CASCADE deletes all linked offers).
-Flyers with valid_to IS NULL are never auto-deleted.
+Keeps expired flyer rows and files for admin history, but deletes linked offers so
+customer-facing deal data stays clean. Flyers with valid_to IS NULL are ignored.
 """
 from __future__ import annotations
 
@@ -11,14 +11,12 @@ import logging
 from datetime import date
 from typing import Callable
 
-from core.config import settings
 from core.database import get_supabase
 from services.extraction.extraction_log import ERROR, INFO, log_event
 
 logger = logging.getLogger(__name__)
 
-_SELECT = "id, file_url, supermarket_name"
-_STORAGE_URL_PREFIX = "{supabase_url}/storage/v1/object/public/flyers/"
+_SELECT = "id, supermarket_name"
 
 
 class FlyerCleanupService:
@@ -45,34 +43,43 @@ class FlyerCleanupService:
             logger.info("Flyer cleanup: no expired flyers for %s", today)
             return 0
         logger.info("Flyer cleanup: %d expired flyer(s) for %s", len(expired), today)
-        deleted = sum(self._delete_one(sb, f) for f in expired)
-        logger.info("Flyer cleanup complete: %d/%d deleted", deleted, len(expired))
+        deleted = sum(self._delete_offers_for_flyer(sb, flyer) for flyer in expired)
+        logger.info(
+            "Flyer cleanup complete: %d offer(s) deleted across %d expired flyer(s)",
+            deleted,
+            len(expired),
+        )
         return deleted
 
-    def _delete_one(self, sb: object, flyer: dict) -> int:
+    def _delete_offers_for_flyer(self, sb: object, flyer: dict) -> int:
         flyer_id = flyer["id"]
         name = flyer.get("supermarket_name") or "?"
-        storage_path = self._extract_storage_path(flyer.get("file_url") or "")
-        if storage_path:
-            self._delete_storage_file(sb, flyer_id, name, storage_path)
-        log_event(sb, event_type=INFO, message=f"Deleting expired flyer: {name}", flyer_id=flyer_id, supermarket_name=name)
+        count = self._count_offers(sb, flyer_id)
+        if count <= 0:
+            logger.info("No offers to delete for expired flyer %s (%s)", flyer_id, name)
+            return 0
+        log_event(
+            sb,
+            event_type=INFO,
+            message=f"Deleting {count} expired offer(s) for flyer: {name}",
+            flyer_id=flyer_id,
+            supermarket_name=name,
+        )
         try:
-            sb.table("flyers").delete().eq("id", flyer_id).execute()
-            logger.info("Deleted flyer %s (%s)", flyer_id, name)
-            return 1
+            sb.table("offers").delete().eq("flyer_id", flyer_id).execute()
+            logger.info("Deleted %d offer(s) for expired flyer %s (%s)", count, flyer_id, name)
+            return count
         except Exception as exc:
-            logger.error("Failed to delete flyer row %s: %s", flyer_id, exc)
-            log_event(sb, event_type=ERROR, message=f"Row delete failed: {exc!s:.200}", flyer_id=None, supermarket_name=name)
+            logger.error("Failed to delete offers for flyer %s: %s", flyer_id, exc)
+            log_event(
+                sb,
+                event_type=ERROR,
+                message=f"Offer delete failed: {exc!s:.200}",
+                flyer_id=flyer_id,
+                supermarket_name=name,
+            )
             return 0
 
-    def _delete_storage_file(self, sb: object, flyer_id: str, name: str, path: str) -> None:
-        try:
-            sb.storage.from_("flyers").remove([path])
-        except Exception as exc:
-            logger.warning("Storage delete failed for %s (continuing): %s", flyer_id, exc)
-            log_event(sb, event_type=ERROR, message=f"Storage delete failed (continuing): {exc!s:.200}", flyer_id=flyer_id, supermarket_name=name)
-
-    def _extract_storage_path(self, file_url: str) -> str:
-        prefix = _STORAGE_URL_PREFIX.format(supabase_url=settings.supabase_url.rstrip("/"))
-        path = file_url.removeprefix(prefix)
-        return path if path != file_url else ""
+    def _count_offers(self, sb: object, flyer_id: str) -> int:
+        result = sb.table("offers").select("id", count="exact").eq("flyer_id", flyer_id).execute()
+        return result.count or 0

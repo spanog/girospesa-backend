@@ -477,6 +477,18 @@ def _set_active_list_id(user_id: str, list_id: str | None) -> None:
     repo.set_active_list_id(user_id, list_id)
 
 
+def _fallback_selected_list_for_users(
+    sb: object,
+    user_ids: set[str],
+    removed_list_id: str,
+) -> None:
+    for target_user_id in user_ids:
+        if _active_list_id_for_user(sb, target_user_id) != removed_list_id:
+            continue
+        fallback_list_id = repo.owner_list_id_for_user(sb, target_user_id)
+        _set_active_list_id(target_user_id, fallback_list_id)
+
+
 def _create_owned_list(
     *,
     user_id: str,
@@ -1624,9 +1636,7 @@ async def remove_member(
 
     list_row = _shopping_list_row(list_id)
     _delete_member(list_id, member_user_id)
-    if _active_list_id_for_user(sb, member_user_id) == list_id:
-        fallback_list_id = repo.owner_list_id_for_user(sb, member_user_id)
-        _set_active_list_id(member_user_id, fallback_list_id)
+    _fallback_selected_list_for_users(sb, {member_user_id}, list_id)
 
     if is_self_leave:
         owner_id = list_row.get("user_id")

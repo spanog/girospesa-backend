@@ -47,6 +47,7 @@
 - Source-flyer offers are authoring masters, not public offers. Persist `offers.offer_kind='source_master'` on source rows and `offers.offer_kind='published_target'` on derived public clones. Every published clone must set `source_offer_id` back to its source-master row.
 - Public/customer-facing offer reads (`/products`, `/favorites`, `/optimize`, authenticated browsing via RLS) must only treat `offer_kind='published_target'` as a real offer. Source-master rows stay visible only in source-flyer admin review.
 - Post-publication edits and deletes still happen from the source flyer. Updating or deleting a confirmed source-master row must propagate to all linked clones through `source_offer_id`.
+- Nightly cleanup must preserve expired `flyers` rows and files for admin history. Only linked `offers` are removed once `flyers.valid_to < today`.
 - Supermarket managers can belong to multiple branches through `manager_supermarkets`. Auth/session payloads should expose `managed_supermarket_ids`; `managed_supermarket_id` remains fallback-only for older rows/tests.
 - `POST /flyers/{flyer_id}/draft-offers/{offer_id}/image` accepts `multipart/form-data` only for `binding_status='new_on_confirm'` drafts. Bound or already-confirmed offers must not mutate catalog images from flyer review.
 - `format` must be structured `ProductFormat` JSON. Plain text format is forbidden.
@@ -83,8 +84,8 @@
 
 ## Admin Seed
 
-- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, populated `home_lat/home_lng` for that address, and one empty owner shopping list named `Lista principale`.
-- New auth users must get one empty owner shopping list named `Lista principale` from the DB signup trigger. The same trigger copies signup `raw_user_meta_data` address fields (`home_address`, `home_city`, `home_province`, `home_postal_code`) into `user_profiles`; keep this in sync with shared Supabase migrations.
+- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, populated `home_lat/home_lng` for that address, and one empty owner shopping list named `La mia lista`.
+- New auth users must get one empty owner shopping list named `La mia lista` from the DB signup trigger. The same trigger copies signup `raw_user_meta_data` address fields (`home_address`, `home_city`, `home_province`, `home_postal_code`) into `user_profiles`; keep this in sync with shared Supabase migrations.
 
 ## Optimizer
 

@@ -26,21 +26,39 @@ from services.flyer_cleanup import FlyerCleanupService  # noqa: E402
 _TODAY = date(2026, 4, 27)
 _FLYER_1 = {
     "id": "flyer-aaa",
-    "file_url": "https://test.supabase.co/storage/v1/object/public/flyers/user1/file.pdf",
     "supermarket_name": "Esselunga",
 }
 _FLYER_2 = {
     "id": "flyer-bbb",
-    "file_url": "https://test.supabase.co/storage/v1/object/public/flyers/user2/file2.pdf",
     "supermarket_name": "Lidl",
 }
 
 
-def _make_sb(expired_flyers: list[dict]) -> MagicMock:
+def _make_sb(expired_flyers: list[dict], offer_counts: dict[str, int] | None = None) -> MagicMock:
     sb = MagicMock()
-    result = MagicMock()
-    result.data = expired_flyers
-    sb.table.return_value.select.return_value.lt.return_value.neq.return_value.execute.return_value = result
+    offer_counts = offer_counts or {}
+    flyers_table = MagicMock()
+    offers_table = MagicMock()
+    sb.table.side_effect = lambda name: offers_table if name == "offers" else flyers_table
+
+    flyers_result = MagicMock()
+    flyers_result.data = expired_flyers
+    flyers_table.select.return_value.lt.return_value.neq.return_value.execute.return_value = flyers_result
+
+    def offers_select_side_effect(*args, **kwargs):
+        if kwargs.get("count") != "exact":
+            raise AssertionError("offers select should request exact count")
+        select_result = MagicMock()
+
+        def eq_side_effect(_column: str, flyer_id: str):
+            exec_query = MagicMock()
+            exec_query.execute.return_value = MagicMock(count=offer_counts.get(flyer_id, 0))
+            return exec_query
+
+        select_result.eq.side_effect = eq_side_effect
+        return select_result
+
+    offers_table.select.side_effect = offers_select_side_effect
     return sb
 
 
@@ -55,75 +73,40 @@ class TestNoExpiredFlyers:
         sb.table.return_value.delete.assert_not_called()
 
 
-class TestDeletesStorageAndRow:
-    def test_single_flyer_deleted(self):
-        sb = _make_sb([_FLYER_1])
+class TestDeletesOffersOnly:
+    def test_single_flyer_offers_deleted(self):
+        sb = _make_sb([_FLYER_1], {"flyer-aaa": 2})
         result = _make_svc(sb).run()
-        assert result == 1
-        sb.storage.from_.assert_called_with("flyers")
-        sb.storage.from_.return_value.remove.assert_called_once_with(["user1/file.pdf"])
-        sb.table.return_value.delete.return_value.eq.assert_called_with("id", "flyer-aaa")
+        assert result == 2
+        sb.storage.from_.assert_not_called()
+        offers_table = sb.table("offers")
+        offers_table.delete.return_value.eq.assert_called_with("flyer_id", "flyer-aaa")
 
     def test_multiple_flyers_all_deleted(self):
-        sb = _make_sb([_FLYER_1, _FLYER_2])
+        sb = _make_sb([_FLYER_1, _FLYER_2], {"flyer-aaa": 2, "flyer-bbb": 3})
         result = _make_svc(sb).run()
-        assert result == 2
-        assert sb.storage.from_.return_value.remove.call_count == 2
+        assert result == 5
+        offers_table = sb.table("offers")
+        assert offers_table.delete.return_value.eq.call_count == 2
 
-
-class TestStorageFailureContinues:
-    def test_storage_error_does_not_abort_row_delete(self):
-        sb = _make_sb([_FLYER_1])
-        sb.storage.from_.return_value.remove.side_effect = RuntimeError("bucket error")
+    def test_zero_offer_flyer_is_skipped(self):
+        sb = _make_sb([_FLYER_1], {"flyer-aaa": 0})
         _make_svc(sb).run()
-        sb.table.return_value.delete.return_value.eq.assert_called_with("id", "flyer-aaa")
-
-    def test_storage_error_multiple_flyers_both_rows_attempted(self):
-        sb = _make_sb([_FLYER_1, _FLYER_2])
-        sb.storage.from_.return_value.remove.side_effect = RuntimeError("bucket error")
-        result = _make_svc(sb).run()
-        assert sb.table.return_value.delete.return_value.eq.call_count == 2
-        assert result == 2
+        sb.table("offers").delete.assert_not_called()
 
 
 class TestRowDeleteFailureContinues:
     def test_row_delete_failure_counted_and_next_flyer_attempted(self):
-        sb = _make_sb([_FLYER_1, _FLYER_2])
-        sb.table.return_value.delete.return_value.eq.return_value.execute.side_effect = [
+        sb = _make_sb([_FLYER_1, _FLYER_2], {"flyer-aaa": 2, "flyer-bbb": 3})
+        sb.table("offers").delete.return_value.eq.return_value.execute.side_effect = [
             RuntimeError("db error"),
             MagicMock(),
         ]
         result = _make_svc(sb).run()
-        assert result == 1
+        assert result == 3
 
     def test_all_row_deletes_fail_returns_zero(self):
-        sb = _make_sb([_FLYER_1])
-        sb.table.return_value.delete.return_value.eq.return_value.execute.side_effect = RuntimeError("db error")
+        sb = _make_sb([_FLYER_1], {"flyer-aaa": 2})
+        sb.table("offers").delete.return_value.eq.return_value.execute.side_effect = RuntimeError("db error")
         result = _make_svc(sb).run()
         assert result == 0
-
-
-class TestExtractStoragePath:
-    def test_extracts_path_from_public_url(self):
-        svc = FlyerCleanupService(supabase_factory=lambda: MagicMock(), today_factory=lambda: _TODAY)
-        path = svc._extract_storage_path(
-            "https://test.supabase.co/storage/v1/object/public/flyers/user-id/abc.pdf"
-        )
-        assert path == "user-id/abc.pdf"
-
-    def test_unknown_url_returns_empty_string(self):
-        svc = FlyerCleanupService(supabase_factory=lambda: MagicMock(), today_factory=lambda: _TODAY)
-        path = svc._extract_storage_path("https://other-host.com/file.pdf")
-        assert path == ""
-
-    def test_empty_url_returns_empty_string(self):
-        svc = FlyerCleanupService(supabase_factory=lambda: MagicMock(), today_factory=lambda: _TODAY)
-        assert svc._extract_storage_path("") == ""
-
-
-class TestNoStorageUrlSkipsStorageDelete:
-    def test_no_file_url_skips_storage_delete(self):
-        flyer = {"id": "flyer-x", "file_url": None, "supermarket_name": "Test"}
-        sb = _make_sb([flyer])
-        _make_svc(sb).run()
-        sb.storage.from_.assert_not_called()
