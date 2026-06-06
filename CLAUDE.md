@@ -15,6 +15,7 @@
 - FastAPI is the only application layer allowed to touch database persistence details.
 - Frontend-facing features must expose backend endpoints instead of coupling UI code to Supabase tables/RPCs directly.
 - Keep raw SQL, PostgREST, Supabase service-role access, and schema-specific branching inside backend repositories/services, never inside frontend code.
+- No application endpoint may trust client-supplied `admin`, `manager`, `role`, or similar flags in query params, headers, or request bodies to determine privileges or data scope. Authorization must derive only from validated auth context server-side.
 - Auth BFF errors must not collapse into opaque `"failed"` responses. For signup, log upstream exception with stack trace server-side, but return only sanitized user-facing copy. Duplicate-email flow must not confirm account existence; use neutral text like `Registrazione non riuscita. Verifica i dati inseriti oppure accedi se hai già un account.`.
 
 ## Integration Test Isolation

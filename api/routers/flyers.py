@@ -423,7 +423,6 @@ def _assert_flyer_access(sb, profile: dict, flyer: dict) -> None:
 
 @router.get("")
 async def list_flyers(
-    admin: bool = Query(False),
     profile: dict = Depends(require_admin_or_manager),
 ) -> list[dict]:
     """Return flyers for admin/manager. Managers see only their supermarket's flyers."""

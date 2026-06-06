@@ -456,12 +456,71 @@ class TestManagerFlyerTargetsAccess:
 
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _get(
-                "/flyers?admin=true",
+                "/flyers",
                 {_DEP_PROFILE: lambda: MANAGER_PROFILE},
             )
 
         assert resp.status_code == 200
         assert [row["id"] for row in resp.json()] == ["flyer-source"]
+
+    @pytest.mark.asyncio
+    async def test_list_flyers_ignores_legacy_admin_query_flag(self):
+        sb = MagicMock()
+
+        flyers_table = MagicMock()
+        flyers_table.select.return_value.eq.return_value.order.return_value.execute.return_value = MagicMock(
+            data=[
+                {
+                    "id": "flyer-source",
+                    "supermarket_id": "sup-1",
+                    "supermarket_name": "Manager Market",
+                    "status": "done",
+                    "is_public": False,
+                    "flyer_kind": "source",
+                },
+                {
+                    "id": "flyer-other",
+                    "supermarket_id": "sup-other",
+                    "supermarket_name": "Other Market",
+                    "status": "done",
+                    "is_public": False,
+                    "flyer_kind": "source",
+                },
+            ]
+        )
+
+        flyer_targets_table = MagicMock()
+        flyer_targets_table.select.return_value.eq.return_value.execute.side_effect = [
+            MagicMock(data=[{"supermarket_id": "sup-1", "supermarkets": {"name": "Manager Market"}}]),
+            MagicMock(data=[{"supermarket_id": "sup-other", "supermarkets": {"name": "Other Market"}}]),
+            MagicMock(data=[{"supermarket_id": "sup-other", "supermarkets": {"name": "Other Market"}}]),
+            MagicMock(data=[{"supermarket_id": "sup-1", "supermarkets": {"name": "Manager Market"}}]),
+            MagicMock(data=[{"supermarket_id": "sup-other", "supermarkets": {"name": "Other Market"}}]),
+            MagicMock(data=[{"supermarket_id": "sup-other", "supermarkets": {"name": "Other Market"}}]),
+        ]
+
+        def _dispatch(table_name: str) -> MagicMock:
+            if table_name == "flyers":
+                return flyers_table
+            if table_name == "flyer_targets":
+                return flyer_targets_table
+            raise AssertionError(f"unexpected table {table_name}")
+
+        sb.table.side_effect = _dispatch
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            response_without_flag = await _get(
+                "/flyers",
+                {_DEP_PROFILE: lambda: MANAGER_PROFILE},
+            )
+            response_with_flag = await _get(
+                "/flyers?admin=true",
+                {_DEP_PROFILE: lambda: MANAGER_PROFILE},
+            )
+
+        assert response_without_flag.status_code == 200
+        assert response_with_flag.status_code == 200
+        assert response_with_flag.json() == response_without_flag.json()
 
     @pytest.mark.asyncio
     async def test_get_flyer_allows_source_flyer_when_manager_owns_one_target(self):

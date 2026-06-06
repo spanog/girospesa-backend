@@ -171,6 +171,8 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 | `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma le draft del flyer sorgente, crea/upserta i prodotti canonici mancanti, marca le righe sorgente come `source_master`, poi materializza/upserta un volantino pubblico distinto e un set di offerte `published_target` distinto per ogni supermercato target |
 | `POST` | `/flyers/admin/cleanup` | 👑 admin | Trigger manuale pulizia volantini scaduti (eseguita automaticamente ogni mezzanotte) |
 
+`GET /flyers` non accetta flag client come `admin`, `manager` o `role`: autorizzazione e scoping dei risultati dipendono esclusivamente dal JWT/sessione validati lato backend.
+
 ### Contratto prezzi estrazione
 
 - Il backend accetta sia il prompt legacy (`price_offer`, `category`, `subcategory`) sia il prompt v2 (`price_current`, `category_main`, `category_sub`, `discount_percentage`, `price_per_unit`, `price_per_unit_measure`).
