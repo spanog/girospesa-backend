@@ -171,7 +171,7 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 | `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma le draft del flyer sorgente, crea/upserta i prodotti canonici mancanti, marca le righe sorgente come `source_master`, poi materializza/upserta un volantino pubblico distinto e un set di offerte `published_target` distinto per ogni supermercato target |
 | `POST` | `/flyers/admin/cleanup` | 👑 admin | Trigger manuale pulizia volantini scaduti (eseguita automaticamente ogni mezzanotte) |
 
-`GET /flyers` non accetta flag client come `admin`, `manager` o `role`: autorizzazione e scoping dei risultati dipendono esclusivamente dal JWT/sessione validati lato backend.
+`GET /flyers` non accetta flag client come `admin`, `manager` o `role`: autorizzazione e scoping dei risultati dipendono esclusivamente dal JWT/sessione validati lato backend. Per i flyer sorgente, `GET /flyers` e `GET /flyers/{flyer_id}` espongono anche `draft_count`, `confirmed_count` e `published_target_count`, così la dashboard admin distingue correttamente tra "Da confermare" e "Elaborato" senza usare `is_public` del source flyer.
 
 ### Contratto prezzi estrazione
 

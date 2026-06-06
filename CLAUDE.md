@@ -48,6 +48,7 @@
 - Source-flyer offers are authoring masters, not public offers. Persist `offers.offer_kind='source_master'` on source rows and `offers.offer_kind='published_target'` on derived public clones. Every published clone must set `source_offer_id` back to its source-master row.
 - Public/customer-facing offer reads (`/products`, `/favorites`, `/optimize`, authenticated browsing via RLS) must only treat `offer_kind='published_target'` as a real offer. Source-master rows stay visible only in source-flyer admin review.
 - Post-publication edits and deletes still happen from the source flyer. Updating or deleting a confirmed source-master row must propagate to all linked clones through `source_offer_id`.
+- `GET /flyers` and `GET /flyers/{id}` for source flyers must expose `draft_count`, `confirmed_count`, and `published_target_count` so admin UI can distinguish "ancora da confermare" from "già pubblicato" without abusing `is_public` on the source flyer.
 - Nightly cleanup must preserve expired `flyers` rows and files for admin history. Only linked `offers` are removed once `flyers.valid_to < today`.
 - Supermarket managers can belong to multiple branches through `manager_supermarkets`. Auth/session payloads should expose `managed_supermarket_ids`; `managed_supermarket_id` remains fallback-only for older rows/tests.
 - `POST /flyers/{flyer_id}/draft-offers/{offer_id}/image` accepts `multipart/form-data` only for `binding_status='new_on_confirm'` drafts. Bound or already-confirmed offers must not mutate catalog images from flyer review.

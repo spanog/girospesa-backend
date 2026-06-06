@@ -445,11 +445,30 @@ class TestManagerFlyerTargetsAccess:
             MagicMock(data=[{"supermarket_id": "sup-other", "supermarkets": {"name": "Other Market"}}]),
         ]
 
+        offers_table = MagicMock()
+        offers_table.select.return_value.in_.return_value.eq.return_value.execute.side_effect = [
+            MagicMock(data=[]),
+            MagicMock(data=[]),
+        ]
+
+        published_targets_query = MagicMock()
+        published_targets_query.eq.return_value.in_.return_value.execute.return_value = MagicMock(
+            data=[]
+        )
+
         def _dispatch(table_name: str) -> MagicMock:
             if table_name == "flyers":
-                return flyers_table
+                class _FlyersDispatch:
+                    def select(self, *args, **kwargs):
+                        if args == ("*",):
+                            return flyers_table.select(*args, **kwargs)
+                        return published_targets_query
+
+                return _FlyersDispatch()
             if table_name == "flyer_targets":
                 return flyer_targets_table
+            if table_name == "offers":
+                return offers_table
             raise AssertionError(f"unexpected table {table_name}")
 
         sb.table.side_effect = _dispatch
@@ -499,11 +518,33 @@ class TestManagerFlyerTargetsAccess:
             MagicMock(data=[{"supermarket_id": "sup-other", "supermarkets": {"name": "Other Market"}}]),
         ]
 
+        offers_table = MagicMock()
+        offers_table.select.return_value.in_.return_value.eq.return_value.execute.side_effect = [
+            MagicMock(data=[]),
+            MagicMock(data=[]),
+            MagicMock(data=[]),
+            MagicMock(data=[]),
+        ]
+
+        published_targets_query = MagicMock()
+        published_targets_query.eq.return_value.in_.return_value.execute.side_effect = [
+            MagicMock(data=[]),
+            MagicMock(data=[]),
+        ]
+
         def _dispatch(table_name: str) -> MagicMock:
             if table_name == "flyers":
-                return flyers_table
+                class _FlyersDispatch:
+                    def select(self, *args, **kwargs):
+                        if args == ("*",):
+                            return flyers_table.select(*args, **kwargs)
+                        return published_targets_query
+
+                return _FlyersDispatch()
             if table_name == "flyer_targets":
                 return flyer_targets_table
+            if table_name == "offers":
+                return offers_table
             raise AssertionError(f"unexpected table {table_name}")
 
         sb.table.side_effect = _dispatch
@@ -521,6 +562,68 @@ class TestManagerFlyerTargetsAccess:
         assert response_without_flag.status_code == 200
         assert response_with_flag.status_code == 200
         assert response_with_flag.json() == response_without_flag.json()
+
+    @pytest.mark.asyncio
+    async def test_list_flyers_includes_confirmation_counts_for_source_flyer(self):
+        sb = MagicMock()
+
+        flyers_table = MagicMock()
+        flyers_table.select.return_value.eq.return_value.order.return_value.execute.return_value = MagicMock(
+            data=[
+                {
+                    "id": "flyer-source",
+                    "supermarket_id": "sup-1",
+                    "supermarket_name": "Manager Market",
+                    "status": "done",
+                    "is_public": False,
+                    "flyer_kind": "source",
+                }
+            ]
+        )
+
+        flyer_targets_table = MagicMock()
+        flyer_targets_table.select.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"supermarket_id": "sup-1", "supermarkets": {"name": "Manager Market"}}]
+        )
+
+        offers_table = MagicMock()
+        offers_table.select.return_value.in_.return_value.eq.return_value.execute.side_effect = [
+            MagicMock(data=[]),
+            MagicMock(data=[{"flyer_id": "flyer-source"}, {"flyer_id": "flyer-source"}]),
+        ]
+
+        published_targets_query = MagicMock()
+        published_targets_query.eq.return_value.in_.return_value.execute.return_value = MagicMock(
+            data=[{"source_flyer_id": "flyer-source"}]
+        )
+
+        def _dispatch(table_name: str) -> MagicMock:
+            if table_name == "flyers":
+                class _FlyersDispatch:
+                    def select(self, *args, **kwargs):
+                        if args == ("*",):
+                            return flyers_table.select(*args, **kwargs)
+                        return published_targets_query
+
+                return _FlyersDispatch()
+            if table_name == "flyer_targets":
+                return flyer_targets_table
+            if table_name == "offers":
+                return offers_table
+            raise AssertionError(f"unexpected table {table_name}")
+
+        sb.table.side_effect = _dispatch
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _get(
+                "/flyers",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()[0]["draft_count"] == 0
+        assert resp.json()[0]["confirmed_count"] == 2
+        assert resp.json()[0]["published_target_count"] == 1
 
     @pytest.mark.asyncio
     async def test_get_flyer_allows_source_flyer_when_manager_owns_one_target(self):
@@ -543,11 +646,30 @@ class TestManagerFlyerTargetsAccess:
             data=[{"supermarket_id": "sup-1", "supermarkets": {"name": "Manager Market"}}]
         )
 
+        offers_table = MagicMock()
+        offers_table.select.return_value.in_.return_value.eq.return_value.execute.side_effect = [
+            MagicMock(data=[]),
+            MagicMock(data=[]),
+        ]
+
+        published_targets_query = MagicMock()
+        published_targets_query.eq.return_value.in_.return_value.execute.return_value = MagicMock(
+            data=[]
+        )
+
         def _dispatch(table_name: str) -> MagicMock:
             if table_name == "flyers":
-                return flyers_table
+                class _FlyersDispatch:
+                    def select(self, *args, **kwargs):
+                        if args == ("*",):
+                            return flyers_table.select(*args, **kwargs)
+                        return published_targets_query
+
+                return _FlyersDispatch()
             if table_name == "flyer_targets":
                 return flyer_targets_table
+            if table_name == "offers":
+                return offers_table
             raise AssertionError(f"unexpected table {table_name}")
 
         sb.table.side_effect = _dispatch

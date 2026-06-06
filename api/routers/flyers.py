@@ -96,6 +96,52 @@ def _confirmed_count_by_flyer(sb, flyer_ids: list[str]) -> dict[str, int]:
     return confirmed_by_flyer
 
 
+def _offer_count_by_flyer(
+    sb,
+    flyer_ids: list[str],
+    *,
+    is_confirmed: bool,
+) -> dict[str, int]:
+    if not flyer_ids:
+        return {}
+
+    result = (
+        sb.table("offers")
+        .select("flyer_id")
+        .in_("flyer_id", flyer_ids)
+        .eq("is_confirmed", is_confirmed)
+        .execute()
+    )
+    counts: dict[str, int] = {}
+    for row in result.data or []:
+        flyer_id = row["flyer_id"]
+        counts[flyer_id] = counts.get(flyer_id, 0) + 1
+    return counts
+
+
+def _published_target_count_by_source_flyer(
+    sb,
+    source_flyer_ids: list[str],
+) -> dict[str, int]:
+    if not source_flyer_ids:
+        return {}
+
+    result = (
+        sb.table("flyers")
+        .select("source_flyer_id")
+        .eq("flyer_kind", "published_target")
+        .in_("source_flyer_id", source_flyer_ids)
+        .execute()
+    )
+    counts: dict[str, int] = {}
+    for row in result.data or []:
+        source_flyer_id = row.get("source_flyer_id")
+        if not source_flyer_id:
+            continue
+        counts[source_flyer_id] = counts.get(source_flyer_id, 0) + 1
+    return counts
+
+
 def _has_confirmed_offers(sb, flyer_id: str) -> bool:
     result = apply_current_offer_window(
         sb.table("offers")
@@ -135,10 +181,23 @@ def _flyer_targets(sb, flyer_id: str) -> list[dict]:
     return targets
 
 
-def _enrich_flyer(sb, flyer: dict) -> dict:
+def _enrich_flyer(
+    sb,
+    flyer: dict,
+    *,
+    source_draft_count: int | None = None,
+    source_confirmed_count: int | None = None,
+    published_target_count: int | None = None,
+) -> dict:
     enriched = dict(flyer)
     enriched["flyer_kind"] = flyer.get("flyer_kind") or "source"
     enriched["targets"] = _flyer_targets(sb, flyer["id"]) if enriched["flyer_kind"] == "source" else []
+    if source_draft_count is not None:
+        enriched["draft_count"] = source_draft_count
+    if source_confirmed_count is not None:
+        enriched["confirmed_count"] = source_confirmed_count
+    if published_target_count is not None:
+        enriched["published_target_count"] = published_target_count
     return enriched
 
 
@@ -434,7 +493,21 @@ async def list_flyers(
         .order("created_at", desc=True)
     )
     response = query.execute()
-    flyers = [_enrich_flyer(sb, flyer) for flyer in (response.data or [])]
+    raw_flyers = response.data or []
+    flyer_ids = [flyer["id"] for flyer in raw_flyers if flyer.get("id")]
+    draft_counts = _offer_count_by_flyer(sb, flyer_ids, is_confirmed=False)
+    confirmed_counts = _offer_count_by_flyer(sb, flyer_ids, is_confirmed=True)
+    published_target_counts = _published_target_count_by_source_flyer(sb, flyer_ids)
+    flyers = [
+        _enrich_flyer(
+            sb,
+            flyer,
+            source_draft_count=draft_counts.get(flyer["id"], 0),
+            source_confirmed_count=confirmed_counts.get(flyer["id"], 0),
+            published_target_count=published_target_counts.get(flyer["id"], 0),
+        )
+        for flyer in raw_flyers
+    ]
     if profile.get("role") != "supermarket_manager":
         return flyers
     return [flyer for flyer in flyers if _manager_can_access_flyer(sb, profile, flyer)]
@@ -682,7 +755,13 @@ async def get_flyer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
     flyer = result.data
     _assert_flyer_access(sb, profile, flyer)
-    return _enrich_flyer(sb, flyer)
+    return _enrich_flyer(
+        sb,
+        flyer,
+        source_draft_count=_offer_count_by_flyer(sb, [flyer_id], is_confirmed=False).get(flyer_id, 0),
+        source_confirmed_count=_offer_count_by_flyer(sb, [flyer_id], is_confirmed=True).get(flyer_id, 0),
+        published_target_count=_published_target_count_by_source_flyer(sb, [flyer_id]).get(flyer_id, 0),
+    )
 
 
 @router.patch("/{flyer_id}")
