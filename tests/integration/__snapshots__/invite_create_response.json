@@ -9,6 +9,5 @@
   "invited_by": "<uuid>",
   "invited_user_id": null,
   "list_id": "<uuid>",
-  "status": "pending",
-  "token": "<token>"
+  "status": "pending"
 }

@@ -135,7 +135,6 @@ async def test_accept_invite_publishes_members_and_invites_updates():
          patch.object(_lists_module, "_invite_for_user", return_value=invite), \
          patch.object(_lists_module, "_existing_member", return_value=False), \
          patch.object(_lists_module, "_insert_member"), \
-         patch.object(_lists_module, "_set_active_list_id"), \
          patch.object(_lists_module, "_set_invite_status"), \
          patch.object(_lists_module, "_mark_invite_notifications_read"), \
          patch.object(_lists_module, "_publish_list_sync_event") as publish_mock:

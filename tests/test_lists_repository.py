@@ -61,7 +61,6 @@ def test_create_owned_list_falls_back_to_supabase_when_direct_postgres_missing(m
     created = lists_repository.create_owned_list(
         user_id="user-1",
         name="Weekend",
-        is_default=False,
         items=[],
     )
 
@@ -88,3 +87,53 @@ def test_delete_member_falls_back_to_supabase_when_direct_postgres_missing(monke
     assert fake.store["list_members"] == [
         {"list_id": "list-1", "user_id": "user-1", "role": "owner"}
     ]
+
+
+def test_resolved_list_id_prefers_explicit_active_selection(monkeypatch):
+    monkeypatch.setattr(
+        lists_repository,
+        "active_list_id_for_user",
+        lambda _sb, _user_id: "list-shared",
+    )
+    monkeypatch.setattr(
+        lists_repository,
+        "visible_memberships",
+        lambda _sb, _user_id: [
+            {"list_id": "list-owner", "role": "owner"},
+            {"list_id": "list-shared", "role": "member"},
+        ],
+    )
+    monkeypatch.setattr(
+        lists_repository,
+        "owner_list_id_for_user",
+        lambda _sb, _user_id: "list-owner",
+    )
+
+    resolved = lists_repository.resolved_list_id_for_user(object(), "user-1")
+
+    assert resolved == "list-shared"
+
+
+def test_resolved_list_id_falls_back_to_owner_when_active_selection_invalid(monkeypatch):
+    monkeypatch.setattr(
+        lists_repository,
+        "active_list_id_for_user",
+        lambda _sb, _user_id: "list-removed",
+    )
+    monkeypatch.setattr(
+        lists_repository,
+        "visible_memberships",
+        lambda _sb, _user_id: [
+            {"list_id": "list-owner", "role": "owner"},
+            {"list_id": "list-shared", "role": "member"},
+        ],
+    )
+    monkeypatch.setattr(
+        lists_repository,
+        "owner_list_id_for_user",
+        lambda _sb, _user_id: "list-owner",
+    )
+
+    resolved = lists_repository.resolved_list_id_for_user(object(), "user-1")
+
+    assert resolved == "list-owner"

@@ -83,8 +83,8 @@
 
 ## Admin Seed
 
-- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, populated `home_lat/home_lng` for that address, one default empty owner shopping list named `Lista principale`, and `user_profiles.active_list_id` aligned to that default list.
-- New auth users must get one default empty owner shopping list named `Lista principale` from the DB signup trigger, plus `user_profiles.active_list_id` pointing to it. The same trigger copies signup `raw_user_meta_data` address fields (`home_address`, `home_city`, `home_province`, `home_postal_code`) into `user_profiles`; keep this in sync with shared Supabase migrations.
+- `scripts.seed_admin` must be idempotent and must ensure the admin has `app_metadata.role = "admin"`, `public.user_profiles.role = 'admin'`, address `Via Palmiro Togliatti, 89024 Polistena (RC)`, populated `home_lat/home_lng` for that address, and one empty owner shopping list named `Lista principale`.
+- New auth users must get one empty owner shopping list named `Lista principale` from the DB signup trigger. The same trigger copies signup `raw_user_meta_data` address fields (`home_address`, `home_city`, `home_province`, `home_postal_code`) into `user_profiles`; keep this in sync with shared Supabase migrations.
 
 ## Optimizer
 
@@ -97,10 +97,11 @@
 
 ## Shopping Lists
 
-- Shopping lists are multi-list: `GET /lists` returns owned + shared summaries, `POST /lists` creates non-default owned lists, `POST /lists/select` sets current `user_profiles.active_list_id`, and `GET /lists/active` stays compatibility alias for selected list detail.
-- Default list is protected: owner may share it but may never rename or delete it. Non-default owned lists may be renamed/deleted only by owner; shared members cannot rename/delete owner lists. When owner deletes shared non-default list, active members must receive `app_notifications` + Web Push (if subscribed) and their `active_list_id` must fall back to default list.
-- When owner removes one member from a shared list via `DELETE /lists/{list_id}/members/{user_id}`, target membership must be deleted, target `active_list_id` must fall back to default list if it pointed to removed list, and only removed user must receive `app_notifications` + Web Push with redirect payload to `/lista`.
-- Same `DELETE /lists/{list_id}/members/{user_id}` endpoint also allows a shared `member` to remove only themselves from that list. Self-leave must delete membership, fall back `active_list_id` to default list when needed, and notify only list owner via `app_notifications` + Web Push with redirect payload to `/lista`.
+- Shopping lists are single-owner-list for MVP, but shared workspaces remain selectable. Every account owns exactly one protected owner list; `GET /lists` returns the owner list plus any shared lists visible to the user, includes `owner_display_name` for selector labeling, and `POST /lists/select` persists which visible list is currently active via `user_profiles.active_list_id`.
+- `GET /lists/active` must resolve the current workspace in this order: explicit active shared/owner list if still visible, fallback owner list, fallback first visible shared list. If no owner list exists yet, create it and persist it as active.
+- Owner list is protected: no create-secondary-owner-list flow remains. Shared members cannot rename/delete owner lists.
+- When owner removes one member from a shared list via `DELETE /lists/{list_id}/members/{user_id}`, target membership must be deleted and only removed user must receive `app_notifications` + Web Push with redirect payload to `/lista`.
+- Same `DELETE /lists/{list_id}/members/{user_id}` endpoint also allows a shared `member` to remove only themselves from that list. Self-leave must delete membership and notify only list owner via `app_notifications` + Web Push with redirect payload to `/lista`.
 - Shared-list notifications `list_member_removed` and `list_member_left` must include actor identity in human-readable form `Nome Cognome (email)` when email is available, while preserving structured payload keys for display name and email separately.
 - `GET /lists/{list_id}/members` must return member rows already flattened for frontend consumption: top-level `display_name`, `avatar_url`, and `email`, without requiring client-side unpacking of nested profile objects.
 - Sync live lista condivisa passa da `GET /lists/{list_id}/events` (`text/event-stream`): backend pubblica `pg_notify` con payload JSON minimale (`list_id`, `event`, `reason`, `changed_at`, `id`) dopo mutazioni lista, membership o invite. Non introdurre broadcaster in-memory per questo dominio.
@@ -111,13 +112,13 @@
 - Use RPC helpers for concurrent-safe item mutation (`update_list_item`, `append_list_item`, `remove_list_item`) instead of overwriting full `shopping_lists.items` arrays. These RPCs are `SECURITY INVOKER` and must keep `search_path = public` pinned.
 - When backend creates an owned list through direct Postgres right after `auth.admin.create_user`, guard against short auth/db propagation lag: wait for `auth.users` row visibility before retrying the insert instead of failing the request with an FK race.
 - Direct sharing flow is email-targeted: `POST /lists/{list_id}/invites` resolves an already-registered auth user, creates `list_invites` + `app_notifications`, and recipient accepts/declines via `/lists/invites/{invite_id}/accept|decline`. Invite create/list/revoke and legacy token-share create are owner-only; shared members may not manage invites. `DELETE /lists/{list_id}` on shared lists also emits `app_notifications` to active members with payload redirecting to `/lista`.
-- Accepting direct share invite via `POST /lists/invites/{invite_id}/accept` must immediately switch recipient `user_profiles.active_list_id` to invited list before frontend redirect/query invalidation runs.
+- Accepting direct share invite via `POST /lists/invites/{invite_id}/accept` must create membership, update invite state, and set that shared list as the recipient's active workspace.
 - Revoking a pending direct share invite must not erase inbox history. `DELETE /lists/{list_id}/invites/{invite_id}` sets invite `status='revoked'` and updates existing `app_notifications` row with `data.invite_status='revoked'` plus `revoked_at`. Subsequent `/lists/invites/{invite_id}/accept|decline` calls for that recipient must return explicit `409 Invite has been revoked`, not `404`.
 
 ## Push Favorites Webhook
 
 - `POST /push/notify-favorites` must ignore offers that are draft/unconfirmed, outside current validity window, missing a flyer, or linked to a non-public / non-done flyer. Favorite notifications are only for publicly visible offers. For each eligible recipient with `notifications_enabled=true`, persist an `app_notifications` row with kind `favorite_offer` before attempting Web Push delivery, so inbox history survives closed clients or missing browser delivery.
-- Tutti gli eventi notificabili (`favorite_offer`, `flyer_published`, `list_invite`, `list_deleted`, `list_member_removed`, `list_member_left`, `extraction_complete`, `extraction_failed`) devono rispettare unico flag `user_profiles.notifications_enabled`: se `false`, non persistere inbox notification e non tentare consegna Web Push.
+- Tutti gli eventi notificabili (`favorite_offer`, `flyer_published`, `list_invite`, `list_member_removed`, `list_member_left`, `extraction_complete`, `extraction_failed`) devono rispettare unico flag `user_profiles.notifications_enabled`: se `false`, non persistere inbox notification e non tentare consegna Web Push.
 - Le notifiche customer `flyer_published` devono partire solo da `POST /flyers/{flyer_id}/offers/confirm`, esclusivamente alla prima pubblicazione del volantino (`flyers.is_public` prima `false`, dopo `true`) e solo per profili `customer` con `notifications_enabled=true` e supermercato entro `max_distance_km` usando `search_*` come priorita` rispetto a `home_*`.
 
 ## Ignore Rules

@@ -63,16 +63,15 @@ def _insert_owned_list_row(
     name: str,
     items: list[dict] | None,
     is_active: bool,
-    is_default: bool,
 ) -> dict:
     deadline = time.monotonic() + 3.0
-    params = (user_id, name, psycopg2.extras.Json(items or []), is_active, is_default)
+    params = (user_id, name, psycopg2.extras.Json(items or []), is_active)
     while True:
         try:
             cursor.execute(
                 """
-                INSERT INTO public.shopping_lists (user_id, name, items, is_active, is_default)
-                VALUES (%s, %s, %s::jsonb, %s, %s)
+                INSERT INTO public.shopping_lists (user_id, name, items, is_active)
+                VALUES (%s, %s, %s::jsonb, %s)
                 RETURNING id, user_id, name, items, is_active, created_at, updated_at
                 """,
                 params,
@@ -147,7 +146,7 @@ def profile_row(sb: object, user_id: str) -> dict:
     if not has_direct_postgres():
         response = (
             sb.table("user_profiles")
-            .select("active_list_id, display_name")
+            .select("display_name")
             .eq("id", user_id)
             .single()
             .execute()
@@ -156,20 +155,54 @@ def profile_row(sb: object, user_id: str) -> dict:
     with get_postgres_cursor() as cursor:
         cursor.execute(
             """
-            SELECT active_list_id, display_name
+            SELECT display_name
             FROM public.user_profiles
             WHERE id = %s
             """,
             (user_id,),
         )
         row = cursor.fetchone()
-    return _normalize_db_row(dict(row)) if row else {"active_list_id": None, "display_name": None}
+    return _normalize_db_row(dict(row)) if row else {"display_name": None}
+
+
+def active_list_id_for_user(sb: object, user_id: str) -> str | None:
+    if not has_direct_postgres():
+        response = (
+            sb.table("user_profiles")
+            .select("active_list_id")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if not response.data:
+            return None
+        return response.data[0].get("active_list_id")
+    with get_postgres_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT active_list_id
+            FROM public.user_profiles
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        row = cursor.fetchone()
+    if not row:
+        return None
+    value = row.get("active_list_id")
+    return str(value) if value else None
 
 
 def set_active_list_id(user_id: str, list_id: str | None) -> None:
     if not has_direct_postgres():
-        sb = get_supabase()
-        sb.table("user_profiles").update({"active_list_id": list_id}).eq("id", user_id).execute()
+        (
+            get_supabase()
+            .table("user_profiles")
+            .update({"active_list_id": list_id})
+            .eq("id", user_id)
+            .execute()
+        )
         return
     with get_postgres_cursor() as cursor:
         cursor.execute(
@@ -182,14 +215,14 @@ def set_active_list_id(user_id: str, list_id: str | None) -> None:
         )
 
 
-def default_list_id_for_user(sb: object, user_id: str) -> str | None:
+def owner_list_id_for_user(sb: object, user_id: str) -> str | None:
     if not has_direct_postgres():
         response = (
             sb.table("shopping_lists")
             .select("id")
             .eq("user_id", user_id)
-            .eq("is_default", True)
             .limit(1)
+            .order("updated_at", desc=True)
             .execute()
         )
         if not response.data:
@@ -201,8 +234,7 @@ def default_list_id_for_user(sb: object, user_id: str) -> str | None:
             SELECT id
             FROM public.shopping_lists
             WHERE user_id = %s
-              AND is_default = true
-            ORDER BY created_at ASC NULLS LAST, id ASC
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
             LIMIT 1
             """,
             (user_id,),
@@ -211,55 +243,10 @@ def default_list_id_for_user(sb: object, user_id: str) -> str | None:
     return str(row["id"]) if row else None
 
 
-def is_default_by_list_id(list_id: str) -> bool:
-    if not has_direct_postgres():
-        sb = get_supabase()
-        response = (
-            sb.table("shopping_lists")
-            .select("is_default")
-            .eq("id", list_id)
-            .limit(1)
-            .execute()
-        )
-        return bool(response.data and response.data[0].get("is_default"))
-    with get_postgres_cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT is_default
-            FROM public.shopping_lists
-            WHERE id = %s
-            """,
-            (list_id,),
-        )
-        row = cursor.fetchone()
-    return bool(row["is_default"]) if row else False
-
-
-def list_default_flags(list_ids: list[str]) -> dict[str, bool]:
-    if not list_ids:
-        return {}
-    if not has_direct_postgres():
-        sb = get_supabase()
-        rows = sb.table("shopping_lists").select("id, is_default").in_("id", list_ids).execute().data
-        return {row["id"]: bool(row.get("is_default")) for row in rows}
-    with get_postgres_cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT id, is_default
-            FROM public.shopping_lists
-            WHERE id = ANY(%s::uuid[])
-            """,
-            (list_ids,),
-        )
-        rows = cursor.fetchall()
-    return {str(row["id"]): bool(row["is_default"]) for row in rows}
-
-
 def create_owned_list(
     *,
     user_id: str,
     name: str,
-    is_default: bool,
     is_active: bool = True,
     items: list[dict] | None = None,
 ) -> dict:
@@ -272,7 +259,6 @@ def create_owned_list(
                 "name": name,
                 "items": items or [],
                 "is_active": is_active,
-                "is_default": is_default,
             })
             .execute()
             .data[0]
@@ -291,7 +277,6 @@ def create_owned_list(
                 name=name,
                 items=items,
                 is_active=is_active,
-                is_default=is_default,
             )
         except psycopg2_errors.ForeignKeyViolation as exc:
             raise HTTPException(status_code=409, detail="User profile is not ready yet") from exc
@@ -358,30 +343,6 @@ def shopping_list_rows(list_ids: list[str]) -> list[dict]:
     return [_normalize_db_row(dict(row)) for row in rows]
 
 
-def rename_shopping_list(list_id: str, name: str) -> None:
-    if not has_direct_postgres():
-        get_supabase().table("shopping_lists").update({"name": name}).eq("id", list_id).execute()
-        return
-    with get_postgres_cursor() as cursor:
-        cursor.execute(
-            """
-            UPDATE public.shopping_lists
-            SET name = %s,
-                updated_at = now()
-            WHERE id = %s
-            """,
-            (name, list_id),
-        )
-
-
-def delete_shopping_list(list_id: str) -> None:
-    if not has_direct_postgres():
-        get_supabase().table("shopping_lists").delete().eq("id", list_id).execute()
-        return
-    with get_postgres_cursor() as cursor:
-        cursor.execute("DELETE FROM public.shopping_lists WHERE id = %s", (list_id,))
-
-
 def visible_memberships(sb: object, user_id: str) -> list[dict]:
     if not has_direct_postgres():
         return sb.table("list_members").select("list_id, role").eq("user_id", user_id).execute().data
@@ -397,6 +358,26 @@ def visible_memberships(sb: object, user_id: str) -> list[dict]:
         )
         rows = cursor.fetchall()
     return [_normalize_db_row(dict(row)) for row in rows]
+
+
+def resolved_list_id_for_user(sb: object, user_id: str) -> str | None:
+    active_list_id = active_list_id_for_user(sb, user_id)
+    memberships = visible_memberships(sb, user_id)
+    membership_list_ids = {row["list_id"] for row in memberships}
+    if active_list_id and active_list_id in membership_list_ids:
+        return active_list_id
+
+    owner_list_id = owner_list_id_for_user(sb, user_id)
+    if owner_list_id and owner_list_id in membership_list_ids:
+        return owner_list_id
+    if owner_list_id:
+        return owner_list_id
+    if memberships:
+        shared_memberships = [row for row in memberships if row.get("role") == "member"]
+        if shared_memberships:
+            return shared_memberships[0]["list_id"]
+        return memberships[0]["list_id"]
+    return None
 
 
 def list_member_role(sb: object, list_id: str, user_id: str) -> str | None:
@@ -449,6 +430,60 @@ def member_counts(list_ids: list[str]) -> dict[str, int]:
         )
         rows = cursor.fetchall()
     return {str(row["list_id"]): int(row["member_count"]) for row in rows}
+
+
+def owner_display_names(list_ids: list[str]) -> dict[str, str | None]:
+    if not list_ids:
+        return {}
+    if not has_direct_postgres():
+        sb = get_supabase()
+        owner_rows = (
+            sb.table("list_members")
+            .select("list_id, user_id, role")
+            .in_("list_id", list_ids)
+            .eq("role", "owner")
+            .execute()
+            .data
+        )
+        owner_user_ids = sorted({
+            row["user_id"]
+            for row in owner_rows
+            if row.get("user_id")
+        })
+        profiles_by_id: dict[str, str | None] = {}
+        if owner_user_ids:
+            profile_rows = (
+                sb.table("user_profiles")
+                .select("id, display_name")
+                .in_("id", owner_user_ids)
+                .execute()
+                .data
+            )
+            profiles_by_id = {
+                str(row["id"]): row.get("display_name")
+                for row in profile_rows
+            }
+        return {
+            str(row["list_id"]): profiles_by_id.get(str(row["user_id"]))
+            for row in owner_rows
+        }
+
+    with get_postgres_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT lm.list_id, up.display_name
+            FROM public.list_members lm
+            LEFT JOIN public.user_profiles up ON up.id = lm.user_id
+            WHERE lm.list_id = ANY(%s::uuid[])
+              AND lm.role = 'owner'
+            """,
+            (list_ids,),
+        )
+        rows = cursor.fetchall()
+    return {
+        str(row["list_id"]): row.get("display_name")
+        for row in rows
+    }
 
 
 def pending_list_invites_for_user(user_id: str) -> list[dict]:

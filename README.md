@@ -59,7 +59,7 @@ girospesa-backend/
 │   ├── flyers.py             # Upload volantini, listing volantini pubblici
 │   ├── optimize.py           # Algoritmo greedy set-cover per ottimizzazione lista
 │   ├── supermarkets.py       # Directory supermercati (pubblica)
-│   ├── invite.py             # Inviti lista condivisa (token-based)
+│   ├── lists.py              # Lista singola + condivisione via inviti email
 │   ├── push.py               # Iscrizioni Web Push + webhook notifiche preferiti
 │   ├── purchases.py          # Storico acquisti, tracking risparmio
 │   ├── analytics.py          # Analytics B2B anonimizzata (API key auth)
@@ -113,12 +113,14 @@ Il backend usa tre livelli di autenticazione:
 
 ### Lista spesa (`/lists`)
 
-Le liste non-default possono essere eliminate solo dal proprietario. Se lista condivisa viene rimossa, backend riallinea gli `active_list_id` dei membri alla loro `Lista principale`, crea una `app_notification` persistente per ogni membro attivo e prova anche l'invio Web Push se esiste una subscription. Anche la rimozione di un singolo membro da una lista condivisa riallinea l'`active_list_id` del target alla sua `Lista principale` e genera notifica persistente + Web Push solo per l'utente rimosso. Lo stesso endpoint supporta anche il self-leave: un `member` può uscire dalla lista condivisa rimuovendo solo la propria membership; in quel caso il fallback della lista attiva avviene sul membro uscente e la notifica inbox/Web Push viene inviata solo al proprietario della lista. Le notifiche `list_member_removed` e `list_member_left` mostrano l'identità dell'attore come `Nome Cognome (email)` quando l'email è disponibile, e mantengono anche i campi strutturati nel payload per eventuale rendering dedicato. Condivisione e gestione inviti restano owner-only: solo il proprietario può creare inviti email o token, elencare inviti pendenti e revocarli; un membro condiviso può solo leggere i membri della lista e lasciare la propria membership. Ogni read/write lista resta limitato a proprietario o membri condivisi; un invito pending non concede accesso finché non viene accettato. Quando utente accetta invito diretto email, backend imposta subito quella lista come `active_list_id`, cosi `/lists/active` e redirect frontend verso `/lista?list=...` restano allineati. Nei deploy con accesso Postgres diretto, la creazione lista owned gestisce anche il breve lag tra `auth.admin.create_user` e visibilità della riga in `auth.users`, ritentando l'insert dopo attesa breve invece di fallire con FK race.
+Ogni account possiede una sola lista owner stabile, ma puo' anche partecipare a piu' liste condivise. `GET /lists` restituisce il workspace owner piu' tutte le liste condivise visibili; `POST /lists/select` salva su `user_profiles.active_list_id` quale workspace l'utente sta usando in questo momento. `GET /lists/active` risolve quindi prima la lista selezionata se ancora accessibile, poi la lista owner come fallback, e infine una lista condivisa ancora visibile se necessario. Quando un invito viene accettato, la lista condivisa appena ricevuta diventa attiva; quando l'utente esce da una condivisione o viene rimosso, il backend riallinea la selezione alla lista owner. Le notifiche `list_member_removed` e `list_member_left` mostrano l'identita' dell'attore come `Nome Cognome (email)` quando l'email e' disponibile, e mantengono anche i campi strutturati nel payload per eventuale rendering dedicato. Condivisione e gestione inviti restano owner-only tramite inviti email diretti: solo il proprietario puo' creare inviti, elencare inviti pendenti e revocarli; un membro condiviso puo' solo leggere i membri della lista e lasciare la propria membership.
 Per sync quasi immediato tra membri, il backend espone anche `GET /lists/{list_id}/events` come stream `text/event-stream`: ogni mutazione lista/membership/invite pubblica un `pg_notify` su canale Postgres dedicato, lo stream inoltra solo eventi della lista sottoscritta e il frontend invalida le query locali senza refresh manuale.
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `GET` | `/lists/active` | ✅ | Lista attiva; auto-crea `Lista principale` se non esiste; arricchisce gli item con `brand`, `category` e `subcategory`, facendo backfill del brand da prodotto/offerta quando lo snapshot storico non lo contiene. Per liste condivise, il pin offerta resta canonico nel DB ma la risposta maschera prezzo/supermercato quando il viewer non vede quel supermercato nel proprio raggio attivo |
+| `GET` | `/lists` | ✅ | Elenca tutti i workspace visibili all'utente: unica lista owner protetta + eventuali liste condivise, con metadati `is_active`, `is_owner`, `member_role`, `owner_display_name`, contatori e ordinamento pronto per il selector frontend |
+| `POST` | `/lists/select` | ✅ | Imposta la lista attiva corrente scegliendo uno dei workspace visibili all'utente e persiste `active_list_id` |
+| `GET` | `/lists/active` | ✅ | Lista attiva; auto-crea la lista owner `La mia lista` se non esiste; arricchisce gli item con `brand`, `category` e `subcategory`, facendo backfill del brand da prodotto/offerta quando lo snapshot storico non lo contiene. Il nome risposta è già viewer-specifico: owner vede `La mia lista`, i membri vedono `La lista di <owner>`. Per liste condivise, il pin offerta resta canonico nel DB ma la risposta maschera prezzo/supermercato quando il viewer non vede quel supermercato nel proprio raggio attivo |
 | `GET` | `/lists/{id}/events` | ✅ member | Stream SSE autenticato via cookie session; inoltra eventi `list_updated`, `members_updated`, `invites_updated` per sync live della lista condivisa |
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
 | `POST` | `/lists/{id}/items/remove-purchased` | ✅ member | Rimuove in blocco dalla lista solo gli item acquistati e restituisce la lista aggiornata, senza cancellare `purchase_history` |
@@ -128,7 +130,7 @@ Per sync quasi immediato tra membri, il backend espone anche `GET /lists/{list_i
 | `POST` | `/lists/{id}/items/{item_id}/toggle` | ✅ member | Check/uncheck item; registra `checked_by`, `checked_at` |
 | `POST` | `/lists/{id}/invite` | ✅ owner | Crea link invito (token 64 char, TTL 7 giorni) |
 | `GET` | `/lists/{id}/members` | ✅ member | Lista membri lista condivisa con campi flatten `display_name`, `avatar_url` ed `email` pronti per UI |
-| `DELETE` | `/lists/{id}/members/{user_id}` | ✅ owner/member(self) | Owner rimuove un altro membro oppure un member lascia la lista da solo; riallinea `active_list_id` del target alla `Lista principale` e notifica solo parte interessata (utente rimosso oppure proprietario) |
+| `DELETE` | `/lists/{id}/members/{user_id}` | ✅ owner/member(self) | Owner rimuove un altro membro oppure un member lascia la lista da solo; la vista torna sulla lista owner implicita e viene notificata solo la parte interessata |
 | `GET` | `/lists/{id}/deal-freshness` | ✅ member | Freshness di tutte le offerte pinnate nella lista; le offerte fuori raggio per il viewer corrente risultano `unavailable` con flag risposta `offer_visibility_status='hidden_for_viewer'`, senza esporre prezzo attuale |
 | `POST` | `/lists/{id}/clear-stale-offers` | ✅ member | Pulisce `pinned_offer_id` e `found_deals` degli item con offerte `expired`/`unavailable` tramite la stessa RPC concorrente-safe `update_list_item` usata dalle patch item, cosi' la vista "Per negozio" non mantiene snapshot scaduti |
 
@@ -222,8 +224,8 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `GET` | `/invite/{token}` | ❌ | Valida token; restituisce nome lista e chi ha invitato |
-| `POST` | `/invite/{token}/accept` | ✅ | Accetta invito e diventa membro della lista |
+| `GET` | `/lists/invites` | ✅ | Elenca inviti ricevuti dall'utente autenticato |
+| `POST` | `/lists/invites/{invite_id}/accept` | ✅ | Accetta invito email e diventa membro della lista |
 
 ### Push notification (`/push`)
 
@@ -301,7 +303,7 @@ curl -X POST http://localhost:8000/flyers/admin/cleanup \
 - Log estrazione canonico: `extraction_log`. Eventuali ambienti locali legacy con `scraping_log` vengono riallineati dalla migration di hardening.
 - PostGIS è abilitato nello schema `extensions`. `supermarkets.location`, `user_profiles.home_location` e `user_profiles.search_location` sono `geography(Point, 4326)` indicizzate GiST; la RPC `nearby_supermarkets` usa `ST_DWithin` e `ST_Distance`.
 - Gli helper RLS per le liste condivise vivono nello schema non esposto `private` (`private.is_list_member`, `private.is_list_owner`). Restano `SECURITY DEFINER` per evitare ricorsione nelle policy, ma non sono endpoint RPC pubblici su `/rest/v1/rpc/*`.
-- Il trigger DB di signup `public.handle_new_user()` crea `user_profiles` copiando `display_name` e campi indirizzo (`home_address`, `home_city`, `home_province`, `home_postal_code`) da `raw_user_meta_data`, poi crea la lista predefinita `Lista principale` e allinea `active_list_id`.
+- Il trigger DB di signup `public.handle_new_user()` crea `user_profiles` copiando `display_name` e campi indirizzo (`home_address`, `home_city`, `home_province`, `home_postal_code`) da `raw_user_meta_data`, poi crea la lista owner `La mia lista` e la relativa membership `owner`.
 
 ## Flussi principali
 
@@ -390,15 +392,11 @@ Frontend
 ### 4. Lista condivisa
 
 ```
-  Proprietario: POST /lists/{id}/invite
-    Backend: genera token (64 char hex), expires_at = +7 giorni
-    Backend: inserisce list_invites row
+  Proprietario: POST /lists/{id}/invites
+    Backend: crea invito email diretto su list_invites
                     │
-  Condivide link: /invite/{token}
-                    │
-  Ospite: GET /invite/{token}   → valida token, mostra nome lista
-  Ospite: accede, fa login su Supabase
-  Ospite: POST /invite/{token}/accept
+  Destinatario: apre /lista?panel=inviti
+  Destinatario: POST /lists/invites/{invite_id}/accept
     Backend: inserisce list_members {role: 'member'}
     Backend: segna invite → accepted
                     │

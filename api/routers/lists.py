@@ -42,7 +42,7 @@ from services.list_sync import (
 )
 
 router = APIRouter()
-DEFAULT_LIST_NAME = "Lista principale"
+DEFAULT_LIST_NAME = "La mia lista"
 
 PRODUCT_SUBCATEGORIES = {
     "alimentari-freschi": {
@@ -103,18 +103,6 @@ def _verify_owner(sb: object, list_id: str, user_id: str) -> None:
     repo.verify_owner(sb, list_id, user_id)
 
 
-class CreateListBody(BaseModel):
-    name: str = DEFAULT_LIST_NAME
-
-
-class RenameListBody(BaseModel):
-    name: str
-
-
-class SelectListBody(BaseModel):
-    list_id: str
-
-
 class AddItemBody(BaseModel):
     name: str
     brand: str | None = None
@@ -126,12 +114,12 @@ class AddItemBody(BaseModel):
     image_url: str | None = None
 
 
-class InviteBody(BaseModel):
-    email: str | None = None
-
-
 class InviteByEmailBody(BaseModel):
     email: str
+
+
+class SelectListBody(BaseModel):
+    list_id: str
 
 
 class UpdateListItemBody(BaseModel):
@@ -481,51 +469,24 @@ def _profile_row(sb: object, user_id: str) -> dict:
     return repo.profile_row(sb, user_id)
 
 
+def _active_list_id_for_user(sb: object, user_id: str) -> str | None:
+    return repo.active_list_id_for_user(sb, user_id)
+
+
 def _set_active_list_id(user_id: str, list_id: str | None) -> None:
     repo.set_active_list_id(user_id, list_id)
-
-
-def _default_list_id_for_user(sb: object, user_id: str) -> str | None:
-    return repo.default_list_id_for_user(sb, user_id)
-
-
-def _is_default_by_list_id(list_id: str) -> bool:
-    return repo.is_default_by_list_id(list_id)
-
-
-def _list_default_flags(list_ids: list[str]) -> dict[str, bool]:
-    return repo.list_default_flags(list_ids)
-
-
-def _insert_shopping_list(
-    *,
-    user_id: str,
-    name: str,
-    is_default: bool,
-    is_active: bool = True,
-    items: list[dict] | None = None,
-) -> dict:
-    return repo.create_owned_list(
-        user_id=user_id,
-        name=name,
-        is_default=is_default,
-        is_active=is_active,
-        items=items,
-    )
 
 
 def _create_owned_list(
     *,
     user_id: str,
     name: str,
-    is_default: bool,
     is_active: bool = True,
     items: list[dict] | None = None,
 ) -> dict:
     return repo.create_owned_list(
         user_id=user_id,
         name=name,
-        is_default=is_default,
         is_active=is_active,
         items=items,
     )
@@ -538,40 +499,57 @@ def _shopping_list_row(list_id: str) -> dict:
 def _shopping_list_rows(list_ids: list[str]) -> list[dict]:
     return repo.shopping_list_rows(list_ids)
 
-
-def _rename_shopping_list(list_id: str, name: str) -> None:
-    repo.rename_shopping_list(list_id, name)
-
-
-def _delete_shopping_list(list_id: str) -> None:
-    repo.delete_shopping_list(list_id)
-
-
 def _visible_memberships(sb: object, user_id: str) -> list[dict]:
     return repo.visible_memberships(sb, user_id)
 
-
-def _resolve_selected_list_id(sb: object, user_id: str) -> str | None:
-    profile = _profile_row(sb, user_id)
-    memberships = _visible_memberships(sb, user_id)
-    visible_ids = {row["list_id"] for row in memberships}
-    active_list_id = profile.get("active_list_id")
-    if active_list_id and active_list_id in visible_ids:
-        return active_list_id
-    default_list_id = _default_list_id_for_user(sb, user_id)
-    if default_list_id:
-        if active_list_id != default_list_id:
-            _set_active_list_id(user_id, default_list_id)
-        return default_list_id
-    if memberships:
-        fallback_id = memberships[0]["list_id"]
-        _set_active_list_id(user_id, fallback_id)
-        return fallback_id
-    return None
+def _resolve_list_id_for_user(sb: object, user_id: str) -> str | None:
+    return repo.resolved_list_id_for_user(sb, user_id)
 
 
 def _list_member_role(sb: object, list_id: str, user_id: str) -> str | None:
     return repo.list_member_role(sb, list_id, user_id)
+
+
+def _workspace_display_name(
+    *,
+    stored_name: str | None,
+    is_owner: bool,
+    owner_display_name: str | None,
+) -> str:
+    if is_owner:
+        return DEFAULT_LIST_NAME
+    owner_name = (owner_display_name or "").strip()
+    if owner_name:
+        return f"La lista di {owner_name}"
+    return stored_name or "Lista condivisa"
+
+
+def _list_summary(
+    sb: object,
+    row: dict,
+    user_id: str,
+    member_count: int,
+    owner_display_name: str | None = None,
+) -> dict:
+    member_role = _list_member_role(sb, row["id"], user_id)
+    is_owner = member_role == "owner"
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "name": _workspace_display_name(
+            stored_name=row.get("name"),
+            is_owner=is_owner,
+            owner_display_name=owner_display_name,
+        ),
+        "owner_display_name": owner_display_name,
+        "is_active": row.get("is_active", True),
+        "member_role": member_role,
+        "is_owner": is_owner,
+        "member_count": member_count,
+        "item_count": len(row.get("items") or []),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
 
 
 def _list_detail(sb: object, list_id: str, user_id: str) -> dict:
@@ -579,12 +557,16 @@ def _list_detail(sb: object, list_id: str, user_id: str) -> dict:
     row = _shopping_list_row(list_id)
     items = _enrich_items_with_categories(sb, row.get("items") or [])
     row["items"] = _project_list_items_for_viewer(sb, items, user_id)
-    row["is_default"] = _is_default_by_list_id(list_id)
     member_role = _list_member_role(sb, list_id, user_id)
-    selected_list_id = _resolve_selected_list_id(sb, user_id)
+    owner_display_name = repo.profile_row(sb, row["user_id"]).get("display_name")
     row["member_role"] = member_role
     row["is_owner"] = member_role == "owner"
-    row["is_selected"] = row["id"] == selected_list_id
+    row["owner_display_name"] = owner_display_name
+    row["name"] = _workspace_display_name(
+        stored_name=row.get("name"),
+        is_owner=row["is_owner"],
+        owner_display_name=owner_display_name,
+    )
     return row
 
 
@@ -630,40 +612,14 @@ def _member_counts(list_ids: list[str]) -> dict[str, int]:
     return repo.member_counts(list_ids)
 
 
-def _fallback_selected_list_for_users(sb: object, user_ids: set[str], deleted_list_id: str) -> None:
-    for impacted_user_id in user_ids:
-        default_list_id = _default_list_id_for_user(sb, impacted_user_id)
-        if default_list_id is None:
-            created = _create_owned_list(
-                user_id=impacted_user_id,
-                name=DEFAULT_LIST_NAME,
-                items=[],
-                is_active=True,
-                is_default=True,
-            )
-            default_list_id = created["id"]
-        current = _profile_row(sb, impacted_user_id)
-        if current.get("active_list_id") in {None, deleted_list_id}:
-            _set_active_list_id(impacted_user_id, default_list_id)
-
-
 def _invite_payload(list_name: str, inviter_name: str | None, invite_id: str, list_id: str) -> dict:
     return {
         "invite_id": invite_id,
         "invite_status": "pending",
         "list_id": list_id,
-        "url": f"/lista?invite={invite_id}&list={list_id}",
+        "url": f"/lista?panel=inviti",
         "list_name": list_name,
         "invited_by": inviter_name,
-    }
-
-
-def _list_deleted_payload(list_name: str, deleted_by: str | None, list_id: str) -> dict:
-    return {
-        "list_id": list_id,
-        "list_name": list_name,
-        "deleted_by": deleted_by,
-        "url": "/lista",
     }
 
 
@@ -901,91 +857,75 @@ def _raise_invalid_invite_status(invite: dict) -> None:
 @router.get("")
 async def list_lists(user_id: Annotated[str, Depends(get_current_user_id)]) -> list[dict]:
     sb = get_supabase()
+    resolved_list_id = _resolve_list_id_for_user(sb, user_id)
+    if resolved_list_id is None:
+        new_list = _create_owned_list(
+            user_id=user_id,
+            name=DEFAULT_LIST_NAME,
+            items=[],
+            is_active=True,
+        )
+        resolved_list_id = new_list["id"]
+        _set_active_list_id(user_id, resolved_list_id)
+
     memberships = _visible_memberships(sb, user_id)
-    if not memberships:
-        selected_list = await get_active_list(user_id)
-        memberships = [{"list_id": selected_list["id"], "role": "owner"}]
-    list_ids = [membership["list_id"] for membership in memberships]
-    role_by_list_id = {membership["list_id"]: membership["role"] for membership in memberships}
-    selected_list_id = _resolve_selected_list_id(sb, user_id)
-    list_rows = _shopping_list_rows(list_ids)
-    default_flags = _list_default_flags(list_ids)
-    member_count_by_list = _member_counts(list_ids)
-    owner_ids = sorted({row["user_id"] for row in list_rows if row.get("user_id")})
-    owner_profiles = (
-        sb.table("user_profiles")
-        .select("id, display_name")
-        .in_("id", owner_ids)
-        .execute()
-        .data
-        if owner_ids
-        else []
+    list_ids = [row["list_id"] for row in memberships]
+    if resolved_list_id not in list_ids:
+        list_ids.append(resolved_list_id)
+    rows = _shopping_list_rows(list_ids)
+    rows_by_id = {row["id"]: row for row in rows}
+    counts = repo.member_counts(list_ids)
+    owner_display_names = repo.owner_display_names(list_ids)
+    summaries = [
+        {
+            **_list_summary(
+                sb,
+                rows_by_id[list_id],
+                user_id,
+                counts.get(list_id, 1),
+                owner_display_names.get(list_id),
+            ),
+            "is_selected": list_id == resolved_list_id,
+        }
+        for list_id in list_ids
+        if list_id in rows_by_id
+    ]
+    summaries.sort(
+        key=lambda row: (
+            0 if row["is_selected"] else 1,
+            0 if row["is_owner"] else 1,
+            (row.get("name") or "").lower(),
+        )
     )
-    owner_names = {profile["id"]: profile.get("display_name") for profile in owner_profiles}
-    summaries: list[dict] = []
-    for row in list_rows:
-        role = role_by_list_id.get(row["id"])
-        summaries.append({
-            "id": row["id"],
-            "user_id": row.get("user_id"),
-            "name": row.get("name"),
-            "is_active": row.get("is_active", True),
-            "is_default": default_flags.get(row["id"], False),
-            "is_selected": row["id"] == selected_list_id,
-            "member_role": role,
-            "is_owner": role == "owner",
-            "member_count": member_count_by_list.get(row["id"], 0),
-            "item_count": len(row.get("items") or []),
-            "owner_display_name": owner_names.get(row.get("user_id")),
-            "created_at": row.get("created_at"),
-            "updated_at": row.get("updated_at"),
-        })
     return summaries
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
-async def create_list(
-    body: CreateListBody,
-    user_id: Annotated[str, Depends(get_current_user_id)],
-) -> dict:
-    sb = get_supabase()
-    name = body.name.strip() or "Nuova lista"
-    created = _create_owned_list(
-        user_id=user_id,
-        name=name,
-        items=[],
-        is_active=True,
-        is_default=False,
-    )
-    _set_active_list_id(user_id, created["id"])
-    return _list_detail(sb, created["id"], user_id)
-
-
 @router.post("/select")
-async def select_list(
+async def select_active_list(
     body: SelectListBody,
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict:
     sb = get_supabase()
     _verify_member(sb, body.list_id, user_id)
     _set_active_list_id(user_id, body.list_id)
-    return _list_detail(sb, body.list_id, user_id)
+    return {"list_id": body.list_id}
 
 
 @router.get("/active")
 async def get_active_list(user_id: Annotated[str, Depends(get_current_user_id)]) -> dict:
-    """Return currently selected shopping list. Creates default one if missing."""
+    """Return the single visible shopping list. Creates owner list if missing."""
     sb = get_supabase()
-    selected_list_id = _resolve_selected_list_id(sb, user_id)
-    if selected_list_id:
-        return _list_detail(sb, selected_list_id, user_id)
+    resolved_list_id = _resolve_list_id_for_user(sb, user_id)
+    if resolved_list_id:
+        if _active_list_id_for_user(sb, user_id) != resolved_list_id:
+            _set_active_list_id(user_id, resolved_list_id)
+        return _list_detail(sb, resolved_list_id, user_id)
 
     new_list = _create_owned_list(
         user_id=user_id,
         name=DEFAULT_LIST_NAME,
         items=[],
         is_active=True,
-        is_default=True,
     )
     _set_active_list_id(user_id, new_list["id"])
     return _list_detail(sb, new_list["id"], user_id)
@@ -1174,58 +1114,6 @@ async def stream_list_events(
             "X-Accel-Buffering": "no",
         },
     )
-
-
-@router.patch("/{list_id}")
-async def rename_list(
-    list_id: str,
-    body: RenameListBody,
-    user_id: Annotated[str, Depends(get_current_user_id)],
-) -> dict:
-    sb = get_supabase()
-    _verify_owner(sb, list_id, user_id)
-    if _is_default_by_list_id(list_id):
-        raise HTTPException(status_code=400, detail="Default list cannot be renamed")
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="List name is required")
-    _rename_shopping_list(list_id, name)
-    _publish_list_sync_event(list_id, "list_updated", "list_renamed")
-    return _list_detail(sb, list_id, user_id)
-
-
-@router.delete("/{list_id}")
-async def delete_list(
-    list_id: str,
-    user_id: Annotated[str, Depends(get_current_user_id)],
-) -> Response:
-    sb = get_supabase()
-    _verify_owner(sb, list_id, user_id)
-    if _is_default_by_list_id(list_id):
-        raise HTTPException(status_code=400, detail="Default list cannot be deleted")
-    list_row = _shopping_list_row(list_id)
-    owner_profile = _profile_row(sb, user_id)
-    owner_name = owner_profile.get("display_name") or "Un utente"
-    member_user_ids = _impacted_member_user_ids_for_list(list_id)
-    impacted_users = repo.impacted_user_ids_for_list(list_id)
-    _delete_shopping_list(list_id)
-    _fallback_selected_list_for_users(sb, impacted_users, list_id)
-    _publish_list_sync_event(list_id, "list_updated", "list_deleted")
-    _publish_list_sync_event(list_id, "members_updated", "list_deleted")
-    _publish_list_sync_event(list_id, "invites_updated", "list_deleted")
-    title = "Lista rimossa"
-    body = f"{owner_name} ha rimosso la lista {list_row['name']}"
-    payload = _list_deleted_payload(list_row["name"], owner_name, list_id)
-    for member_user_id in member_user_ids:
-        _notify_shared_list_event(
-            sb,
-            member_user_id,
-            kind="list_deleted",
-            title=title,
-            body=body,
-            data=payload,
-        )
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/{list_id}/reset")
@@ -1573,24 +1461,6 @@ async def revoke_invite(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/{list_id}/invite")
-async def create_invite(
-    list_id: str,
-    body: InviteBody,
-    user_id: Annotated[str, Depends(get_current_user_id)],
-) -> dict:
-    sb = get_supabase()
-    _verify_owner(sb, list_id, user_id)
-
-    invite = (
-        sb.table("list_invites")
-        .insert({"list_id": list_id, "invited_by": user_id, "email": body.email})
-        .execute()
-    )
-    _publish_list_sync_event(list_id, "invites_updated", "invite_created")
-    return invite.data[0]
-
-
 @router.get("/{list_id}/members")
 async def list_members(
     list_id: str,
@@ -1754,7 +1624,9 @@ async def remove_member(
 
     list_row = _shopping_list_row(list_id)
     _delete_member(list_id, member_user_id)
-    _fallback_selected_list_for_users(sb, {member_user_id}, list_id)
+    if _active_list_id_for_user(sb, member_user_id) == list_id:
+        fallback_list_id = repo.owner_list_id_for_user(sb, member_user_id)
+        _set_active_list_id(member_user_id, fallback_list_id)
 
     if is_self_leave:
         owner_id = list_row.get("user_id")

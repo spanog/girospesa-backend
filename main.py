@@ -19,7 +19,6 @@ from api.routers import (
     favorites,
     flyer_requests,
     flyers,
-    invite,
     lists,
     notifications,
     offers,
@@ -132,7 +131,6 @@ app.include_router(products.router, prefix="/products", tags=["products"])
 app.include_router(supermarkets.router, prefix="/supermarkets", tags=["supermarkets"])
 app.include_router(lists.router, prefix="/lists", tags=["lists"])
 app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
-app.include_router(invite.router, prefix="/invite", tags=["invite"])
 
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])

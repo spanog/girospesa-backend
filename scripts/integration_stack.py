@@ -102,14 +102,14 @@ def _wait_for_schema(env: dict[str, str], timeout_seconds: int = 60) -> None:
         FROM information_schema.columns
         WHERE table_schema = 'public'
           AND table_name = 'shopping_lists'
-          AND column_name = 'is_default'
+          AND column_name = 'name'
       )
       AND EXISTS (
         SELECT 1
         FROM information_schema.columns
         WHERE table_schema = 'public'
           AND table_name = 'user_profiles'
-          AND column_name = 'active_list_id'
+          AND column_name = 'notifications_enabled'
       )
       AND EXISTS (
         SELECT 1

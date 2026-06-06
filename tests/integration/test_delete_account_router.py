@@ -139,7 +139,6 @@ async def test_delete_me_cleans_invite_references_before_auth_delete(
                 "name": "Lista inviti test",
                 "items": [],
                 "is_active": True,
-                "is_default": False,
             }
         ).execute().data[0]
         supabase_client.table("list_members").insert(

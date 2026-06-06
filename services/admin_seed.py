@@ -19,7 +19,7 @@ ADMIN_HOME_PROVINCE = "RC"
 ADMIN_HOME_POSTAL_CODE = "89024"
 ADMIN_HOME_LAT = 38.40172
 ADMIN_HOME_LNG = 16.07398
-DEFAULT_LIST_NAME = "Lista principale"
+DEFAULT_LIST_NAME = "La mia lista"
 
 
 @dataclass(frozen=True)
@@ -139,7 +139,7 @@ def _resolve_admin_home_coordinates() -> tuple[float, float]:
 
 
 def ensure_default_empty_list_for_user(supabase_client, user_id: str) -> bool:
-    list_id = _find_active_list_id_for_user(supabase_client, user_id)
+    list_id = _find_owned_list_id_for_user(supabase_client, user_id)
     if list_id is not None:
         _ensure_owner_membership(supabase_client, list_id, user_id)
         return False
@@ -148,12 +148,11 @@ def ensure_default_empty_list_for_user(supabase_client, user_id: str) -> bool:
     return True
 
 
-def _find_active_list_id_for_user(supabase_client, user_id: str) -> str | None:
+def _find_owned_list_id_for_user(supabase_client, user_id: str) -> str | None:
     result = (
         supabase_client.table("shopping_lists")
         .select("id")
         .eq("user_id", user_id)
-        .eq("is_active", True)
         .limit(1)
         .execute()
     )
