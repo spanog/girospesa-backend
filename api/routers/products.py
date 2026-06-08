@@ -90,10 +90,12 @@ def _resolve_supermarket_id(sb, slug: str) -> str | None:
 
 
 def _apply_offer_filters(
-    query, *, product_ids, category, subcategory, supermarket_id, nearby_ids
+    query, *, product_ids, exact_product_id, category, subcategory, supermarket_id, nearby_ids
 ):
     if product_ids is not None:
         query = query.in_("product_id", product_ids)
+    if exact_product_id:
+        query = query.eq("product_id", exact_product_id)
     if category:
         query = query.eq("products.category", category)
     if subcategory:
@@ -122,6 +124,7 @@ def _apply_offer_sort(query, *, sort: str | None):
 @router.get("")
 async def list_products(
     q: str | None = Query(None, description="Full-text search query"),
+    product_id: str | None = Query(None, description="Exact canonical product id"),
     category: str | None = Query(None),
     subcategory: str | None = Query(None),
     supermarket: str | None = Query(None, description="Supermarket slug"),
@@ -159,6 +162,7 @@ async def list_products(
 
     filter_kwargs = dict(
         product_ids=product_ids,
+        exact_product_id=product_id,
         category=category,
         subcategory=subcategory,
         supermarket_id=resolved_supermarket_id,
