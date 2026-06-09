@@ -106,6 +106,23 @@ async def get_optional_user_id(
         return None
 
 
+async def get_optional_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)],
+    session_cookie: Annotated[str | None, Cookie(alias=_COOKIE_NAME)] = None,
+) -> dict | None:
+    """Dependency: returns decoded session/JWT payload when available, else None."""
+    if session_cookie:
+        payload = read_session_token(session_cookie)
+        if payload:
+            return payload
+    if credentials is None:
+        return None
+    try:
+        return _decode_token(credentials.credentials)
+    except HTTPException:
+        return None
+
+
 async def require_admin(
     user: Annotated[dict, Depends(get_current_user)],
 ) -> dict:

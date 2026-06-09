@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     db_dsn: str = ""
     admin_email: str = ""
     admin_password: str = ""
+    webmaster_email: str = ""
+    mail_from: str = ""
+    smtp_host: str = ""
+    smtp_port: int = Field(default=587, gt=0)
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
 
     llm_provider: str = "gemini"
     google_api_key: str = ""

@@ -63,7 +63,7 @@ girospesa-backend/
 │   ├── push.py               # Iscrizioni Web Push + webhook notifiche preferiti
 │   ├── purchases.py          # Storico acquisti, tracking risparmio
 │   ├── analytics.py          # Analytics B2B anonimizzata (API key auth)
-│   ├── flyer_requests.py     # Richieste utente per nuovi volantini + email admin
+│   ├── contact_requests.py   # Contatti pubblici, bug report, collaborazione, volantini mancanti
 │   └── admin_products.py     # CRUD prodotti e offerte (admin only)
 │
 ├── core/                     # Infrastruttura condivisa
@@ -110,6 +110,12 @@ Il backend usa tre livelli di autenticazione:
 | `POST` | `/users/geocode` | ✅ | Geocodifica indirizzo di casa → aggiorna `home_lat/lng` e `home_location` PostGIS |
 | `POST` | `/users/me/avatar` | ✅ | Upload avatar (JPEG/PNG/WebP, max 5 MB) → bucket `avatars` |
 | `DELETE` | `/users/me` | ✅ | Elimina account + dati collegati, pulisce `girospesa_session`, risponde `204` |
+
+### Contatti pubblici (`/contact-requests`)
+
+| Metodo | Path | Auth | Descrizione |
+|--------|------|------|-------------|
+| `POST` | `/contact-requests` | ❌ / opzionale | Endpoint `multipart/form-data` unico per `bug_report`, `collaboration_request` e `missing_flyer_request`; i bug report inviano sempre email via SMTP e, se presenti, allegano direttamente al messaggio fino a 3 screenshot `PNG/JPEG` |
 
 ### Lista spesa (`/lists`)
 
@@ -300,8 +306,8 @@ curl -X POST http://localhost:8000/flyers/admin/cleanup \
 
 ## Note schema e RLS
 
-- `analytics_data`, `extraction_log` e `flyer_requests` sono tabelle interne. RLS resta abilitato con policy esplicite `deny all`; accesso e scrittura passano solo dal backend con `SUPABASE_SERVICE_ROLE_KEY`.
-- Le richieste volantino guest e autenticate passano sempre da `POST /flyer-requests`. Non esiste piu un path supportato con insert diretto client -> Supabase.
+- `analytics_data` ed `extraction_log` sono tabelle interne. RLS resta abilitato con policy esplicite `deny all`; accesso e scrittura passano solo dal backend con `SUPABASE_SERVICE_ROLE_KEY`.
+- Le richieste contatto, bug, collaborazione e volantini mancanti passano da `POST /contact-requests` con invio email al webmaster. Non esiste più persistenza applicativa su tabella `flyer_requests`.
 - Log estrazione canonico: `extraction_log`. Eventuali ambienti locali legacy con `scraping_log` vengono riallineati dalla migration di hardening.
 - PostGIS è abilitato nello schema `extensions`. `supermarkets.location`, `user_profiles.home_location` e `user_profiles.search_location` sono `geography(Point, 4326)` indicizzate GiST; la RPC `nearby_supermarkets` usa `ST_DWithin` e `ST_Distance`.
 - Gli helper RLS per le liste condivise vivono nello schema non esposto `private` (`private.is_list_member`, `private.is_list_owner`). Restano `SECURITY DEFINER` per evitare ricorsione nelle policy, ma non sono endpoint RPC pubblici su `/rest/v1/rpc/*`.
@@ -454,6 +460,7 @@ Valori locali canonici:
 - `FRONTEND_URL=http://localhost:3000` come valore canonico; `http://127.0.0.1:3000` resta supportato in CORS per compatibilita' loopback
 - `GEOCODING_PROVIDER=nominatim` in locale, così signup/profilo/seed admin riflettono comportamento reale durante sviluppo manuale
 - `GOOGLE_API_KEY` richiesto solo se si vuole usare estrazione AI Gemini
+- `WEBMASTER_EMAIL`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` e `SMTP_USE_TLS` servono per i form pubblici `/contact-requests`
 - `SUPABASE_SERVICE_ROLE_KEY` e `SUPABASE_JWT_SECRET` si copiano da `supabase status -o env`
 - `ADMIN_EMAIL` e `ADMIN_PASSWORD` servono per seedare utente admin via API service-role
 - `.env` backend deve contenere solo variabili lette da FastAPI; credenziali Docker/Supabase CLI come `POSTGRES_PASSWORD`, `ANON_KEY`, `JWT_SECRET` e `SERVICE_ROLE_KEY` non vanno copiate qui
@@ -623,7 +630,7 @@ I CLI di valutazione e QA vivono in `scripts/extraction/`. Il runtime ufficiale 
 | Processo host | Next.js frontend | Sì | Repo separato, porta `3000` |
 | API esterna | Google Gemini | Solo per estrazione volantini | Unica dipendenza esterna richiesta per AI extraction |
 | Servizio esterno | Nominatim | No | Geocoding attivo di default in locale per prove manuali end-to-end |
-| Servizio esterno | Resend | No | Email admin opzionali |
+| Servizio esterno | SMTP server | No | Necessario solo per invio mail da `/contact-requests` |
 
 ---
 
@@ -714,8 +721,13 @@ GEMINI_MODEL=gemma-4-31b-it
 
 # ── Servizi esterni opzionali in locale -------------------------------------
 GEOCODING_PROVIDER=nominatim         # default locale: allinea sviluppo manuale a produzione
-RESEND_API_KEY=
-ADMIN_NOTIFICATION_EMAIL=
+WEBMASTER_EMAIL=webmaster@example.com
+MAIL_FROM=no-reply@girospesa.local
+SMTP_HOST=localhost
+SMTP_PORT=1025
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_USE_TLS=false
 
 # ── Web Push / webhook opzionali --------------------------------------------
 VAPID_PRIVATE_KEY=

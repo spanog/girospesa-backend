@@ -17,6 +17,7 @@
 - Keep raw SQL, PostgREST, Supabase service-role access, and schema-specific branching inside backend repositories/services, never inside frontend code.
 - No application endpoint may trust client-supplied `admin`, `manager`, `role`, or similar flags in query params, headers, or request bodies to determine privileges or data scope. Authorization must derive only from validated auth context server-side.
 - Auth BFF errors must not collapse into opaque `"failed"` responses. For signup, log upstream exception with stack trace server-side, but return only sanitized user-facing copy. Duplicate-email flow must not confirm account existence; use neutral text like `Registrazione non riuscita. Verifica i dati inseriti oppure accedi se hai già un account.`.
+- Public contact flows (`/contact-requests`) are mail-first: do not reintroduce app tables or client-side inserts for bug reports, collaboration requests, or missing-flyer requests. Bug reports must not depend on Supabase Storage; screenshots are optional and, when present, travel as direct `image/png` or `image/jpeg` email attachments.
 
 ## Integration Test Isolation
 

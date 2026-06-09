@@ -16,8 +16,8 @@ from api.routers import (
     admin_products,
     analytics,
     auth,
+    contact_requests,
     favorites,
-    flyer_requests,
     flyers,
     lists,
     notifications,
@@ -135,7 +135,7 @@ app.include_router(notifications.router, prefix="/notifications", tags=["notific
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 app.include_router(push.router, prefix="/push", tags=["push"])
-app.include_router(flyer_requests.router, prefix="/flyer-requests", tags=["flyer-requests"])
+app.include_router(contact_requests.router, prefix="/contact-requests", tags=["contact-requests"])
 app.include_router(purchases.router, prefix="/purchases", tags=["purchases"])
 app.include_router(admin_products.router, prefix="/admin/products", tags=["admin-products"])
 app.include_router(offers.router, prefix="/offers", tags=["offers"])

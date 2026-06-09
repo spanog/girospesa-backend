@@ -30,7 +30,7 @@ def test_internal_tables_have_rls_enabled():
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
-          AND c.relname IN ('analytics_data', 'extraction_log', 'flyer_requests')
+          AND c.relname IN ('analytics_data', 'extraction_log')
         ORDER BY c.relname
         """
     )
@@ -38,7 +38,6 @@ def test_internal_tables_have_rls_enabled():
     assert rows == [
         {"table_name": "analytics_data", "rls_enabled": True},
         {"table_name": "extraction_log", "rls_enabled": True},
-        {"table_name": "flyer_requests", "rls_enabled": True},
     ]
 
 
@@ -62,7 +61,7 @@ def test_internal_tables_have_explicit_deny_all_policies():
         SELECT tablename, policyname, cmd, roles, qual, with_check
         FROM pg_policies
         WHERE schemaname = 'public'
-          AND tablename IN ('analytics_data', 'extraction_log', 'flyer_requests')
+          AND tablename IN ('analytics_data', 'extraction_log')
         ORDER BY tablename, policyname
         """
     )
@@ -84,15 +83,32 @@ def test_internal_tables_have_explicit_deny_all_policies():
             "qual": "false",
             "with_check": "false",
         },
-        {
-            "tablename": "flyer_requests",
-            "policyname": "flyer_requests_deny_all",
-            "cmd": "ALL",
-            "roles": ["public"],
-            "qual": "false",
-            "with_check": "false",
-        },
     ]
+
+
+def test_contact_attachments_bucket_is_removed():
+    rows = _fetch_all(
+        """
+        SELECT id
+        FROM storage.buckets
+        WHERE id = 'contact-attachments'
+        """
+    )
+
+    assert rows == []
+
+
+def test_legacy_flyer_requests_table_is_removed():
+    rows = _fetch_all(
+        """
+        SELECT tablename
+        FROM pg_tables
+        WHERE schemaname = 'public'
+          AND tablename = 'flyer_requests'
+        """
+    )
+
+    assert rows == []
 
 
 def test_security_sensitive_functions_have_fixed_search_path():
