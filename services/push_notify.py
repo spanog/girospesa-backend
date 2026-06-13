@@ -5,6 +5,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass
+from datetime import date
 
 from pywebpush import WebPushException, webpush  # type: ignore[import-untyped]
 
@@ -156,6 +157,273 @@ def _profile_reference_point(profile: dict) -> tuple[float | None, float | None]
     if home_lat is None or home_lng is None:
         return None, None
     return float(home_lat), float(home_lng)
+
+
+def _offer_is_currently_active(record: dict) -> bool:
+    today = date.today().isoformat()
+    valid_from = record.get("valid_from")
+    valid_to = record.get("valid_to")
+    if valid_from and valid_from > today:
+        return False
+    if valid_to and valid_to < today:
+        return False
+    return True
+
+
+def _favorite_offer_url(*, product_id: str, match_count: int) -> str:
+    if match_count > 1:
+        return "/offerte?favorites=1&sort=published_at"
+    return f"/offerte?product_id={product_id}"
+
+
+def _favorite_offer_aggregation_key(flyer_id: str) -> str:
+    return f"favorite-flyer:{flyer_id}"
+
+
+def _favorite_offer_data(
+    offer: dict,
+    *,
+    match_count: int,
+    matched_product_ids: list[str] | None = None,
+    matched_product_names: list[str] | None = None,
+) -> dict[str, object]:
+    product_id = str(offer["product_id"])
+    flyer_id = str(offer["flyer_id"])
+    data: dict[str, object] = {
+        "kind": "favorite_offer",
+        "url": _favorite_offer_url(product_id=product_id, match_count=match_count),
+        "product_id": product_id,
+        "aggregation_key": _favorite_offer_aggregation_key(flyer_id),
+        "match_count": match_count,
+        "matched_product_ids": matched_product_ids or [product_id],
+        "matched_product_names": matched_product_names or [],
+    }
+    if offer.get("id"):
+        data["offer_id"] = str(offer["id"])
+    if offer.get("flyer_id"):
+        data["flyer_id"] = str(offer["flyer_id"])
+    if offer.get("supermarket_id"):
+        data["supermarket_id"] = str(offer["supermarket_id"])
+    return data
+
+
+def _favorite_offer_title(sb: object, product_id: str) -> str:
+    product_resp = (
+        sb.table("products")  # type: ignore[union-attr]
+        .select("name")
+        .eq("id", product_id)
+        .maybe_single()
+        .execute()
+    )
+    product = product_resp.data if product_resp is not None else None
+    name = product.get("name") if product else None
+    return f"Nuova offerta: {name or 'prodotto'}"
+
+
+def _favorite_offer_supermarket_name(sb: object, offer: dict) -> str:
+    supermarket_name = ""
+    supermarket_id = offer.get("supermarket_id")
+    if supermarket_id:
+        supermarket_resp = (
+            sb.table("supermarkets")  # type: ignore[union-attr]
+            .select("name")
+            .eq("id", supermarket_id)
+            .maybe_single()
+            .execute()
+        )
+        supermarket = supermarket_resp.data if supermarket_resp is not None else None
+        supermarket_name = supermarket.get("name") if supermarket else ""
+    return supermarket_name
+
+
+def _favorite_offer_body(sb: object, offer: dict) -> str:
+    supermarket_name = _favorite_offer_supermarket_name(sb, offer)
+
+    price = offer.get("discounted_price") or offer.get("original_price")
+    valid_to = offer.get("valid_to", "")
+    parts = [
+        f"€{price:.2f}" if price else "",
+        f"da {supermarket_name}" if supermarket_name else "",
+        f"Valida fino al {valid_to}" if valid_to else "",
+    ]
+    return " — ".join(part for part in parts if part)
+
+
+def _favorite_product_name(sb: object, product_id: str) -> str:
+    product_resp = (
+        sb.table("products")  # type: ignore[union-attr]
+        .select("name")
+        .eq("id", product_id)
+        .maybe_single()
+        .execute()
+    )
+    product = product_resp.data if product_resp is not None else None
+    return product.get("name") if product else "prodotto"
+
+
+def _merge_unique_strings(existing: list[object], incoming: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in existing:
+        if isinstance(value, str) and value not in seen:
+            seen.add(value)
+            merged.append(value)
+    for value in incoming:
+        if value not in seen:
+            seen.add(value)
+            merged.append(value)
+    return merged
+
+
+def _favorite_offer_aggregate_title(match_count: int) -> str:
+    if match_count == 1:
+        return "Nuova offerta preferita"
+    if match_count == 2:
+        return "2 preferiti nel nuovo volantino"
+    return f"{match_count} preferiti nel nuovo volantino"
+
+
+def _favorite_offer_aggregate_body(
+    supermarket_name: str,
+    matched_product_names: list[str],
+) -> str:
+    preview = matched_product_names[:3]
+    suffix_count = max(len(matched_product_names) - len(preview), 0)
+    names_chunk = ", ".join(preview)
+    if suffix_count > 0:
+        names_chunk = f"{names_chunk} e altri {suffix_count}"
+    if names_chunk:
+        return f"{supermarket_name}: {names_chunk}"
+    return f"{supermarket_name}: nuovi preferiti in offerta"
+
+
+def _find_existing_favorite_notification(
+    sb: object,
+    *,
+    user_id: str,
+    aggregation_key: str,
+) -> dict | None:
+    resp = (
+        sb.table("app_notifications")  # type: ignore[union-attr]
+        .select("id, data")
+        .eq("user_id", user_id)
+        .eq("kind", "favorite_offer")
+        .contains("data", {"aggregation_key": aggregation_key})
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    return rows[0] if rows else None
+
+
+def _persist_favorite_offer_notification(
+    sb: object,
+    *,
+    user_id: str,
+    title: str,
+    body: str,
+    data: dict[str, object],
+) -> None:
+    existing = _find_existing_favorite_notification(
+        sb,
+        user_id=user_id,
+        aggregation_key=str(data["aggregation_key"]),
+    )
+    if not existing:
+        _persist_notification(
+            sb,
+            user_id=user_id,
+            kind="favorite_offer",
+            title=title,
+            body=body,
+            data=data,
+        )
+        return
+
+    sb.table("app_notifications").update(  # type: ignore[union-attr]
+        {
+            "title": title,
+            "body": body,
+            "data": data,
+            "read_at": None,
+        }
+    ).eq("id", existing["id"]).execute()
+
+
+def notify_favorite_offer_published(sb: object, offer: dict) -> None:
+    product_id = offer.get("product_id")
+    flyer_id = offer.get("flyer_id")
+    if not product_id or not flyer_id or not offer.get("is_confirmed"):
+        return
+    if not _offer_is_currently_active(offer):
+        return
+
+    flyer_resp = (
+        sb.table("flyers")  # type: ignore[union-attr]
+        .select("is_public, status")
+        .eq("id", flyer_id)
+        .maybe_single()
+        .execute()
+    )
+    flyer = flyer_resp.data if flyer_resp is not None else None
+    if not flyer or not flyer.get("is_public") or flyer.get("status") != "done":
+        return
+
+    supermarket_name = _favorite_offer_supermarket_name(sb, offer)
+    single_title = _favorite_offer_title(sb, str(product_id))
+    single_body = _favorite_offer_body(sb, offer)
+    product_name = _favorite_product_name(sb, str(product_id))
+    favorites_resp = (
+        sb.table("favorites")  # type: ignore[union-attr]
+        .select("user_id")
+        .eq("product_id", product_id)
+        .execute()
+    )
+    for favorite in favorites_resp.data or []:
+        user_id = favorite["user_id"]
+        if not notifications_enabled_for_user(sb, user_id):
+            continue
+        aggregation_key = _favorite_offer_aggregation_key(str(flyer_id))
+        existing = _find_existing_favorite_notification(
+            sb,
+            user_id=user_id,
+            aggregation_key=aggregation_key,
+        )
+        existing_data = existing.get("data", {}) if existing else {}
+        matched_product_ids = _merge_unique_strings(
+            existing_data.get("matched_product_ids", [])
+            if isinstance(existing_data, dict)
+            else [],
+            [str(product_id)],
+        )
+        matched_product_names = _merge_unique_strings(
+            existing_data.get("matched_product_names", [])
+            if isinstance(existing_data, dict)
+            else [],
+            [product_name],
+        )
+        match_count = len(matched_product_ids)
+        if match_count == 1:
+            title = single_title
+            body = single_body
+        else:
+            title = _favorite_offer_aggregate_title(match_count)
+            body = _favorite_offer_aggregate_body(supermarket_name, matched_product_names)
+        data = _favorite_offer_data(
+            offer,
+            match_count=match_count,
+            matched_product_ids=matched_product_ids,
+            matched_product_names=matched_product_names,
+        )
+        _persist_favorite_offer_notification(
+            sb,
+            user_id=user_id,
+            title=title,
+            body=body,
+            data=data,
+        )
+        _send_push_to_user(sb, user_id=user_id, title=title, body=body, data=data)
 
 
 def send_push_notification(

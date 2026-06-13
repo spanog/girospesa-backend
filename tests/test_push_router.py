@@ -308,8 +308,7 @@ class TestNotifyFavoritesVisibility:
         transport = httpx.ASGITransport(app=app)
 
         sb = MagicMock()
-        with patch.object(_push_module, "get_supabase", return_value=sb), \
-             patch.object(_push_module, "send_push_notification") as mock_send:
+        with patch.object(_push_module, "get_supabase", return_value=sb):
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.post(
                     "/push/notify-favorites",
@@ -318,7 +317,7 @@ class TestNotifyFavoritesVisibility:
                 )
 
         assert resp.status_code == 204
-        mock_send.assert_not_called()
+        assert not sb.table.called
 
     @pytest.mark.asyncio
     async def test_confirmed_public_offer_creates_app_notification_without_subscription(self):
@@ -368,13 +367,13 @@ class TestNotifyFavoritesVisibility:
 
         notifications_table = MagicMock()
         notifications_table.insert.return_value.execute.return_value.data = [{"id": "notif-1"}]
+        notifications_table.select.return_value.eq.return_value.eq.return_value.contains.return_value.order.return_value.limit.return_value.execute.return_value.data = []
         tables["app_notifications"] = notifications_table
 
         sb = MagicMock()
         sb.table.side_effect = table
 
-        with patch.object(_push_module, "get_supabase", return_value=sb), \
-             patch.object(_push_module, "send_push_notification") as mock_send:
+        with patch.object(_push_module, "get_supabase", return_value=sb):
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.post(
                     "/push/notify-favorites",
@@ -392,7 +391,6 @@ class TestNotifyFavoritesVisibility:
                 )
 
         assert resp.status_code == 204
-        mock_send.assert_not_called()
         notifications_table.insert.assert_called_once_with(
             {
                 "user_id": "user-1",
@@ -401,8 +399,14 @@ class TestNotifyFavoritesVisibility:
                 "body": "€4.99 — da Coop — Valida fino al 2026-06-30",
                 "data": {
                     "kind": "favorite_offer",
-                    "url": "/offerte?product=prod-1",
+                    "url": "/offerte?product_id=prod-1",
+                    "aggregation_key": "favorite-flyer:flyer-1",
+                    "match_count": 1,
+                    "matched_product_ids": ["prod-1"],
+                    "matched_product_names": ["Parmigiano Reggiano"],
                     "product_id": "prod-1",
+                    "flyer_id": "flyer-1",
+                    "supermarket_id": "super-1",
                 },
             }
         )
@@ -449,8 +453,7 @@ class TestNotifyFavoritesVisibility:
         sb = MagicMock()
         sb.table.side_effect = table
 
-        with patch.object(_push_module, "get_supabase", return_value=sb), \
-             patch.object(_push_module, "send_push_notification") as mock_send:
+        with patch.object(_push_module, "get_supabase", return_value=sb):
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.post(
                     "/push/notify-favorites",
@@ -468,7 +471,126 @@ class TestNotifyFavoritesVisibility:
 
         assert resp.status_code == 204
         notifications_table.insert.assert_not_called()
-        mock_send.assert_not_called()
+
+    def test_aggregates_multiple_favorite_matches_for_same_flyer_and_user(self):
+        tables: dict[str, MagicMock] = {}
+
+        def table(name: str) -> MagicMock:
+            return tables[name]
+
+        flyer_table = MagicMock()
+        flyer_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "is_public": True,
+            "status": "done",
+        }
+        tables["flyers"] = flyer_table
+
+        product_table = MagicMock()
+        product_table.select.return_value.eq.return_value.maybe_single.return_value.execute.side_effect = [
+            MagicMock(data={"name": "Parmigiano Reggiano"}),
+            MagicMock(data={"name": "Parmigiano Reggiano"}),
+            MagicMock(data={"name": "Mozzarella"}),
+            MagicMock(data={"name": "Mozzarella"}),
+        ]
+        tables["products"] = product_table
+
+        supermarket_table = MagicMock()
+        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "name": "Coop",
+        }
+        tables["supermarkets"] = supermarket_table
+
+        favorites_table = MagicMock()
+        favorites_table.select.return_value.eq.return_value.execute.return_value.data = [
+            {"user_id": "user-1"},
+        ]
+        tables["favorites"] = favorites_table
+
+        profiles_table = MagicMock()
+        profiles_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = (
+            {"notifications_enabled": True}
+        )
+        tables["user_profiles"] = profiles_table
+
+        subscriptions_table = MagicMock()
+        subscriptions_table.select.return_value.eq.return_value.execute.return_value.data = []
+        tables["push_subscriptions"] = subscriptions_table
+
+        notifications_table = MagicMock()
+        notifications_table.insert.return_value.execute.return_value.data = [{"id": "notif-1"}]
+        existing_notification = MagicMock(
+            data=[
+                {
+                    "id": "notif-1",
+                    "data": {
+                        "aggregation_key": "favorite-flyer:flyer-1",
+                        "matched_product_ids": ["prod-1"],
+                        "matched_product_names": ["Parmigiano Reggiano"],
+                    },
+                }
+            ]
+        )
+        notifications_table.select.return_value.eq.return_value.eq.return_value.contains.return_value.order.return_value.limit.return_value.execute.side_effect = [
+            MagicMock(data=[]),
+            MagicMock(data=[]),
+            existing_notification,
+            existing_notification,
+            existing_notification,
+            existing_notification,
+        ]
+        notifications_table.update.return_value.eq.return_value.execute.return_value.data = [{"id": "notif-1"}]
+        tables["app_notifications"] = notifications_table
+
+        sb = MagicMock()
+        sb.table.side_effect = table
+
+        from services.push_notify import notify_favorite_offer_published
+
+        notify_favorite_offer_published(
+            sb,
+            {
+                "id": "offer-1",
+                "product_id": "prod-1",
+                "flyer_id": "flyer-1",
+                "supermarket_id": "super-1",
+                "discounted_price": 4.99,
+                "valid_to": "2026-06-30",
+                "is_confirmed": True,
+            },
+        )
+        notify_favorite_offer_published(
+            sb,
+            {
+                "id": "offer-2",
+                "product_id": "prod-2",
+                "flyer_id": "flyer-1",
+                "supermarket_id": "super-1",
+                "discounted_price": 2.49,
+                "valid_to": "2026-06-30",
+                "is_confirmed": True,
+            },
+        )
+
+        notifications_table.insert.assert_called_once()
+        notifications_table.update.assert_called_once_with(
+            {
+                "title": "2 preferiti nel nuovo volantino",
+                "body": "Coop: Parmigiano Reggiano, Mozzarella",
+                "data": {
+                    "kind": "favorite_offer",
+                    "url": "/offerte?favorites=1&sort=published_at",
+                    "product_id": "prod-2",
+                    "aggregation_key": "favorite-flyer:flyer-1",
+                    "match_count": 2,
+                    "matched_product_ids": ["prod-1", "prod-2"],
+                    "matched_product_names": ["Parmigiano Reggiano", "Mozzarella"],
+                    "offer_id": "offer-2",
+                    "flyer_id": "flyer-1",
+                    "supermarket_id": "super-1",
+                },
+                "read_at": None,
+            }
+        )
 
     def test_stale_410_endpoint_deleted(self):
         sb = _make_sb_with_subscriptions([_SAMPLE_SUB])

@@ -19,7 +19,10 @@ from core.config import settings
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
 from services.offer_visibility import apply_current_offer_window
-from services.push_notify import notify_public_flyer_published
+from services.push_notify import (
+    notify_favorite_offer_published,
+    notify_public_flyer_published,
+)
 from services.product_format import ProductFormat, build_format_bundle
 from api.routers._offer_utils import (
     _OFFER_PRODUCT_SELECT,
@@ -300,7 +303,10 @@ def _sync_published_clones_for_source_offer(
         if existing:
             sb.table("offers").update(payload).eq("id", existing["id"]).execute()
             continue
-        sb.table("offers").insert({"id": str(uuid.uuid4()), **payload}).execute()
+        clone = {"id": str(uuid.uuid4()), **payload}
+        sb.table("offers").insert(clone).execute()
+        if not settings.webhook_secret:
+            notify_favorite_offer_published(sb, clone)
 
     stale_clone_ids = [
         row["id"]

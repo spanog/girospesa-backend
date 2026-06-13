@@ -1,14 +1,6 @@
-"""Push notification endpoints.
-
-- POST   /push/subscribe     — register a Web Push subscription (auth required)
-- POST   /push/unsubscribe   — remove a specific Web Push subscription (auth required)
-- DELETE /push/subscriptions — remove all Web Push subscriptions for caller (auth required, called on logout)
-- POST   /push/notify-favorites — Supabase DB webhook: called on INSERT in offers
-"""
+"""Push notification endpoints."""
 from __future__ import annotations
 
-import logging
-from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -18,52 +10,13 @@ from core.auth import get_current_user_id
 from core.config import settings
 from core.database import get_supabase
 from services.push_notify import (
-    PushEndpointGoneError,
-    PushSubscription,
+    notify_favorite_offer_published,
     notifications_enabled_for_user,
-    send_push_notification,
 )
 
-logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _WEBHOOK_SECRET_HEADER = "x-webhook-secret"
-
-
-def _favorite_offer_data(product_id: str) -> dict[str, str]:
-    return {
-        "kind": "favorite_offer",
-        "url": f"/offerte?product={product_id}",
-        "product_id": product_id,
-    }
-
-
-def _persist_app_notification(
-    user_id: str,
-    title: str,
-    body: str,
-    data: dict[str, str],
-) -> None:
-    get_supabase().table("app_notifications").insert(
-        {
-            "user_id": user_id,
-            "kind": "favorite_offer",
-            "title": title,
-            "body": body,
-            "data": data,
-        }
-    ).execute()
-
-
-def _offer_is_currently_active(record: dict) -> bool:
-    today = date.today().isoformat()
-    valid_from = record.get("valid_from")
-    valid_to = record.get("valid_to")
-    if valid_from and valid_from > today:
-        return False
-    if valid_to and valid_to < today:
-        return False
-    return True
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -151,103 +104,5 @@ async def notify_favorites(request: Request) -> Response:
 
     payload = await request.json()
     record: dict = payload.get("record", {})
-    product_id: str | None = record.get("product_id")
-
-    if not product_id:
-        return Response(status_code=204)
-    if not record.get("is_confirmed"):
-        return Response(status_code=204)
-    if not _offer_is_currently_active(record):
-        return Response(status_code=204)
-
-    sb = get_supabase()
-    flyer_id: str | None = record.get("flyer_id")
-    if not flyer_id:
-        return Response(status_code=204)
-    flyer_resp = (
-        sb.table("flyers")
-        .select("is_public, status")
-        .eq("id", flyer_id)
-        .maybe_single()
-        .execute()
-    )
-    flyer = flyer_resp.data if flyer_resp else None
-    if not flyer or not flyer.get("is_public") or flyer.get("status") != "done":
-        return Response(status_code=204)
-
-    # Resolve product name
-    product_resp = sb.table("products").select("name").eq("id", product_id).maybe_single().execute()
-    product_name: str = product_resp.data["name"] if product_resp.data else "prodotto"
-
-    # Resolve supermarket name
-    supermarket_id: str | None = record.get("supermarket_id")
-    sm_name = ""
-    if supermarket_id:
-        sm_resp = sb.table("supermarkets").select("name").eq("id", supermarket_id).maybe_single().execute()
-        sm_name = sm_resp.data["name"] if sm_resp.data else ""
-
-    # Build notification body
-    price = record.get("discounted_price") or record.get("original_price")
-    valid_to: str = record.get("valid_to", "")
-    parts = [
-        f"€{price:.2f}" if price else "",
-        f"da {sm_name}" if sm_name else "",
-        f"Valida fino al {valid_to}" if valid_to else "",
-    ]
-    notification_body = " — ".join(p for p in parts if p)
-    notification_title = f"Nuova offerta: {product_name}"
-    notification_data = _favorite_offer_data(product_id)
-
-    # Find users who favourited this product and have account notifications enabled
-    favs_resp = (
-        sb.table("favorites")
-        .select("user_id")
-        .eq("product_id", product_id)
-        .execute()
-    )
-
-    stale_endpoints: list[tuple[str, str]] = []  # (user_id, endpoint)
-
-    for fav in favs_resp.data:
-        uid: str = fav["user_id"]
-
-        if not notifications_enabled_for_user(sb, uid):
-            continue
-
-        _persist_app_notification(
-            user_id=uid,
-            title=notification_title,
-            body=notification_body,
-            data=notification_data,
-        )
-
-        subs_resp = (
-            sb.table("push_subscriptions")
-            .select("endpoint, p256dh, auth_key")
-            .eq("user_id", uid)
-            .execute()
-        )
-
-        for sub in subs_resp.data:
-            subscription = PushSubscription(
-                endpoint=sub["endpoint"],
-                p256dh=sub["p256dh"],
-                auth_key=sub["auth_key"],
-            )
-            try:
-                send_push_notification(
-                    subscription=subscription,
-                    title=notification_title,
-                    body=notification_body,
-                    data=notification_data,
-                )
-            except PushEndpointGoneError:
-                stale_endpoints.append((uid, sub["endpoint"]))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Push delivery failed for user %s: %s", uid, exc)
-
-    # Remove stale subscriptions (endpoint returned 410 Gone)
-    for uid, endpoint in stale_endpoints:
-        sb.table("push_subscriptions").delete().eq("user_id", uid).eq("endpoint", endpoint).execute()
-
+    notify_favorite_offer_published(get_supabase(), record)
     return Response(status_code=204)

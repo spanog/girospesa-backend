@@ -21,6 +21,7 @@ _settings_obj = MagicMock()
 _settings_obj.llm_provider = "gemini"
 _settings_obj.google_api_key = ""
 _settings_obj.gemini_model = "gemma-4-31b-it"
+_settings_obj.webhook_secret = "super-secret"
 _config_mod.settings = _settings_obj  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
@@ -742,6 +743,38 @@ class TestConfirmOffers:
 
         assert resp.status_code == 200
         notify_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_confirm_dispatches_favorite_notifications_without_webhook_secret(self):
+        sb = self._make_sb("done", 1)
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._flyer_targets", return_value=[
+                {"supermarket_id": "sup-1", "supermarket_name": "Coop"},
+            ]),
+            patch(
+                "api.routers.flyers._published_target_flyers",
+                side_effect=[
+                    {},
+                    {"sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"}},
+                ],
+            ),
+            patch("api.routers.flyers.notify_public_flyer_published"),
+            patch("api.routers.flyers.notify_favorite_offer_published") as favorite_mock,
+            patch.object(_flyers_module.settings, "webhook_secret", ""),
+        ):
+            resp = await _post(
+                "/flyers/flyer-1/offers/confirm",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+            )
+
+        assert resp.status_code == 200
+        favorite_mock.assert_called_once()
+        clone = favorite_mock.call_args.args[1]
+        assert clone["product_id"] == "prod-0"
+        assert clone["flyer_id"] == "published-1"
+        assert clone["supermarket_id"] == "sup-1"
+        assert clone["offer_kind"] == "published_target"
 
     @pytest.mark.asyncio
     async def test_confirm_passes_draft_image_to_new_product(self):

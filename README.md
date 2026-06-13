@@ -241,9 +241,10 @@ Nota implementativa: ordinamento `/products` usa query builder PostgREST Python.
 |--------|------|------|-------------|
 | `POST` | `/push/subscribe` | ✅ | Registra subscription Web Push del browser |
 | `POST` | `/push/unsubscribe` | ✅ | Cancella subscription |
-| `POST` | `/push/notify-favorites` | Webhook secret | Webhook Supabase: nuova offerta pubblica, confermata e attiva → crea `app_notifications.favorite_offer` e invia Web Push agli utenti che hanno quel prodotto tra i preferiti |
+| `POST` | `/push/notify-favorites` | Webhook secret | Webhook Supabase: nuova offerta pubblica, confermata e attiva → aggiorna una singola `app_notifications.favorite_offer` per `utente + flyer` e invia Web Push agli utenti che hanno quel prodotto tra i preferiti |
 
 Le notifiche Web Push di completamento/fallimento estrazione includono nel campo `data` anche `kind`, `flyer_id`, `status`, `products_count` e `url`. Il frontend usa questi campi per aggiornare subito la cache della gestione volantini e poi confermare lo stato tramite refetch HTTP.
+Le notifiche `favorite_offer` restano guidate dal prodotto preferito, non da `preferred_supermarkets`: il supermercato preferito serve ai filtri customer, non al routing notifiche. In locale o in ambienti senza `WEBHOOK_SECRET`, la conferma volantino pubblica le stesse `favorite_offer` direttamente durante la creazione dei cloni `published_target`, così l'inbox non dipende dal solo webhook esterno. Quando più prodotti preferiti dello stesso utente compaiono nello stesso flyer, il backend aggiorna una sola notifica aggregata per quel `user_id + flyer_id` invece di generarne una per ogni offerta.
 
 ### Acquisti (`/purchases`)
 
