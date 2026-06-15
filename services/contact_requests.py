@@ -41,6 +41,7 @@ class ContactRequestDeliveryError(ContactRequestError):
 class ContactRequestType(StrEnum):
     BUG_REPORT = "bug_report"
     COLLABORATION_REQUEST = "collaboration_request"
+    FEATURE_REQUEST = "feature_request"
     MISSING_FLYER_REQUEST = "missing_flyer_request"
 
 
@@ -70,6 +71,19 @@ class CollaborationRequest(BaseModel):
     _normalize_supermarket_name = field_validator("supermarket_name")(lambda cls, value: _normalize_single_line(value))
     _normalize_location = field_validator("location")(lambda cls, value: _normalize_single_line(value))
     _normalize_message = field_validator("message")(lambda cls, value: _normalize_multiline(value))
+
+
+class FeatureRequest(BaseModel):
+    request_type: ContactRequestType = ContactRequestType.FEATURE_REQUEST
+    email: str = Field(..., min_length=3, max_length=254)
+    subject: str = Field(..., min_length=3, max_length=160)
+    message: str = Field(..., min_length=10, max_length=5_000)
+    page_url: str | None = Field(default=None, max_length=2_000)
+
+    _normalize_email = field_validator("email")(lambda cls, value: _validate_email(value))
+    _normalize_subject = field_validator("subject")(lambda cls, value: _normalize_single_line(value))
+    _normalize_message = field_validator("message")(lambda cls, value: _normalize_multiline(value))
+    _normalize_page_url = field_validator("page_url")(lambda cls, value: _normalize_optional_single_line(value))
 
 
 class MissingFlyerRequest(BaseModel):
@@ -178,6 +192,19 @@ class ContactRequestService:
             subject=subject,
             text_body=_collaboration_text(payload, context),
             html_body=_collaboration_html(payload, context),
+        )
+        return ContactRequestResponse(status="sent")
+
+    async def submit_feature_request(
+        self,
+        payload: FeatureRequest,
+        context: ContactRequestContext,
+    ) -> ContactRequestResponse:
+        subject = f"[Contattaci][Migliorie] {payload.subject}"
+        self._mailer.send(
+            subject=subject,
+            text_body=_feature_request_text(payload, context),
+            html_body=_feature_request_html(payload, context),
         )
         return ContactRequestResponse(status="sent")
 
@@ -372,6 +399,45 @@ def _collaboration_html(
             _meta_row("Luogo", payload.location),
             _meta_row("Utente autenticato", context.user_id or "-"),
             _meta_row("Email sessione", context.user_email or "-"),
+            _paragraph(payload.message),
+        ],
+    )
+
+
+def _feature_request_text(
+    payload: FeatureRequest,
+    context: ContactRequestContext,
+) -> str:
+    return "\n".join(
+        [
+            "Nuova richiesta funzionalita o miglioria",
+            "",
+            f"Email contatto: {payload.email}",
+            f"Titolo proposta: {payload.subject}",
+            f"Pagina: {payload.page_url or '-'}",
+            f"Utente autenticato: {context.user_id or '-'}",
+            f"Email sessione: {context.user_email or '-'}",
+            f"User-Agent: {context.user_agent or '-'}",
+            "",
+            "Descrizione:",
+            payload.message,
+        ]
+    )
+
+
+def _feature_request_html(
+    payload: FeatureRequest,
+    context: ContactRequestContext,
+) -> str:
+    return _wrap_html(
+        "Nuova richiesta funzionalita o miglioria",
+        [
+            _meta_row("Email contatto", payload.email),
+            _meta_row("Titolo proposta", payload.subject),
+            _meta_row("Pagina", payload.page_url or "-"),
+            _meta_row("Utente autenticato", context.user_id or "-"),
+            _meta_row("Email sessione", context.user_email or "-"),
+            _meta_row("User-Agent", context.user_agent or "-"),
             _paragraph(payload.message),
         ],
     )

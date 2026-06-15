@@ -12,6 +12,7 @@ from services.contact_requests import (
     ContactRequestContext,
     ContactRequestService,
     ContactRequestValidationError,
+    FeatureRequest,
 )
 
 
@@ -97,3 +98,23 @@ def test_email_fields_reject_invalid_email():
             location="Milano",
             message="Messaggio valido di almeno dieci caratteri.",
         )
+
+
+@pytest.mark.asyncio
+async def test_feature_request_sends_mail():
+    mailer = MagicMock()
+    service = ContactRequestService(mailer=mailer)
+    payload = FeatureRequest(
+        email="user@example.com",
+        subject="Filtri salvati",
+        message="Vorrei salvare i filtri preferiti per riusarli.",
+        page_url="offerte",
+    )
+
+    response = await service.submit_feature_request(
+        payload,
+        ContactRequestContext("user-1", "user@example.com", "pytest"),
+    )
+
+    assert response.status == "sent"
+    mailer.send.assert_called_once()

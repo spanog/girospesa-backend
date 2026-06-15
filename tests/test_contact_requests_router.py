@@ -109,6 +109,26 @@ async def test_collaboration_request_accepted_for_authenticated_user():
 
 
 @pytest.mark.asyncio
+async def test_feature_request_accepted_for_authenticated_user():
+    service = MagicMock()
+    service.submit_feature_request = AsyncMock(return_value={"status": "sent"})
+    with patch.object(_module, "_build_service", return_value=service):
+        response = await _post(
+            data={
+                "request_type": "feature_request",
+                "email": "user@example.com",
+                "subject": "Filtri salvati",
+                "message": "Vorrei salvare i filtri usati piu spesso nella pagina offerte.",
+                "page_url": "offerte",
+            },
+            user={"sub": "user-1", "email": "session@example.com"},
+        )
+
+    assert response.status_code == 201
+    assert response.json() == {"status": "sent"}
+
+
+@pytest.mark.asyncio
 async def test_missing_flyer_request_accepted_without_email():
     service = MagicMock()
     service.submit_missing_flyer_request = AsyncMock(return_value={"status": "sent"})

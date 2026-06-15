@@ -17,6 +17,7 @@ from services.contact_requests import (
     ContactRequestType,
     ContactRequestValidationError,
     ContactRequestService,
+    FeatureRequest,
     MissingFlyerRequest,
 )
 
@@ -138,6 +139,15 @@ async def _dispatch_request(
             message=_required_value(message, "message"),
         )
         return await service.submit_collaboration_request(payload, context)
+    if request_type == ContactRequestType.FEATURE_REQUEST:
+        service = _build_service()
+        payload = FeatureRequest(
+            email=_required_value(email, "email"),
+            subject=_required_value(subject, "subject"),
+            message=_required_value(message, "message"),
+            page_url=_optional_value(page_url),
+        )
+        return await service.submit_feature_request(payload, context)
     service = _build_service()
     payload = MissingFlyerRequest(
         email=_optional_value(email),
