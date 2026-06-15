@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+from core.auth import get_current_user, get_current_user_profile
 from core.config import settings
 from core.database import get_supabase
 from core.session import (
@@ -117,6 +118,26 @@ async def session(request: Request) -> dict:
 @router.post("/logout", status_code=204, response_model=None)
 async def logout(response: Response) -> None:
     clear_session_cookie(response)
+
+
+@router.post("/exchange", status_code=204, response_model=None)
+async def exchange_session(
+    response: Response,
+    user: dict = Depends(get_current_user),
+    profile: dict = Depends(get_current_user_profile),
+) -> None:
+    email = user.get("email")
+    if not isinstance(email, str) or not email:
+        raise HTTPException(status_code=400, detail="Missing email claim")
+
+    token = create_session_token(
+        {
+            "sub": user["sub"],
+            "email": email,
+            "role": profile.get("role", "customer"),
+        }
+    )
+    set_session_cookie(response, token, secure=settings.environment == "production")
 
 
 # ---------------------------------------------------------------------------

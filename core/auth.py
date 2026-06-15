@@ -1,6 +1,6 @@
 """
 JWT authentication for FastAPI routes.
-Verifies backend session cookies first, then falls back to Supabase-issued JWTs.
+Prefers Supabase-issued Bearer JWTs, then falls back to legacy backend session cookies.
 """
 
 from __future__ import annotations
@@ -66,17 +66,17 @@ async def get_current_user(
 ) -> dict:
     """Dependency: resolves to the decoded JWT payload (user_id at payload['sub']).
 
-    Checks backend session cookie first; falls back to Supabase Bearer JWT.
+    Checks Supabase Bearer JWT first; falls back to legacy backend session cookie.
     """
+    if credentials is not None:
+        return _decode_token(credentials.credentials)
+
     if session_cookie:
         payload = read_session_token(session_cookie)
         if payload:
             return payload
 
-    if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-
-    return _decode_token(credentials.credentials)
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 
 async def get_current_user_id(
@@ -92,45 +92,46 @@ async def get_optional_user_id(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)],
     session_cookie: Annotated[str | None, Cookie(alias=_COOKIE_NAME)] = None,
 ) -> str | None:
-    """Dependency: returns the user_id (sub) from session cookie or Bearer JWT, else None."""
+    """Dependency: returns the user_id (sub) from Bearer JWT or session cookie, else None."""
+    if credentials is not None:
+        try:
+            payload = _decode_token(credentials.credentials)
+            return payload.get("sub")
+        except HTTPException:
+            return None
+
     if session_cookie:
         payload = read_session_token(session_cookie)
         if payload and payload.get("sub"):
             return payload["sub"]
-    if credentials is None:
-        return None
-    try:
-        payload = _decode_token(credentials.credentials)
-        return payload.get("sub")
-    except HTTPException:
-        return None
+    return None
 
 
 async def get_optional_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)],
     session_cookie: Annotated[str | None, Cookie(alias=_COOKIE_NAME)] = None,
 ) -> dict | None:
-    """Dependency: returns decoded session/JWT payload when available, else None."""
+    """Dependency: returns decoded Bearer/session payload when available, else None."""
+    if credentials is not None:
+        try:
+            return _decode_token(credentials.credentials)
+        except HTTPException:
+            return None
+
     if session_cookie:
         payload = read_session_token(session_cookie)
         if payload:
             return payload
-    if credentials is None:
-        return None
-    try:
-        return _decode_token(credentials.credentials)
-    except HTTPException:
-        return None
+    return None
 
 
 async def require_admin(
-    user: Annotated[dict, Depends(get_current_user)],
+    profile: Annotated[dict, Depends(get_current_user_profile)],
 ) -> dict:
-    """Dependency: requires admin role. Checks top-level 'role' (session cookie JWT) and 'app_metadata.role' (Supabase JWT)."""
-    role = user.get("role") or user.get("app_metadata", {}).get("role")
-    if role != "admin":
+    """Dependency: requires admin role using server-side profile data."""
+    if profile.get("role") != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
-    return user
+    return profile
 
 
 async def get_current_user_profile(

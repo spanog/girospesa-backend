@@ -38,7 +38,7 @@ FastAPI backend per GiroSpesa. Contiene tutta la logica di business dell'applica
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Il frontend si autentica tramite Supabase Auth (client-side), ottiene un JWT e lo passa come `Authorization: Bearer <token>` a questo backend. Il backend verifica il JWT con il secret condiviso per token `HS256` legacy oppure tramite JWKS Supabase per token `ES256`, e usa la service role key per tutte le operazioni su Supabase.
+Il frontend web usa Supabase Auth con `@supabase/ssr`: browser, proxy Next.js e Server Components condividono la sessione tramite i cookie SSR di Supabase, mentre le chiamate autenticate a questo backend inoltrano sempre il token accesso Supabase in `Authorization: Bearer <token>`. Android/iOS dovranno seguire lo stesso contratto bearer. Il backend verifica token legacy `HS256` con il secret condiviso oppure token `ES256` via JWKS Supabase, e usa la service role key per tutte le operazioni su Supabase. I cookie sessione backend (`girospesa_session`) restano fallback legacy/compatibilita': vengono ancora usati per recovery token backend-owned e come adapter browser-only per trasporti senza header custom, per esempio lo stream SSE della lista.
 
 ---
 
@@ -97,7 +97,7 @@ Il backend usa tre livelli di autenticazione:
 | Tipo | Come funziona | Usato da |
 |------|---------------|----------|
 | **Utente autenticato** | JWT Supabase in header `Authorization: Bearer <token>` | Quasi tutti gli endpoint |
-| **Admin** | JWT + `app_metadata.role == "admin"` | `/admin/*` |
+| **Admin** | JWT valido + ruolo `admin` risolto server-side dal profilo utente | `/admin/*` |
 | **API key B2B** | Header `X-API-Key: <key>` | `GET /analytics/b2b` |
 | **Webhook secret** | Header `X-Webhook-Secret: <secret>` | `POST /push/notify-favorites` |
 
@@ -109,7 +109,7 @@ Il backend usa tre livelli di autenticazione:
 | `PUT` | `/users/me` | ✅ | Aggiorna profilo; auto-geocode se cambia indirizzo e salva preferenza unica notifiche (`notifications_enabled`) |
 | `POST` | `/users/geocode` | ✅ | Geocodifica indirizzo di casa → aggiorna `home_lat/lng` e `home_location` PostGIS |
 | `POST` | `/users/me/avatar` | ✅ | Upload avatar (JPEG/PNG/WebP, max 5 MB) → bucket `avatars` |
-| `DELETE` | `/users/me` | ✅ | Elimina account + dati collegati, pulisce `girospesa_session`, risponde `204` |
+| `DELETE` | `/users/me` | ✅ | Elimina account + dati collegati; pulisce anche eventuale cookie legacy `girospesa_session`; risponde `204` |
 
 ### Contatti pubblici (`/contact-requests`)
 
@@ -127,7 +127,7 @@ Per sync quasi immediato tra membri, il backend espone anche `GET /lists/{list_i
 | `GET` | `/lists` | ✅ | Elenca tutti i workspace visibili all'utente: unica lista owner protetta + eventuali liste condivise, con metadati `is_active`, `is_owner`, `member_role`, `owner_display_name`, contatori e ordinamento pronto per il selector frontend |
 | `POST` | `/lists/select` | ✅ | Imposta la lista attiva corrente scegliendo uno dei workspace visibili all'utente e persiste `active_list_id` |
 | `GET` | `/lists/active` | ✅ | Lista attiva; auto-crea la lista owner `La mia lista` se non esiste; arricchisce gli item con `brand`, `category` e `subcategory`, facendo backfill del brand da prodotto/offerta quando lo snapshot storico non lo contiene. Il nome risposta è già viewer-specifico: owner vede `La mia lista`, i membri vedono `La lista di <owner>`. Per liste condivise, il pin offerta resta canonico nel DB ma la risposta maschera prezzo/supermercato quando il viewer non vede quel supermercato nel proprio raggio attivo |
-| `GET` | `/lists/{id}/events` | ✅ member | Stream SSE autenticato via cookie session; inoltra eventi `list_updated`, `members_updated`, `invites_updated` per sync live della lista condivisa |
+| `GET` | `/lists/{id}/events` | ✅ member | Stream SSE autenticato nel browser tramite cookie sessione backend compatibile emesso da `POST /auth/exchange`; inoltra eventi `list_updated`, `members_updated`, `invites_updated` per sync live della lista condivisa |
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
 | `POST` | `/lists/{id}/items/remove-purchased` | ✅ member | Rimuove in blocco dalla lista solo gli item acquistati e restituisce la lista aggiornata, senza cancellare `purchase_history` |
 | `POST` | `/lists/{id}/items` | ✅ member | Aggiunge item (manuale o da offerta) e salva snapshot `brand`/`category`/`subcategory` quando collegato a prodotto/offerta; persistenza via RPC concorrente-safe `append_list_item` (`SECURITY INVOKER`, `search_path` fissato a `public`) |

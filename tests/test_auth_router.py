@@ -130,6 +130,28 @@ def test_logout_clears_cookie(client):
     assert "girospesa_session" in set_cookie
 
 
+def test_exchange_sets_legacy_cookie_from_bearer(app):
+    app.dependency_overrides[_auth_router.get_current_user] = lambda: {
+        "sub": "user-1",
+        "email": "mario@example.com",
+    }
+    app.dependency_overrides[_auth_router.get_current_user_profile] = lambda: {
+        "id": "user-1",
+        "role": "customer",
+    }
+    client = TestClient(app, raise_server_exceptions=True)
+
+    response = client.post(
+        "/auth/exchange",
+        headers={"Authorization": "Bearer token-123"},
+    )
+
+    assert response.status_code == 204
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "girospesa_session=" in set_cookie
+    assert "HttpOnly" in set_cookie
+
+
 # ---------------------------------------------------------------------------
 # signup
 # ---------------------------------------------------------------------------
