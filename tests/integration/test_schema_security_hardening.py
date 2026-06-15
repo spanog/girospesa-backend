@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 
 import psycopg2
@@ -38,6 +39,24 @@ def test_internal_tables_have_rls_enabled():
     assert rows == [
         {"table_name": "analytics_data", "rls_enabled": True},
         {"table_name": "extraction_log", "rls_enabled": True},
+    ]
+
+
+def test_manager_assignment_tables_have_rls_enabled():
+    rows = _fetch_all(
+        """
+        SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname IN ('flyer_targets', 'manager_supermarkets')
+        ORDER BY c.relname
+        """
+    )
+
+    assert rows == [
+        {"table_name": "flyer_targets", "rls_enabled": True},
+        {"table_name": "manager_supermarkets", "rls_enabled": True},
     ]
 
 
@@ -86,6 +105,37 @@ def test_internal_tables_have_explicit_deny_all_policies():
     ]
 
 
+def test_manager_assignment_tables_have_explicit_deny_all_policies():
+    rows = _fetch_all(
+        """
+        SELECT tablename, policyname, cmd, roles, qual, with_check
+        FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename IN ('flyer_targets', 'manager_supermarkets')
+        ORDER BY tablename, policyname
+        """
+    )
+
+    assert rows == [
+        {
+            "tablename": "flyer_targets",
+            "policyname": "flyer_targets_deny_all",
+            "cmd": "ALL",
+            "roles": ["public"],
+            "qual": "false",
+            "with_check": "false",
+        },
+        {
+            "tablename": "manager_supermarkets",
+            "policyname": "manager_supermarkets_deny_all",
+            "cmd": "ALL",
+            "roles": ["public"],
+            "qual": "false",
+            "with_check": "false",
+        },
+    ]
+
+
 def test_contact_attachments_bucket_is_removed():
     rows = _fetch_all(
         """
@@ -121,6 +171,7 @@ def test_security_sensitive_functions_have_fixed_search_path():
         WHERE n.nspname = 'public'
           AND p.proname IN (
             'append_list_item',
+            'merge_shopping_list_items',
             'products_update_tsv',
             'remove_list_item',
             'search_products_catalog',
@@ -135,6 +186,7 @@ def test_security_sensitive_functions_have_fixed_search_path():
 
     assert rows == [
         {"function_name": "append_list_item", "function_config": "search_path=public"},
+        {"function_name": "merge_shopping_list_items", "function_config": "search_path=public"},
         {"function_name": "offer_is_currently_active", "function_config": "search_path=public"},
         {"function_name": "offers_compute_fields", "function_config": "search_path=public"},
         {"function_name": "products_update_tsv", "function_config": "search_path=public"},
@@ -299,6 +351,63 @@ def test_list_rpcs_are_not_security_definer():
     assert rows == [
         {"function_name": "update_list_item", "security_definer": False},
     ]
+
+
+def test_rls_policies_wrap_auth_uid_for_initplan_friendly_execution():
+    rows = _fetch_all(
+        """
+        SELECT tablename, policyname, cmd, COALESCE(qual, '') AS qual, COALESCE(with_check, '') AS with_check
+        FROM pg_policies
+        WHERE schemaname = 'public'
+          AND policyname IN (
+            'flyers_auth_read',
+            'flyers_auth_insert',
+            'flyers_auth_update',
+            'flyers_auth_delete',
+            'lists_select',
+            'lists_insert',
+            'lists_update',
+            'list_members_select',
+            'list_members_insert_owner',
+            'list_members_delete_owner',
+            'list_invites_select',
+            'favorites_own',
+            'profiles_own',
+            'push_subscriptions_self_manage',
+            'Users manage own purchase history',
+            'app_notifications_select_self',
+            'app_notifications_update_self',
+            'offers_auth_read'
+          )
+        ORDER BY tablename, policyname, cmd
+        """
+    )
+
+    wrapped_auth_uid = re.compile(
+        r"\(\s*select\s+auth\.uid\(\)(?:\s+as\s+\w+)?\s*\)",
+        re.IGNORECASE,
+    )
+
+    for row in rows:
+        expression = " ".join((row["qual"], row["with_check"]))
+        normalized = wrapped_auth_uid.sub("", expression)
+        assert "auth.uid()" not in normalized, row
+
+
+def test_push_subscriptions_has_single_authenticated_policy():
+    rows = _fetch_all(
+        """
+        SELECT cmd, COUNT(*) AS policy_count
+        FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename = 'push_subscriptions'
+          AND 'authenticated' = ANY(roles::text[])
+        GROUP BY cmd
+        ORDER BY cmd
+        """
+    )
+
+    assert rows == [{"cmd": "ALL", "policy_count": 1}]
 
 
 def test_offers_flyer_draft_product_format_unique_index_is_not_partial():
