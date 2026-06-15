@@ -188,3 +188,24 @@ async def test_configuration_errors_return_503():
         )
 
     assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_bug_report_rejects_more_than_three_screenshots():
+    response = await _post(
+        data={
+            "request_type": "bug_report",
+            "email": "guest@example.com",
+            "subject": "Bug checkout",
+            "message": "Pagina bloccata dopo il click finale.",
+        },
+        files=[
+            ("screenshots", ("uno.png", b"1", "image/png")),
+            ("screenshots", ("due.png", b"2", "image/png")),
+            ("screenshots", ("tre.png", b"3", "image/png")),
+            ("screenshots", ("quattro.png", b"4", "image/png")),
+        ],
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Too many screenshots: max 3"}

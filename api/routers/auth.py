@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from supabase import create_client
 
-from core.auth import get_current_user, get_current_user_profile
+from core.auth import (
+    _validate_backend_session_payload,
+    get_current_user,
+    get_current_user_profile,
+)
 from core.config import settings
 from core.database import get_supabase
 from core.session import (
@@ -24,6 +30,51 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
 
 _COOKIE_NAME = "girospesa_session"
+
+
+def _fresh_supabase_client():
+    return create_client(settings.supabase_url, settings.supabase_service_role_key)
+
+
+def _auth_user_updated_at(user: object) -> str | None:
+    value = getattr(user, "updated_at", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _build_backend_session_claims(
+    *,
+    user_id: str,
+    email: str,
+    role: str,
+    auth_user_updated_at: str | None,
+) -> dict[str, str]:
+    if not auth_user_updated_at:
+        raise HTTPException(status_code=502, detail="Missing auth user state")
+    return {
+        "sub": user_id,
+        "email": email,
+        "role": role,
+        "auth_user_updated_at": auth_user_updated_at,
+    }
+
+
+def _safe_frontend_redirect_path(path: str | None, default_path: str) -> str:
+    if not path:
+        return default_path
+    if not path.startswith("/") or path.startswith("//"):
+        return default_path
+    return path
+
+
+def _frontend_redirect_url(path: str) -> str:
+    return urljoin(f"{settings.frontend_url.rstrip('/')}/", path.lstrip("/"))
+
+
+def _append_query_param(url: str, key: str, value: str) -> str:
+    parsed = urlsplit(url)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    query.append((key, value))
+    return urlunsplit(parsed._replace(query=urlencode(query)))
 
 
 def _load_profile_with_manager_ids(sb, user_id: str) -> dict | None:
@@ -57,7 +108,7 @@ def _load_profile_with_manager_ids(sb, user_id: str) -> dict | None:
 
 def login_with_password(email: str, password: str) -> dict:
     """Authenticate via Supabase and return user + profile dict."""
-    sb = get_supabase()
+    sb = _fresh_supabase_client()
     try:
         auth_resp = sb.auth.sign_in_with_password({"email": email, "password": password})
     except Exception as exc:
@@ -70,7 +121,11 @@ def login_with_password(email: str, password: str) -> dict:
     profile = _load_profile_with_manager_ids(sb, user.id)
 
     return {
-        "user": {"id": user.id, "email": user.email},
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "auth_user_updated_at": _auth_user_updated_at(user),
+        },
         "profile": profile,
     }
 
@@ -84,11 +139,12 @@ class LoginBody(BaseModel):
 async def login(body: LoginBody, response: Response) -> dict:
     result = login_with_password(body.email, body.password)
     token = create_session_token(
-        {
-            "sub": result["user"]["id"],
-            "email": result["user"]["email"],
-            "role": (result["profile"] or {}).get("role", "customer"),
-        }
+        _build_backend_session_claims(
+            user_id=result["user"]["id"],
+            email=result["user"]["email"],
+            role=(result["profile"] or {}).get("role", "customer"),
+            auth_user_updated_at=result["user"].get("auth_user_updated_at"),
+        )
     )
     set_session_cookie(response, token, secure=settings.environment == "production")
     return result
@@ -100,7 +156,7 @@ async def session(request: Request) -> dict:
     if not token:
         return {"authenticated": False}
 
-    payload = read_session_token(token)
+    payload = _validate_backend_session_payload(read_session_token(token))
     if not payload:
         return {"authenticated": False}
 
@@ -131,11 +187,14 @@ async def exchange_session(
         raise HTTPException(status_code=400, detail="Missing email claim")
 
     token = create_session_token(
-        {
-            "sub": user["sub"],
-            "email": email,
-            "role": profile.get("role", "customer"),
-        }
+        _build_backend_session_claims(
+            user_id=user["sub"],
+            email=email,
+            role=profile.get("role", "customer"),
+            auth_user_updated_at=_auth_user_updated_at(
+                get_supabase().auth.admin.get_user_by_id(user["sub"]).user
+            ),
+        )
     )
     set_session_cookie(response, token, secure=settings.environment == "production")
 
@@ -209,7 +268,7 @@ class ForgotPasswordBody(BaseModel):
 
 def send_password_reset(email: str) -> None:
     """Send a password-reset email via Supabase — never leaks whether email exists."""
-    sb = get_supabase()
+    sb = _fresh_supabase_client()
     try:
         redirect_to = f"{settings.backend_url}/auth/callback"
         sb.auth.reset_password_email(email, {"redirect_to": redirect_to})
@@ -240,7 +299,7 @@ async def auth_callback(
     if type != "recovery":
         return RedirectResponse(url=settings.frontend_url, status_code=302)
 
-    sb = get_supabase()
+    sb = _fresh_supabase_client()
     try:
         result = sb.auth.verify_otp({"token_hash": token_hash, "type": "recovery"})
         user = result.user
@@ -251,23 +310,22 @@ async def auth_callback(
             url=f"{settings.frontend_url}/link-scaduto",
             status_code=302,
         )
-    finally:
-        # verify_otp stores a user session on the singleton client, which would
-        # cause subsequent service-role admin calls to fail with 403.
-        # Sign out to clear the cached session so the client reverts to the
-        # service-role key for all future requests.
-        try:
-            sb.auth.sign_out()
-        except Exception:
-            pass
-
     recovery_token = create_session_token(
-        {"sub": user.id, "purpose": "password_reset"},
+        {
+            "sub": user.id,
+            "purpose": "password_reset",
+            "auth_user_updated_at": _auth_user_updated_at(user),
+        },
         lifetime_seconds=_PASSWORD_RESET_TTL_SECONDS,
     )
-    redirect_to = next or f"{settings.frontend_url}/reset-password"
+    redirect_path = _safe_frontend_redirect_path(next, "/reset-password")
+    redirect_to = _append_query_param(
+        _frontend_redirect_url(redirect_path),
+        "token",
+        recovery_token,
+    )
     return RedirectResponse(
-        url=f"{redirect_to}?token={recovery_token}",
+        url=redirect_to,
         status_code=302,
     )
 
@@ -288,8 +346,15 @@ async def reset_password(body: ResetPasswordBody) -> None:
         raise HTTPException(status_code=400, detail="Invalid or expired recovery token")
 
     user_id: str = payload["sub"]
-    sb = get_supabase()
+    sb = _fresh_supabase_client()
     try:
+        current_user = sb.auth.admin.get_user_by_id(user_id).user
+        if not current_user:
+            raise ValueError("Missing user")
+        if _auth_user_updated_at(current_user) != payload.get("auth_user_updated_at"):
+            raise HTTPException(status_code=400, detail="Invalid or expired recovery token")
         sb.auth.admin.update_user_by_id(user_id, {"password": body.password})
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Password reset failed") from exc

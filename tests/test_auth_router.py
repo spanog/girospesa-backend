@@ -70,7 +70,11 @@ def test_login_sets_http_only_cookie(client, monkeypatch):
         _auth_router,
         "login_with_password",
         lambda email, password: {
-            "user": {"id": "user-1", "email": "mario@example.com"},
+            "user": {
+                "id": "user-1",
+                "email": "mario@example.com",
+                "auth_user_updated_at": "2026-06-15T10:00:00+00:00",
+            },
             "profile": {"display_name": "Mario Rossi", "role": "customer"},
         },
     )
@@ -101,11 +105,13 @@ def test_session_with_cookie_fetches_full_profile(client, monkeypatch, request):
         "sub": "user-1",
         "email": "mario@example.com",
         "role": "customer",
+        "auth_user_updated_at": "2026-06-15T10:00:00+00:00",
     }
     fake_profile = {"id": "user-1", "display_name": "Mario Rossi", "role": "customer"}
     fake_sb = MagicMock()
     fake_sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = fake_profile
     monkeypatch.setattr(_auth_router, "get_supabase", lambda: fake_sb)
+    monkeypatch.setattr(_auth_router, "_validate_backend_session_payload", lambda payload: payload)
 
     response = client.get("/auth/session", cookies={"girospesa_session": "valid-token"})
 
@@ -139,6 +145,11 @@ def test_exchange_sets_legacy_cookie_from_bearer(app):
         "id": "user-1",
         "role": "customer",
     }
+    fake_sb = MagicMock()
+    fake_sb.auth.admin.get_user_by_id.return_value.user = MagicMock(
+        updated_at="2026-06-15T10:00:00+00:00"
+    )
+    _auth_router.get_supabase = lambda: fake_sb
     client = TestClient(app, raise_server_exceptions=True)
 
     response = client.post(
@@ -219,3 +230,49 @@ def test_reset_password_requires_backend_recovery_token(client):
     })
 
     assert response.status_code == 400
+
+
+def test_auth_callback_rejects_absolute_next_redirects(client, monkeypatch):
+    fake_sb = MagicMock()
+    fake_sb.auth.verify_otp.return_value.user = MagicMock(
+        id="user-1",
+        updated_at="2026-06-15T10:00:00+00:00",
+    )
+    monkeypatch.setattr(_auth_router, "_fresh_supabase_client", lambda: fake_sb)
+    monkeypatch.setattr(_auth_router.settings, "frontend_url", "http://localhost:3000")
+
+    response = client.get(
+        "/auth/callback",
+        params={
+            "token_hash": "valid",
+            "type": "recovery",
+            "next": "https://evil.example/steal",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"].startswith(
+        "http://localhost:3000/reset-password?token="
+    )
+
+
+def test_reset_password_rejects_replayed_backend_recovery_token(client, monkeypatch):
+    _session_mod.read_session_token.return_value = {
+        "sub": "user-1",
+        "purpose": "password_reset",
+        "auth_user_updated_at": "2026-06-15T10:00:00+00:00",
+    }
+    fake_sb = MagicMock()
+    fake_sb.auth.admin.get_user_by_id.return_value.user = MagicMock(
+        updated_at="2026-06-15T10:00:01+00:00"
+    )
+    monkeypatch.setattr(_auth_router, "_fresh_supabase_client", lambda: fake_sb)
+
+    response = client.post(
+        "/auth/reset-password",
+        json={"recovery_token": "token", "password": "Password123!"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid or expired recovery token"}

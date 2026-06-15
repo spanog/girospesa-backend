@@ -136,10 +136,16 @@ class TestCookieAuth:
         from fastapi import FastAPI, Depends
         from fastapi.testclient import TestClient
 
+        monkeypatch.setattr(_auth_module, "read_session_token", lambda token: {"sub": "user-1"})
         monkeypatch.setattr(
             _auth_module,
-            "read_session_token",
-            lambda token: {"sub": "user-1", "email": "mario@example.com", "role": "customer"},
+            "_validate_backend_session_payload",
+            lambda payload: {
+                "sub": "user-1",
+                "email": "mario@example.com",
+                "role": "customer",
+                "auth_user_updated_at": "2026-06-15T10:00:00+00:00",
+            },
         )
 
         app = FastAPI()
@@ -153,6 +159,40 @@ class TestCookieAuth:
 
         assert response.status_code == 200
         assert response.json() == {"user_id": "user-1"}
+
+    def test_cookie_session_rejects_stale_backend_token(self, monkeypatch):
+        from fastapi import FastAPI, Depends
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(
+            _auth_module,
+            "read_session_token",
+            lambda token: {
+                "sub": "user-1",
+                "email": "mario@example.com",
+                "role": "customer",
+                "auth_user_updated_at": "2026-06-15T10:00:00+00:00",
+            },
+        )
+        monkeypatch.setattr(
+            _auth_module,
+            "_load_auth_user_state",
+            lambda user_id: (
+                True,
+                _auth_module.datetime(2026, 6, 15, 10, 0, 1, tzinfo=_auth_module.timezone.utc),
+            ),
+        )
+
+        app = FastAPI()
+
+        @app.get("/protected")
+        async def protected(user_id: str = Depends(_auth_module.get_current_user_id)):
+            return {"user_id": user_id}
+
+        client = TestClient(app)
+        response = client.get("/protected", cookies={"girospesa_session": "stale-token"})
+
+        assert response.status_code == 401
 
     def test_bearer_compatibility_still_works(self, monkeypatch):
         _config_mod.settings.supabase_jwt_secret = "secret"

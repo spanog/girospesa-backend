@@ -47,6 +47,7 @@ def test_round_trip_session_token(stub_session_settings) -> None:
             "sub": "user-1",
             "email": "mario@example.com",
             "role": "customer",
+            "auth_user_updated_at": "2026-06-15T10:00:00+00:00",
         }
     )
 
@@ -56,6 +57,7 @@ def test_round_trip_session_token(stub_session_settings) -> None:
     assert payload["sub"] == "user-1"
     assert payload["email"] == "mario@example.com"
     assert payload["role"] == "customer"
+    assert payload["auth_user_updated_at"] == "2026-06-15T10:00:00+00:00"
 
 
 def test_expired_session_token_is_rejected(stub_session_settings) -> None:

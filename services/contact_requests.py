@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field, field_validator
 from core.config import settings
 
 _ALLOWED_SCREENSHOT_TYPES = frozenset({"image/jpeg", "image/png"})
+_MAX_SCREENSHOT_ATTACHMENTS = 3
+_MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024
 _CONTENT_TYPE_EXTENSIONS = {
     "image/jpeg": "jpg",
     "image/png": "png",
@@ -306,11 +308,17 @@ def _validated_content_type(upload: UploadFile) -> str:
 async def _read_email_attachments(
     screenshots: Sequence[UploadFile],
 ) -> list[EmailAttachment]:
+    if len(screenshots) > _MAX_SCREENSHOT_ATTACHMENTS:
+        raise ContactRequestValidationError(
+            f"Too many screenshots: max {_MAX_SCREENSHOT_ATTACHMENTS}"
+        )
     attachments: list[EmailAttachment] = []
     for screenshot in screenshots:
         content_type = _validated_content_type(screenshot)
         file_name = screenshot.filename or f"screenshot.{_CONTENT_TYPE_EXTENSIONS[content_type]}"
         payload = await screenshot.read()
+        if len(payload) > _MAX_SCREENSHOT_BYTES:
+            raise ContactRequestValidationError(f"Screenshot too large: {file_name}")
         attachments.append(
             EmailAttachment(
                 file_name=file_name,

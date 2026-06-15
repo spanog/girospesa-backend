@@ -19,8 +19,9 @@ from services.contact_requests import (
 def _upload_file(
     name: str = "bug.png",
     content_type: str = "image/png",
+    content: bytes = b"img",
 ) -> UploadFile:
-    return UploadFile(filename=name, file=BytesIO(b"img"), headers={"content-type": content_type})
+    return UploadFile(filename=name, file=BytesIO(content), headers={"content-type": content_type})
 
 
 @pytest.mark.asyncio
@@ -77,6 +78,21 @@ async def test_bug_report_rejects_invalid_content_type():
             ),
             ContactRequestContext(None, None, None),
             [_upload_file(content_type="text/plain")],
+        )
+
+
+@pytest.mark.asyncio
+async def test_bug_report_rejects_oversized_screenshot():
+    service = ContactRequestService(mailer=MagicMock())
+    with pytest.raises(ContactRequestValidationError):
+        await service.submit_bug_report(
+            BugReportRequest(
+                email="user@example.com",
+                subject="Crash login",
+                message="La pagina si blocca dopo click sul bottone login.",
+            ),
+            ContactRequestContext(None, None, None),
+            [_upload_file(content=b"x" * ((5 * 1024 * 1024) + 1))],
         )
 
 
