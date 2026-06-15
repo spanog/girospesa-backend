@@ -305,7 +305,7 @@ def _sync_published_clones_for_source_offer(
             continue
         clone = {"id": str(uuid.uuid4()), **payload}
         sb.table("offers").insert(clone).execute()
-        if not settings.webhook_secret:
+        if not getattr(settings, "webhook_secret", None):
             notify_favorite_offer_published(sb, clone)
 
     stale_clone_ids = [

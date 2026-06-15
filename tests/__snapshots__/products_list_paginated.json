@@ -1,4 +1,10 @@
 {
+  "counts_by_supermarket_id": {
+    "sm-1": 1
+  },
+  "counts_by_supermarket_slug": {
+    "lidl": 1
+  },
   "expiring_soon_count": 0,
   "items": [
     {

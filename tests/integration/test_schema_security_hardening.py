@@ -121,7 +121,6 @@ def test_security_sensitive_functions_have_fixed_search_path():
         WHERE n.nspname = 'public'
           AND p.proname IN (
             'append_list_item',
-            'create_list',
             'products_update_tsv',
             'remove_list_item',
             'search_products_catalog',
@@ -136,7 +135,6 @@ def test_security_sensitive_functions_have_fixed_search_path():
 
     assert rows == [
         {"function_name": "append_list_item", "function_config": "search_path=public"},
-        {"function_name": "create_list", "function_config": "search_path=public"},
         {"function_name": "offer_is_currently_active", "function_config": "search_path=public"},
         {"function_name": "offers_compute_fields", "function_config": "search_path=public"},
         {"function_name": "products_update_tsv", "function_config": "search_path=public"},
@@ -218,7 +216,6 @@ def test_list_rpc_execute_privileges_match_intended_access():
         """
         SELECT
           role_name,
-          has_function_privilege(role_name, 'public.create_list(text)', 'EXECUTE') AS create_list,
           has_function_privilege(role_name, 'public.update_list_item(uuid, text, jsonb)', 'EXECUTE') AS update_list_item,
           has_function_privilege(role_name, 'public.handle_new_user()', 'EXECUTE') AS handle_new_user
         FROM (
@@ -231,13 +228,11 @@ def test_list_rpc_execute_privileges_match_intended_access():
     assert rows == [
         {
             "role_name": "anon",
-            "create_list": False,
             "update_list_item": False,
             "handle_new_user": False,
         },
         {
             "role_name": "authenticated",
-            "create_list": True,
             "update_list_item": True,
             "handle_new_user": False,
         },
@@ -297,13 +292,11 @@ def test_list_rpcs_are_not_security_definer():
         FROM pg_proc p
         JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'public'
-          AND p.proname IN ('create_list', 'update_list_item')
-        ORDER BY p.proname
+          AND p.proname = 'update_list_item'
         """
     )
 
     assert rows == [
-        {"function_name": "create_list", "security_definer": False},
         {"function_name": "update_list_item", "security_definer": False},
     ]
 
@@ -416,7 +409,7 @@ def test_auth_signup_trigger_creates_profile_and_default_list():
         }
         assert shopping_list == {
             "user_id": user_id,
-            "name": "Lista principale",
+            "name": "La mia lista",
             "is_active": True,
             "role": "owner",
         }

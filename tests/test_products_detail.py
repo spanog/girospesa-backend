@@ -159,7 +159,7 @@ class TestListProducts:
         order_mock = eq_kind_mock.order.return_value
         order_mock.range.return_value.execute.return_value = execute_result
         eq_kind_mock.execute.return_value = MagicMock(
-            data=[{"supermarket_id": "sm-1"}]
+            data=[{"supermarket_id": "sm-1", "supermarkets": {"slug": "lidl"}}]
         )
         eq_kind_mock.gte.return_value.lte.return_value.execute.return_value = MagicMock(
             data=[],
@@ -172,6 +172,8 @@ class TestListProducts:
         assert resp.status_code == 200
         data = resp.json()
         assert data["nextPage"] is None
+        assert data["counts_by_supermarket_id"] == {"sm-1": 1}
+        assert data["counts_by_supermarket_slug"] == {"lidl": 1}
         assert len(data["items"]) == 1
         assert data["items"][0]["id"] == "offer-list-1"
         assert data["items"][0]["name"] == "Latte intero"
@@ -322,6 +324,8 @@ class TestListProducts:
             "total": 0,
             "supermarket_count": 0,
             "expiring_soon_count": 0,
+            "counts_by_supermarket_id": {},
+            "counts_by_supermarket_slug": {},
         }
         # Offers query should never be executed when nearby_ids is empty
         offers_chain.select.return_value.eq.return_value.eq.return_value.order.return_value.range.return_value.execute.assert_not_called()
@@ -373,11 +377,11 @@ class TestListProducts:
         select_mock = sb.table.return_value.select.return_value
         eq_kind_mock = select_mock.eq.return_value.eq.return_value
         order_mock = eq_kind_mock.order.return_value
-        order_mock.eq.return_value.range.return_value.execute.return_value = execute_result
-        eq_kind_mock.eq.return_value.execute.return_value = MagicMock(
+        order_mock.in_.return_value.range.return_value.execute.return_value = execute_result
+        eq_kind_mock.in_.return_value.execute.return_value = MagicMock(
             data=[{"supermarket_id": "sm-branch-2"}]
         )
-        eq_kind_mock.gte.return_value.lte.return_value.eq.return_value.execute.return_value = MagicMock(
+        eq_kind_mock.gte.return_value.lte.return_value.in_.return_value.execute.return_value = MagicMock(
             data=[],
             count=0,
         )
@@ -386,8 +390,35 @@ class TestListProducts:
             resp = await _get("/products?supermarket_id=sm-branch-2")
 
         assert resp.status_code == 200
-        order_mock.eq.assert_called_once_with("supermarket_id", "sm-branch-2")
+        order_mock.in_.assert_called_once_with("supermarket_id", ["sm-branch-2"])
         select_mock.eq.return_value.maybe_single.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_multi_supermarket_filter_uses_single_in_clause(self):
+        sb = MagicMock()
+        execute_result = MagicMock(data=[_LIST_ROW], count=1)
+        select_mock = sb.table.return_value.select.return_value
+        eq_kind_mock = select_mock.eq.return_value.eq.return_value
+        order_mock = eq_kind_mock.order.return_value
+        order_mock.in_.return_value.range.return_value.execute.return_value = execute_result
+        eq_kind_mock.in_.return_value.execute.return_value = MagicMock(
+            data=[
+                {"supermarket_id": "sm-1", "supermarkets": {"slug": "lidl"}},
+                {"supermarket_id": "sm-2", "supermarkets": {"slug": "esselunga"}},
+            ]
+        )
+        eq_kind_mock.gte.return_value.lte.return_value.in_.return_value.execute.return_value = MagicMock(
+            data=[],
+            count=0,
+        )
+
+        with patch("api.routers.products.get_supabase", return_value=sb):
+            resp = await _get("/products?supermarket_ids=sm-1&supermarket_ids=sm-2")
+
+        assert resp.status_code == 200
+        order_mock.in_.assert_called_once_with("supermarket_id", ["sm-1", "sm-2"])
+        assert resp.json()["counts_by_supermarket_id"] == {"sm-1": 1, "sm-2": 1}
+        assert resp.json()["counts_by_supermarket_slug"] == {"lidl": 1, "esselunga": 1}
 
     @pytest.mark.asyncio
     async def test_exact_product_id_filter_applies_canonical_product_constraint(self):
