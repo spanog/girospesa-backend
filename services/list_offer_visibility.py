@@ -53,3 +53,22 @@ def project_items_for_viewer(items: list[dict], hidden_offer_ids: set[str]) -> l
     if not hidden_offer_ids:
         return items
     return [project_item_for_viewer(item, hidden_offer_ids) for item in items]
+
+
+def project_item_without_offer(item: dict, stale_offer_ids: set[str]) -> dict:
+    offer_id = item.get("pinned_offer_id")
+    if not offer_id or offer_id not in stale_offer_ids:
+        return item
+    return {
+        **item,
+        "source": "manual",
+        "pinned_offer_id": None,
+        "found_deals": [],
+        "offer_visibility_status": None,
+    }
+
+
+def project_items_without_offers(items: list[dict], stale_offer_ids: set[str]) -> list[dict]:
+    if not stale_offer_ids:
+        return items
+    return [project_item_without_offer(item, stale_offer_ids) for item in items]

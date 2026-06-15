@@ -18,12 +18,13 @@ from core.config import settings
 from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
 from services.repositories import lists_repository as repo
 from services.extraction.normalizer import format_unit_price_label
-from services.deal_freshness import classify_deal_freshness
+from services.deal_freshness import classify_deal_freshness, offer_is_active_now
 from services.list_offer_visibility import (
     HIDDEN_FOR_VIEWER,
     hidden_offer_ids_for_viewer,
     project_item_for_viewer,
     project_items_for_viewer,
+    project_items_without_offers,
     visible_supermarket_ids_for_user,
 )
 from services.offer_visibility import apply_current_offer_window
@@ -592,7 +593,7 @@ def _offer_rows_for_items(sb: object, items: list[dict]) -> list[dict]:
         return []
     return (
         sb.table("offers")  # type: ignore[union-attr,attr-defined]
-        .select("id, supermarket_id")
+        .select("id, supermarket_id, valid_from, valid_to, is_active")
         .in_("id", offer_ids)
         .execute()
         .data
@@ -616,8 +617,40 @@ def _project_list_items_for_viewer(
     items: list[dict],
     user_id: str,
 ) -> list[dict]:
-    hidden_offer_ids = _hidden_offer_ids_for_viewer(sb, items, user_id)
-    return project_items_for_viewer(items, hidden_offer_ids)
+    offer_rows = _offer_rows_for_items(sb, items)
+    hidden_offer_ids = _hidden_offer_ids_for_viewer_from_rows(items, user_id, sb, offer_rows)
+    stale_offer_ids = _stale_offer_ids_for_viewer(items, offer_rows, hidden_offer_ids)
+    projected_items = project_items_for_viewer(items, hidden_offer_ids)
+    return project_items_without_offers(projected_items, stale_offer_ids)
+
+
+def _hidden_offer_ids_for_viewer_from_rows(
+    items: list[dict],
+    user_id: str,
+    sb: object,
+    offer_rows: list[dict],
+) -> set[str]:
+    visible_supermarket_ids = visible_supermarket_ids_for_user(sb, user_id)
+    if visible_supermarket_ids is None:
+        return set()
+    return hidden_offer_ids_for_viewer(items, offer_rows, visible_supermarket_ids)
+
+
+def _stale_offer_ids_for_viewer(
+    items: list[dict],
+    offer_rows: list[dict],
+    hidden_offer_ids: set[str],
+) -> set[str]:
+    offers_by_id = {row["id"]: row for row in offer_rows}
+    stale_offer_ids: set[str] = set()
+    for item in items:
+        offer_id = item.get("pinned_offer_id")
+        if not offer_id or offer_id in hidden_offer_ids:
+            continue
+        offer_row = offers_by_id.get(offer_id)
+        if not offer_row or not offer_is_active_now(offer_row):
+            stale_offer_ids.add(offer_id)
+    return stale_offer_ids
 
 
 def _member_counts(list_ids: list[str]) -> dict[str, int]:
@@ -1535,7 +1568,7 @@ async def get_deal_freshness(
     if offer_ids:
         rows = (
             sb.table("offers")
-            .select("id, price_offer, valid_to, is_active")
+            .select("id, price_offer, valid_from, valid_to, is_active")
             .in_("id", offer_ids)
             .execute()
         ).data
@@ -1584,7 +1617,7 @@ async def clear_stale_offers(
     if offer_ids:
         rows = (
             sb.table("offers")
-            .select("id, price_offer, valid_to, is_active")
+            .select("id, price_offer, valid_from, valid_to, is_active")
             .in_("id", offer_ids)
             .execute()
         ).data

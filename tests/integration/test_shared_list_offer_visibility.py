@@ -189,3 +189,40 @@ class TestSharedListOfferVisibility:
         stored_item = stored_items[0]
         assert stored_item["pinned_offer_id"] == seeded_offer_context["offer"]["id"]
         assert stored_item["found_deals"][0]["supermarket_name"] == seeded_offer_context["store"]["name"]
+
+    async def test_deleted_offer_is_projected_as_no_offer_in_list_response(
+        self,
+        supabase_client,
+        owner_user,
+        member_user,
+        seeded_offer_context,
+        _override_auth,
+    ):
+        item = _manual_item("Latte")
+        shopping_list = _create_shared_list(
+            supabase_client, owner_user, member_user, [item]
+        )
+
+        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+            with patch("api.routers.lists.get_supabase", return_value=supabase_client):
+                _override_auth["id"] = owner_user
+                patch_resp = await client.patch(
+                    f"/lists/{shopping_list['id']}/items/{item['id']}",
+                    json={"pinned_offer_id": seeded_offer_context["offer"]["id"]},
+                )
+                assert patch_resp.status_code == 200
+
+                supabase_client.table("offers").delete().eq(
+                    "id",
+                    seeded_offer_context["offer"]["id"],
+                ).execute()
+
+                list_resp = await client.get(f"/lists/{shopping_list['id']}")
+
+        assert list_resp.status_code == 200
+        projected_item = list_resp.json()["items"][0]
+        assert projected_item["source"] == "manual"
+        assert projected_item["pinned_offer_id"] is None
+        assert projected_item["pinned_product_id"] == seeded_offer_context["product"]["id"]
+        assert projected_item["found_deals"] == []
+        assert projected_item.get("offer_visibility_status") is None
