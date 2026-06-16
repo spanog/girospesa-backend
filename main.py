@@ -21,6 +21,7 @@ from api.routers import (
     flyers,
     lists,
     notifications,
+    ops,
     offers,
     optimize,
 
@@ -137,6 +138,7 @@ app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 app.include_router(push.router, prefix="/push", tags=["push"])
 app.include_router(contact_requests.router, prefix="/contact-requests", tags=["contact-requests"])
 app.include_router(purchases.router, prefix="/purchases", tags=["purchases"])
+app.include_router(ops.router, prefix="/ops", tags=["ops"])
 app.include_router(admin_products.router, prefix="/admin/products", tags=["admin-products"])
 app.include_router(offers.router, prefix="/offers", tags=["offers"])
 app.include_router(optimize.router, prefix="/optimize", tags=["optimize"])

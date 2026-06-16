@@ -12,3 +12,9 @@
 - Run:
   - `.venv/bin/python -m pytest tests -v --ignore=tests/integration --ignore=tests/performance`
   - `.venv/bin/python -m pytest tests/integration -v`
+
+## Deploy / CI conventions
+
+- Keep `render.yaml` aligned with runtime expectations and required env vars.
+- GitHub Actions under `.github/workflows/` are part of the production contract: update them when commands, Python version, or test entrypoints change.
+- Scheduled maintenance for free-tier production uses `POST /ops/cron/daily-maintenance` with `X-Ops-Secret`; if cleanup logic changes, keep the route and workflow in sync.

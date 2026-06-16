@@ -4,6 +4,52 @@ FastAPI backend per GiroSpesa. Contiene tutta la logica di business dell'applica
 
 > **Estrazione AI volantini:** questo repo contiene runtime, review flow e CLI di valutazione. Il vecchio workspace di estrazione è stato assorbito in questo backend.
 
+## Deploy produzione
+
+Per minimizzare costo e complessita', questo repo ora e' pronto per deploy automatico su Render Free tramite GitHub:
+
+- `render.yaml` descrive il servizio web FastAPI (`uvicorn main:app --host 0.0.0.0 --port $PORT`)
+- `.github/workflows/ci.yml` esegue la suite backend ad ogni PR
+- `.github/workflows/daily-maintenance.yml` esegue ogni giorno una manutenzione remota compatibile con il free tier
+
+### Variabili Render richieste
+
+Imposta nel servizio Render:
+
+- `ENVIRONMENT=production`
+- `FRONTEND_URL=https://www.girospesa.it` oppure dominio frontend reale
+- `BACKEND_URL=https://api.girospesa.it` oppure dominio backend reale
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_JWT_SECRET`
+- `APP_SESSION_SECRET`
+- `DB_DSN`
+- `GOOGLE_API_KEY`
+- `GEMINI_MODEL`
+- `VAPID_PRIVATE_KEY`
+- `VAPID_PUBLIC_KEY`
+- `WEBHOOK_SECRET`
+- `OPS_CRON_SECRET`
+
+### GitHub Actions secrets richiesti
+
+Nel repo GitHub backend configura:
+
+- `BACKEND_HEALTHCHECK_URL`
+- `BACKEND_DAILY_MAINTENANCE_URL`
+- `OPS_CRON_SECRET`
+
+Esempio:
+
+```text
+BACKEND_HEALTHCHECK_URL=https://api.girospesa.it/health
+BACKEND_DAILY_MAINTENANCE_URL=https://api.girospesa.it/ops/cron/daily-maintenance
+```
+
+### Nota importante sul piano free
+
+Render dichiara che i servizi Free non sono pensati per produzione stabile, vanno in spin down dopo inattivita' e possono essere riavviati in qualsiasi momento. Per questo il backend mantiene APScheduler locale, ma la pulizia giornaliera in produzione viene anche richiamata da GitHub Actions tramite `POST /ops/cron/daily-maintenance`, cosi' i cleanup non dipendono dal fatto che il container sia sveglio a mezzanotte.
+
 ---
 
 ## Come si colloca nel sistema
@@ -245,6 +291,12 @@ Nota implementativa: `/products` restituisce sempre `{ items, nextPage, total?, 
 
 Le notifiche Web Push di completamento/fallimento estrazione includono nel campo `data` anche `kind`, `flyer_id`, `status`, `products_count` e `url`. Il frontend usa questi campi per aggiornare subito la cache della gestione volantini e poi confermare lo stato tramite refetch HTTP.
 Le notifiche `favorite_offer` restano guidate dal prodotto preferito, non da `preferred_supermarkets`: il supermercato preferito serve ai filtri customer, non al routing notifiche. In locale o in ambienti senza `WEBHOOK_SECRET`, la conferma volantino pubblica le stesse `favorite_offer` direttamente durante la creazione dei cloni `published_target`, così l'inbox non dipende dal solo webhook esterno. Quando più prodotti preferiti dello stesso utente compaiono nello stesso flyer, il backend aggiorna una sola notifica aggregata per quel `user_id + flyer_id` invece di generarne una per ogni offerta.
+
+### Ops (`/ops`)
+
+| Metodo | Path | Auth | Descrizione |
+|--------|------|------|-------------|
+| `POST` | `/ops/cron/daily-maintenance` | Header `X-Ops-Secret` | Esegue cleanup offerte di flyer scaduti e rimozione item acquistati scaduti; usato dal workflow GitHub schedulato |
 
 ### Acquisti (`/purchases`)
 

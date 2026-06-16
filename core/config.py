@@ -38,6 +38,7 @@ class Settings(BaseSettings):
 
     # Shared secret for the Supabase Database Webhook → /push/notify-favorites
     webhook_secret: str = ""
+    ops_cron_secret: str = ""
 
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"

@@ -30,6 +30,7 @@ def _import_main(monkeypatch):
         "invite",
         "lists",
         "notifications",
+        "ops",
         "offers",
         "optimize",
         "products",
