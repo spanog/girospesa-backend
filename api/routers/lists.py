@@ -10,10 +10,9 @@ import json
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
-from jose import jwt
 from pydantic import BaseModel
 
-from core.auth import get_current_user_id
+from core.auth import get_current_access_token, get_current_user_id
 from core.config import settings
 from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
 from services.repositories import lists_repository as repo
@@ -346,63 +345,57 @@ def _selected_offer_patch(sb: object, offer_id: str) -> dict:
     }
 
 
-def _rpc_token_for_user(user_id: str) -> str:
-    now = int(time.time())
-    payload = {
-        "sub": user_id,
-        "role": "authenticated",
-        "aud": "authenticated",
-        "iss": "supabase",
-        "iat": now,
-        "exp": now + 300,
-    }
-    return jwt.encode(payload, settings.supabase_jwt_secret, algorithm="HS256")
-
-
 async def _rpc_update_list_item(
     list_id: str,
     item_id: str,
     patch: dict,
     user_id: str,
+    access_token: str,
 ) -> None:
     await _rpc_call("update_list_item", {
         "p_list_id": list_id,
         "p_item_id": item_id,
         "p_patch": patch,
-    }, user_id)
+    }, user_id, access_token)
 
 
 async def _rpc_append_list_item(
     list_id: str,
     item: dict,
     user_id: str,
+    access_token: str,
 ) -> None:
     await _rpc_call("append_list_item", {
         "p_list_id": list_id,
         "p_item": item,
-    }, user_id)
+    }, user_id, access_token)
 
 
 async def _rpc_remove_list_item(
     list_id: str,
     item_id: str,
     user_id: str,
+    access_token: str,
 ) -> None:
     await _rpc_call("remove_list_item", {
         "p_list_id": list_id,
         "p_item_id": item_id,
-    }, user_id)
+    }, user_id, access_token)
 
 
-async def _rpc_call(function_name: str, payload: dict, user_id: str) -> None:
+async def _rpc_call(
+    function_name: str,
+    payload: dict,
+    user_id: str,
+    access_token: str,
+) -> None:
     if has_direct_postgres():
         _direct_rpc_call(function_name, payload, user_id)
         return
 
-    token = _rpc_token_for_user(user_id)
     headers = {
-        "apikey": settings.supabase_service_role_key,
-        "Authorization": f"Bearer {token}",
+        "apikey": settings.supabase_secret_key,
+        "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
     }
     url = f"{settings.supabase_url.rstrip('/')}/rest/v1/rpc/{function_name}"
@@ -1192,6 +1185,7 @@ async def add_item(
     list_id: str,
     body: AddItemBody,
     user_id: Annotated[str, Depends(get_current_user_id)],
+    access_token: Annotated[str, Depends(get_current_access_token)],
 ) -> dict:
     import uuid
 
@@ -1223,7 +1217,7 @@ async def add_item(
         except HTTPException:
             pass
     new_item = _enrich_items_with_categories(sb, [new_item])[0]
-    await _rpc_append_list_item(list_id, new_item, user_id)
+    await _rpc_append_list_item(list_id, new_item, user_id, access_token)
     _publish_list_sync_event(list_id, "list_updated", "item_added")
     return project_item_for_viewer(
         new_item,
@@ -1271,6 +1265,7 @@ async def remove_item(
     list_id: str,
     item_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],
+    access_token: Annotated[str, Depends(get_current_access_token)],
 ) -> Response:
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
@@ -1281,7 +1276,7 @@ async def remove_item(
         raise HTTPException(status_code=409, detail="Cannot remove a purchased item; undo purchase first")
     if target and target.get("purchased_by"):
         sb.table("purchase_history").delete().eq("list_item_id", item_id).eq("user_id", target["purchased_by"]).execute()
-    await _rpc_remove_list_item(list_id, item_id, user_id)
+    await _rpc_remove_list_item(list_id, item_id, user_id, access_token)
     _publish_list_sync_event(list_id, "list_updated", "item_removed")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -1291,6 +1286,7 @@ async def toggle_item(
     list_id: str,
     item_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],
+    access_token: Annotated[str, Depends(get_current_access_token)],
 ) -> dict:
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
@@ -1303,7 +1299,7 @@ async def toggle_item(
         "checked_by": user_id if new_checked else None,
         "checked_at": _now_utc() if new_checked else None,
     }
-    await _rpc_update_list_item(list_id, item_id, patch, user_id)
+    await _rpc_update_list_item(list_id, item_id, patch, user_id, access_token)
     _publish_list_sync_event(list_id, "list_updated", "item_toggled")
     toggled = {**toggled, **patch}
     if toggled is None:
@@ -1321,6 +1317,7 @@ async def set_item_checked(
     item_id: str,
     body: dict,
     user_id: Annotated[str, Depends(get_current_user_id)],
+    access_token: Annotated[str, Depends(get_current_access_token)],
 ) -> dict:
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
@@ -1332,7 +1329,7 @@ async def set_item_checked(
         "checked_by": user_id if checked else None,
         "checked_at": _now_utc() if checked else None,
     }
-    await _rpc_update_list_item(list_id, item_id, patch, user_id)
+    await _rpc_update_list_item(list_id, item_id, patch, user_id, access_token)
     _publish_list_sync_event(list_id, "list_updated", "item_checked")
     checked_item = _enrich_items_with_categories(sb, [{**item, **patch}])[0]
     return project_item_for_viewer(
@@ -1347,6 +1344,7 @@ async def patch_item(
     item_id: str,
     body: UpdateListItemBody,
     user_id: Annotated[str, Depends(get_current_user_id)],
+    access_token: Annotated[str, Depends(get_current_access_token)],
 ) -> dict:
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
@@ -1358,7 +1356,7 @@ async def patch_item(
     if body.pinned_offer_id:
         patch.update(_selected_offer_patch(sb, body.pinned_offer_id))
     _patch_item_in_items(items, item_id, patch)
-    await _rpc_update_list_item(list_id, item_id, patch, user_id)
+    await _rpc_update_list_item(list_id, item_id, patch, user_id, access_token)
     _publish_list_sync_event(list_id, "list_updated", "item_patched")
     refreshed = (
         sb.table("shopping_lists")
@@ -1597,6 +1595,7 @@ async def get_deal_freshness(
 async def clear_stale_offers(
     list_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],
+    access_token: Annotated[str, Depends(get_current_access_token)],
 ) -> dict:
     """Clear pinned_offer_id and found_deals for expired or unavailable items."""
     sb = get_supabase()
@@ -1638,6 +1637,7 @@ async def clear_stale_offers(
             entry["list_item_id"],
             {"pinned_offer_id": None, "found_deals": []},
             user_id,
+            access_token,
         )
         cleared_names.append(entry["list_item_name"])
 

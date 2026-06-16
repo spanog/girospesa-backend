@@ -4,7 +4,6 @@ import time
 from functools import lru_cache
 from typing import Any
 
-from fastapi import Response
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from jose import JWTError, jwt
@@ -18,7 +17,6 @@ class SessionSettings(BaseSettings):
     )
 
     app_session_secret: str
-    app_session_cookie_name: str = "girospesa_session"
     app_session_ttl_seconds: int = Field(default=60 * 60 * 24 * 7, gt=0)
 
     @field_validator("app_session_secret")
@@ -58,21 +56,3 @@ def read_session_token(token: str) -> dict[str, Any] | None:
         )
     except JWTError:
         return None
-
-
-def set_session_cookie(response: Response, token: str, *, secure: bool) -> None:
-    settings = get_session_settings()
-    response.set_cookie(
-        key=settings.app_session_cookie_name,
-        value=token,
-        httponly=True,
-        samesite="lax",
-        secure=secure,
-        path="/",
-        max_age=settings.app_session_ttl_seconds,
-    )
-
-
-def clear_session_cookie(response: Response) -> None:
-    settings = get_session_settings()
-    response.delete_cookie(key=settings.app_session_cookie_name, path="/")

@@ -115,12 +115,12 @@ def ensure_supabase_local():
 
 
 # ---------------------------------------------------------------------------
-# Supabase client con service role (bypass RLS) — per setup/teardown dati
+# Supabase client con secret key (bypass RLS) — per setup/teardown dati
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def supabase_client(ensure_supabase_local):
-    """Client Supabase con SERVICE_ROLE_KEY — bypassa RLS per seed e cleanup."""
+    """Client Supabase con secret key — bypassa RLS per seed e cleanup."""
     maybe_mocked = sys.modules.get("supabase")
     if maybe_mocked is not None and getattr(maybe_mocked, "__file__", None) is None:
         sys.modules.pop("supabase", None)
@@ -128,7 +128,7 @@ def supabase_client(ensure_supabase_local):
     from supabase import create_client
 
     url = _resolve_local_supabase_env("SUPABASE_URL")
-    key = _resolve_local_supabase_env("SUPABASE_SERVICE_ROLE_KEY")
+    key = _resolve_local_supabase_env("SUPABASE_SECRET_KEY")
     return create_client(url, key)
 
 

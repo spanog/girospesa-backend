@@ -5,21 +5,8 @@ import time
 import uuid
 
 import psycopg2
-from jose import jwt
 
 from tests.conftest import wait_for_user_bootstrap
-
-
-def _session_token(user_id: str) -> str:
-    now = int(time.time())
-    payload = {
-        "sub": user_id,
-        "email": f"delete-{user_id[:8]}@test.local",
-        "role": "customer",
-        "iat": now,
-        "exp": now + 3600,
-    }
-    return jwt.encode(payload, os.environ["APP_SESSION_SECRET"], algorithm="HS256")
 
 
 def _row_count(query: str, value: str) -> int:
@@ -60,6 +47,7 @@ async def test_delete_me_removes_auth_user_and_related_rows(
     supabase_client,
 ):
     from main import app
+    from core.auth import get_current_user_id
 
     route = next(
         item for item in app.routes
@@ -83,10 +71,10 @@ async def test_delete_me_removes_auth_user_and_related_rows(
         supabase_client.table("favorites").insert(
             {"user_id": user.id, "product_id": product["id"]}
         ).execute()
+        app.dependency_overrides[get_current_user_id] = lambda: user.id
 
         response = await async_client.delete(
             "/users/me",
-            cookies={"girospesa_session": _session_token(user.id)},
             headers={"Origin": "http://127.0.0.1:3000"},
         )
 
@@ -96,6 +84,7 @@ async def test_delete_me_removes_auth_user_and_related_rows(
         _wait_for_row_count("SELECT count(*) FROM public.user_profiles WHERE id = %s", user.id, 0)
         _wait_for_row_count("SELECT count(*) FROM public.favorites WHERE user_id = %s", user.id, 0)
     finally:
+        app.dependency_overrides.clear()
         route.endpoint.__globals__["_delete_auth_user"] = original_delete_auth_user
 
 
@@ -105,6 +94,7 @@ async def test_delete_me_cleans_invite_references_before_auth_delete(
     supabase_client,
 ):
     from main import app
+    from core.auth import get_current_user_id
 
     route = next(
         item for item in app.routes
@@ -159,10 +149,10 @@ async def test_delete_me_cleans_invite_references_before_auth_delete(
                 "accepted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
         ).execute().data[0]
+        app.dependency_overrides[get_current_user_id] = lambda: member.id
 
         response = await async_client.delete(
             "/users/me",
-            cookies={"girospesa_session": _session_token(member.id)},
             headers={"Origin": "http://127.0.0.1:3000"},
         )
 
@@ -182,4 +172,5 @@ async def test_delete_me_cleans_invite_references_before_auth_delete(
                 is None
             )
     finally:
+        app.dependency_overrides.clear()
         route.endpoint.__globals__["_delete_auth_user"] = original_delete_auth_user

@@ -62,7 +62,7 @@ def _make_supabase_real_db_mock_storage() -> object:
 
     sb = create_client(
         os.environ["SUPABASE_URL"],
-        os.environ["SUPABASE_SERVICE_ROLE_KEY"],
+        os.environ["SUPABASE_SECRET_KEY"],
     )
     storage_mock = MagicMock()
     storage_mock.from_.return_value.upload.return_value = MagicMock()

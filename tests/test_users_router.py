@@ -28,9 +28,6 @@ sys.modules["core.config"] = _config_mod
 # Stub core.database and core.auth (no DB/JWT calls in these tests)
 sys.modules["core.database"] = MagicMock()
 sys.modules["core.auth"] = MagicMock()
-_session_mod = types.ModuleType("core.session")
-_session_mod.clear_session_cookie = MagicMock()
-sys.modules["core.session"] = _session_mod
 sys.modules["services.geocoding"] = MagicMock()
 
 import pytest
@@ -50,7 +47,6 @@ def cleanup_stubbed_modules():
         "core.auth",
         "core.config",
         "core.database",
-        "core.session",
         "services.geocoding",
     ):
         sys.modules.pop(name, None)
@@ -174,20 +170,15 @@ class TestDeleteAccount:
         )
 
     @pytest.mark.asyncio
-    async def test_returns_204_and_clears_cookie(self, monkeypatch):
-        response = MagicMock()
-        _session_mod.clear_session_cookie.reset_mock()
-
+    async def test_returns_204(self, monkeypatch):
         from api.routers import users
         from api.routers.users import delete_account
 
         monkeypatch.setattr(users, "_delete_auth_user", MagicMock())
 
-        result = await delete_account(response, "user-1")
+        result = await delete_account("user-1")
 
-        assert result is response
-        assert response.status_code == 204
-        _session_mod.clear_session_cookie.assert_called_once_with(response)
+        assert result.status_code == 204
 
     def test_maps_backend_delete_error_to_http_502(self, monkeypatch):
         sb = MagicMock()
