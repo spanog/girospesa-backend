@@ -2,12 +2,21 @@
 
 from pathlib import Path
 
+import pytest
+
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _read(relative_path: str) -> str:
     return (BACKEND_ROOT / relative_path).read_text()
+
+
+def _read_optional(relative_path: str) -> str | None:
+    path = BACKEND_ROOT / relative_path
+    if not path.exists():
+        return None
+    return path.read_text()
 
 
 def _canonical_migrations_dir() -> Path:
@@ -98,18 +107,19 @@ def test_local_supabase_exposes_only_public_and_storage_schemas():
     compose = _read("docker-compose.yml")
     integration_compose = _read("docker-compose.integration.yml")
     backend_config = _read("supabase/config.toml")
-    frontend_config = _read("../girospesa-webapp/supabase/config.toml")
+    frontend_config = _read_optional("../girospesa-webapp/supabase/config.toml")
 
     assert "graphql_public" not in compose
     assert "graphql_public" not in integration_compose
     assert 'schemas = ["public"]' in backend_config
-    assert 'schemas = ["public"]' in frontend_config
+    if frontend_config is not None:
+        assert 'schemas = ["public"]' in frontend_config
 
 
 def test_local_auth_allows_email_confirmation_callback_redirects():
     compose = _read("docker-compose.yml")
     backend_config = _read("supabase/config.toml")
-    frontend_config = _read("../girospesa-webapp/supabase/config.toml")
+    frontend_config = _read_optional("../girospesa-webapp/supabase/config.toml")
 
     expected_redirects = [
         "http://127.0.0.1:3000/auth/callback?next=/email-verificata",
@@ -118,13 +128,17 @@ def test_local_auth_allows_email_confirmation_callback_redirects():
 
     for redirect_url in expected_redirects:
         assert redirect_url in backend_config
-        assert redirect_url in frontend_config
+        if frontend_config is not None:
+            assert redirect_url in frontend_config
         assert redirect_url in compose
 
 
 def test_shared_backend_migration_copies_match_frontend_canonical_files():
     migrations_dir = BACKEND_ROOT / "supabase/migrations"
     expected_root = BACKEND_ROOT.parent / "girospesa-webapp/supabase/migrations"
+
+    if not expected_root.exists():
+        pytest.skip("Frontend repo not available in this checkout.")
 
     mismatches = []
     for frontend_path in expected_root.glob("*.sql"):
