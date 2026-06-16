@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("SUPABASE_SECRET_KEY", "test-secret-key")
+
 import pytest
 from api.routers.lists import _patch_item_in_items, _patch_quantity_in_items
 
@@ -113,7 +117,6 @@ def test_patch_item_clears_subcategory_when_category_is_null():
 # ---------------------------------------------------------------------------
 
 import sys
-import os
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -130,6 +133,7 @@ sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
 
 _auth_mod = types.ModuleType("core.auth")
+_auth_mod.get_current_access_token = MagicMock()
 _auth_mod.get_current_user_id = MagicMock()
 sys.modules["core.auth"] = _auth_mod
 
@@ -138,7 +142,10 @@ from fastapi import FastAPI
 import api.routers.lists as _lists_module
 from api.routers.lists import router as _lists_router
 
+_lists_module._publish_list_sync_event = MagicMock()
+
 _DEP_GET_USER_ID = _lists_module.get_current_user_id
+_DEP_GET_ACCESS_TOKEN = _lists_module.get_current_access_token
 
 _test_app = FastAPI()
 _test_app.include_router(_lists_router, prefix="/lists")
@@ -149,7 +156,10 @@ _USER_ID = "user-xyz"
 
 
 def _deps(user_id: str = _USER_ID) -> dict:
-    return {_DEP_GET_USER_ID: lambda: user_id}
+    return {
+        _DEP_GET_USER_ID: lambda: user_id,
+        _DEP_GET_ACCESS_TOKEN: lambda: "test-access-token",
+    }
 
 
 async def _patch_req(url: str, json: dict, dep_overrides: dict | None = None) -> httpx.Response:
@@ -216,7 +226,13 @@ async def test_patch_quantity_returns_updated_item():
     assert resp.status_code == 200
     assert resp.json()["quantity"] == 3.0
     assert resp.json()["id"] == _ITEM_ID
-    rpc_mock.assert_awaited_once_with(_LIST_ID, _ITEM_ID, {"quantity": 3.0}, _USER_ID)
+    rpc_mock.assert_awaited_once_with(
+        _LIST_ID,
+        _ITEM_ID,
+        {"quantity": 3.0},
+        _USER_ID,
+        "test-access-token",
+    )
 
 
 async def test_clear_stale_offers_uses_update_list_item_rpc_patch():
@@ -273,6 +289,7 @@ async def test_clear_stale_offers_uses_update_list_item_rpc_patch():
         _ITEM_ID,
         {"pinned_offer_id": None, "found_deals": []},
         _USER_ID,
+        "test-access-token",
     )
     publish_mock.assert_called_once_with(
         _LIST_ID,
@@ -324,7 +341,13 @@ async def test_patch_selected_offer_returns_coherent_item():
     assert resp.json()["pinned_offer_id"] == "offer-1"
     assert resp.json()["pinned_product_id"] == "prod-1"
     assert resp.json()["found_deals"][0]["offer_id"] == "offer-1"
-    rpc_mock.assert_awaited_once_with(_LIST_ID, _ITEM_ID, offer_patch, _USER_ID)
+    rpc_mock.assert_awaited_once_with(
+        _LIST_ID,
+        _ITEM_ID,
+        offer_patch,
+        _USER_ID,
+        "test-access-token",
+    )
 
 
 async def test_list_members_flattens_profile_and_email_fields():

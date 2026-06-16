@@ -17,6 +17,7 @@ sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
 
 _auth_mod = types.ModuleType("core.auth")
+_auth_mod.get_current_access_token = MagicMock()
 _auth_mod.get_current_user_id = MagicMock()
 sys.modules["core.auth"] = _auth_mod
 
@@ -27,14 +28,20 @@ import pytest
 import api.routers.lists as _lists_module
 from api.routers.lists import router as _lists_router
 
+_lists_module._publish_list_sync_event = MagicMock()
+
 _DEP_GET_USER_ID = _lists_module.get_current_user_id
+_DEP_GET_ACCESS_TOKEN = _lists_module.get_current_access_token
 
 _test_app = FastAPI()
 _test_app.include_router(_lists_router, prefix="/lists")
 
 
 def _deps(user_id: str = "user-1") -> dict:
-    return {_DEP_GET_USER_ID: lambda: user_id}
+    return {
+        _DEP_GET_USER_ID: lambda: user_id,
+        _DEP_GET_ACCESS_TOKEN: lambda: "test-access-token",
+    }
 
 
 def _make_sb(items: list[dict]) -> MagicMock:
