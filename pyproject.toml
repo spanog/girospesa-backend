@@ -1,0 +1,14 @@
+[project]
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.taskipy.tasks]
+dev = ".venv/bin/python -m uvicorn main:app --reload --port 8000"
+dev-setup = ".venv/bin/python -m scripts.seed_admin"
+seed-admin = ".venv/bin/python -m scripts.seed_admin"
+check-admin-seed = ".venv/bin/python -m scripts.seed_admin --check"
+test-integration = ".venv/bin/python -m pytest tests/integration -v --tb=short"
+test-performance = "pytest tests/performance -v --tb=short -s"

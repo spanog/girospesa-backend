@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+from io import BytesIO
+from unittest.mock import MagicMock
+
+import pytest
+from starlette.datastructures import UploadFile
+
+from services.contact_requests import (
+    BugReportRequest,
+    CollaborationRequest,
+    ContactRequestContext,
+    ContactRequestService,
+    ContactRequestValidationError,
+    FeatureRequest,
+)
+
+
+def _upload_file(
+    name: str = "bug.png",
+    content_type: str = "image/png",
+    content: bytes = b"img",
+) -> UploadFile:
+    return UploadFile(filename=name, file=BytesIO(content), headers={"content-type": content_type})
+
+
+@pytest.mark.asyncio
+async def test_bug_report_without_screenshots_still_sends_mail():
+    mailer = MagicMock()
+    service = ContactRequestService(mailer=mailer)
+    payload = BugReportRequest(
+        email="user@example.com",
+        subject="Crash login",
+        message="La pagina si blocca dopo click sul bottone login.",
+    )
+
+    response = await service.submit_bug_report(
+        payload,
+        ContactRequestContext(None, None, None),
+        [],
+    )
+
+    assert response.status == "sent"
+    mailer.send.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_bug_report_sends_email_attachments():
+    mailer = MagicMock()
+    service = ContactRequestService(mailer=mailer)
+    payload = BugReportRequest(
+        email="user@example.com",
+        subject="Crash login",
+        message="La pagina si blocca dopo click sul bottone login.",
+    )
+
+    await service.submit_bug_report(
+        payload,
+        ContactRequestContext("user-1", "user@example.com", "pytest"),
+        [_upload_file()],
+    )
+
+    attachments = mailer.send.call_args.kwargs["attachments"]
+    assert len(attachments) == 1
+    assert attachments[0].file_name == "bug.png"
+    assert attachments[0].content_type == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_bug_report_rejects_invalid_content_type():
+    service = ContactRequestService(mailer=MagicMock())
+    with pytest.raises(ContactRequestValidationError):
+        await service.submit_bug_report(
+            BugReportRequest(
+                email="user@example.com",
+                subject="Crash login",
+                message="La pagina si blocca dopo click sul bottone login.",
+            ),
+            ContactRequestContext(None, None, None),
+            [_upload_file(content_type="text/plain")],
+        )
+
+
+@pytest.mark.asyncio
+async def test_bug_report_rejects_oversized_screenshot():
+    service = ContactRequestService(mailer=MagicMock())
+    with pytest.raises(ContactRequestValidationError):
+        await service.submit_bug_report(
+            BugReportRequest(
+                email="user@example.com",
+                subject="Crash login",
+                message="La pagina si blocca dopo click sul bottone login.",
+            ),
+            ContactRequestContext(None, None, None),
+            [_upload_file(content=b"x" * ((5 * 1024 * 1024) + 1))],
+        )
+
+
+def test_single_line_fields_reject_header_injection():
+    with pytest.raises(Exception):
+        BugReportRequest(
+            email="user@example.com",
+            subject="Bug\r\nBcc: attacker@example.com",
+            message="Descrizione valida di almeno dieci caratteri.",
+        )
+
+
+def test_email_fields_reject_invalid_email():
+    with pytest.raises(Exception):
+        CollaborationRequest(
+            email="user@example.com\r\nBcc: attacker@example.com",
+            contact_name="Mario Rossi",
+            supermarket_name="Coop",
+            location="Milano",
+            message="Messaggio valido di almeno dieci caratteri.",
+        )
+
+
+@pytest.mark.asyncio
+async def test_feature_request_sends_mail():
+    mailer = MagicMock()
+    service = ContactRequestService(mailer=mailer)
+    payload = FeatureRequest(
+        email="user@example.com",
+        subject="Filtri salvati",
+        message="Vorrei salvare i filtri preferiti per riusarli.",
+        page_url="offerte",
+    )
+
+    response = await service.submit_feature_request(
+        payload,
+        ContactRequestContext("user-1", "user@example.com", "pytest"),
+    )
+
+    assert response.status == "sent"
+    mailer.send.assert_called_once()

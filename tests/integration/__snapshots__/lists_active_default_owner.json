@@ -1,0 +1,11 @@
+{
+  "created_at": "<datetime>",
+  "id": "<uuid>",
+  "is_active": true,
+  "is_owner": true,
+  "items": [],
+  "member_role": "owner",
+  "name": "Lista principale",
+  "updated_at": "<datetime>",
+  "user_id": "<uuid>"
+}

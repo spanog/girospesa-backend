@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: girospesa-backend
+    runtime: python
+    plan: free
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: ENVIRONMENT
+        value: production
+      - key: FRONTEND_URL
+        sync: false
+      - key: BACKEND_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: APP_SESSION_SECRET
+        sync: false
+      - key: DB_DSN
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemma-4-31b-it
+      - key: GEOCODING_PROVIDER
+        value: nominatim
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_MAILTO
+        value: mailto:admin@girospesa.it
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: OPS_CRON_SECRET
+        sync: false

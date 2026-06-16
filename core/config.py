@@ -1,0 +1,61 @@
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    supabase_url: str
+    supabase_service_role_key: str
+    supabase_jwt_secret: str
+    app_session_secret: str
+    app_session_cookie_name: str = "girospesa_session"
+    app_session_ttl_seconds: int = Field(default=60 * 60 * 24 * 7, gt=0)
+    database_url: str = ""
+    db_dsn: str = ""
+    admin_email: str = ""
+    admin_password: str = ""
+    webmaster_email: str = ""
+    mail_from: str = ""
+    smtp_host: str = ""
+    smtp_port: int = Field(default=587, gt=0)
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+
+    llm_provider: str = "gemini"
+    google_api_key: str = ""
+    gemini_model: str = "gemma-4-31b-it"
+    geocoding_provider: str = "nominatim"
+
+    vapid_private_key: str = ""
+    vapid_public_key: str = ""
+    vapid_mailto: str = "mailto:admin@girospesa.it"
+
+    # Shared secret for the Supabase Database Webhook → /push/notify-favorites
+    webhook_secret: str = ""
+    ops_cron_secret: str = ""
+
+    environment: str = "development"
+    frontend_url: str = "http://localhost:3000"
+    backend_url: str = "http://localhost:8000"
+
+    # Product fuzzy deduplication thresholds (pre-upsert similarity check)
+    product_name_similarity_threshold: float = 0.85   # rapidfuzz partial_ratio / 100
+    product_brand_similarity_threshold: float = 0.90  # rapidfuzz ratio / 100 (after diacritic normalization)
+
+    @field_validator("app_session_secret")
+    @classmethod
+    def validate_app_session_secret(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("app_session_secret must not be empty")
+        return normalized
+
+
+
+settings = Settings()  # type: ignore[call-arg]

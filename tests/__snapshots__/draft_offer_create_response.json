@@ -1,0 +1,30 @@
+{
+  "binding_status": "existing",
+  "brand": "Galbani",
+  "category": "latticini",
+  "flyer_id": "flyer-1",
+  "id": "offer-new",
+  "image_url": null,
+  "is_confirmed": false,
+  "linked_product": {
+    "brand": "Galbani",
+    "category": "latticini",
+    "id": "prod-new",
+    "image_url": null,
+    "name": "Mozzarella",
+    "subcategory": "Latticini e Formaggi"
+  },
+  "name": "Mozzarella",
+  "offer_notes": null,
+  "price_offer": 1.99,
+  "price_original": null,
+  "subcategory": "Latticini e Formaggi",
+  "supermarket_id": "sup-1",
+  "supermarket_name": "Coop",
+  "unit_price": null,
+  "unit_price_label": null,
+  "unit_price_unit": null,
+  "unit_price_value": null,
+  "valid_from": "2026-04-01",
+  "valid_to": "2026-04-30"
+}

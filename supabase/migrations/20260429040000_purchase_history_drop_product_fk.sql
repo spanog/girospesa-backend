@@ -1,0 +1,2 @@
+alter table purchase_history
+drop constraint if exists purchase_history_product_id_fkey;
