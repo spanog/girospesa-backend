@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+os.environ.setdefault("SUPABASE_SECRET_KEY", "test-secret-key")
+
 if "core.config" in sys.modules and not hasattr(sys.modules["core.config"], "Settings"):
     sys.modules.pop("core.config")
 
