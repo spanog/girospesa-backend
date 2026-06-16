@@ -181,7 +181,7 @@ async def update_password(
     try:
         user_resp = sb.auth.admin.get_user_by_id(user_id)
         email = user_resp.user.email
-        verify_client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        verify_client = create_client(settings.supabase_url, settings.supabase_secret_key)
         verify_client.auth.sign_in_with_password({"email": email, "password": body.current_password})
     except Exception:
         raise HTTPException(status_code=400, detail="Password attuale non corretta.")
@@ -224,13 +224,8 @@ def _delete_auth_user(user_id: str) -> None:
 
 @router.delete("/me", status_code=204)
 async def delete_account(
-    response: Response,
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> Response:
     """Permanently delete the authenticated user's account and all their data."""
-    from core.session import clear_session_cookie as clear_cookie
-
     _delete_auth_user(user_id)
-    clear_cookie(response)
-    response.status_code = 204
-    return response
+    return Response(status_code=204)

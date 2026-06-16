@@ -1,61 +1,32 @@
-"""Backend auth router — BFF for frontend login/logout/session/signup/reset."""
+"""Backend auth router — signup and password recovery helpers."""
 
 from __future__ import annotations
 
 import logging
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from supabase import create_client
 
-from core.auth import (
-    _validate_backend_session_payload,
-    get_current_user,
-    get_current_user_profile,
-)
 from core.config import settings
 from core.database import get_supabase
-from core.session import (
-    clear_session_cookie,
-    create_session_token,
-    read_session_token,
-    set_session_cookie,
-)
+from core.session import create_session_token, read_session_token
 
 _PASSWORD_RESET_TTL_SECONDS = 60 * 60  # 1-hour recovery window
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
 
-_COOKIE_NAME = "girospesa_session"
-
 
 def _fresh_supabase_client():
-    return create_client(settings.supabase_url, settings.supabase_service_role_key)
+    return create_client(settings.supabase_url, settings.supabase_secret_key)
 
 
 def _auth_user_updated_at(user: object) -> str | None:
     value = getattr(user, "updated_at", None)
     return value if isinstance(value, str) and value else None
-
-
-def _build_backend_session_claims(
-    *,
-    user_id: str,
-    email: str,
-    role: str,
-    auth_user_updated_at: str | None,
-) -> dict[str, str]:
-    if not auth_user_updated_at:
-        raise HTTPException(status_code=502, detail="Missing auth user state")
-    return {
-        "sub": user_id,
-        "email": email,
-        "role": role,
-        "auth_user_updated_at": auth_user_updated_at,
-    }
 
 
 def _safe_frontend_redirect_path(path: str | None, default_path: str) -> str:
@@ -75,128 +46,6 @@ def _append_query_param(url: str, key: str, value: str) -> str:
     query = parse_qsl(parsed.query, keep_blank_values=True)
     query.append((key, value))
     return urlunsplit(parsed._replace(query=urlencode(query)))
-
-
-def _load_profile_with_manager_ids(sb, user_id: str) -> dict | None:
-    profile_resp = (
-        sb.table("user_profiles")
-        .select("*")
-        .eq("id", user_id)
-        .maybe_single()
-        .execute()
-    )
-    profile = profile_resp.data if profile_resp else None
-    if not profile:
-        return None
-
-    manager_ids_resp = (
-        sb.table("manager_supermarkets")
-        .select("supermarket_id")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    manager_ids = [
-        row["supermarket_id"]
-        for row in (manager_ids_resp.data or [])
-        if row.get("supermarket_id")
-    ]
-    if not manager_ids and profile.get("managed_supermarket_id"):
-        manager_ids = [profile["managed_supermarket_id"]]
-    profile["managed_supermarket_ids"] = manager_ids
-    return profile
-
-
-def login_with_password(email: str, password: str) -> dict:
-    """Authenticate via Supabase and return user + profile dict."""
-    sb = _fresh_supabase_client()
-    try:
-        auth_resp = sb.auth.sign_in_with_password({"email": email, "password": password})
-    except Exception as exc:
-        raise HTTPException(status_code=401, detail="Invalid credentials") from exc
-
-    user = auth_resp.user
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    profile = _load_profile_with_manager_ids(sb, user.id)
-
-    return {
-        "user": {
-            "id": user.id,
-            "email": user.email,
-            "auth_user_updated_at": _auth_user_updated_at(user),
-        },
-        "profile": profile,
-    }
-
-
-class LoginBody(BaseModel):
-    email: str
-    password: str
-
-
-@router.post("/login")
-async def login(body: LoginBody, response: Response) -> dict:
-    result = login_with_password(body.email, body.password)
-    token = create_session_token(
-        _build_backend_session_claims(
-            user_id=result["user"]["id"],
-            email=result["user"]["email"],
-            role=(result["profile"] or {}).get("role", "customer"),
-            auth_user_updated_at=result["user"].get("auth_user_updated_at"),
-        )
-    )
-    set_session_cookie(response, token, secure=settings.environment == "production")
-    return result
-
-
-@router.get("/session")
-async def session(request: Request) -> dict:
-    token = request.cookies.get(_COOKIE_NAME)
-    if not token:
-        return {"authenticated": False}
-
-    payload = _validate_backend_session_payload(read_session_token(token))
-    if not payload:
-        return {"authenticated": False}
-
-    user_id: str = payload["sub"]
-    sb = get_supabase()
-    profile = _load_profile_with_manager_ids(sb, user_id)
-
-    return {
-        "authenticated": True,
-        "user": {"id": payload["sub"], "email": payload["email"]},
-        "profile": profile,
-    }
-
-
-@router.post("/logout", status_code=204, response_model=None)
-async def logout(response: Response) -> None:
-    clear_session_cookie(response)
-
-
-@router.post("/exchange", status_code=204, response_model=None)
-async def exchange_session(
-    response: Response,
-    user: dict = Depends(get_current_user),
-    profile: dict = Depends(get_current_user_profile),
-) -> None:
-    email = user.get("email")
-    if not isinstance(email, str) or not email:
-        raise HTTPException(status_code=400, detail="Missing email claim")
-
-    token = create_session_token(
-        _build_backend_session_claims(
-            user_id=user["sub"],
-            email=email,
-            role=profile.get("role", "customer"),
-            auth_user_updated_at=_auth_user_updated_at(
-                get_supabase().auth.admin.get_user_by_id(user["sub"]).user
-            ),
-        )
-    )
-    set_session_cookie(response, token, secure=settings.environment == "production")
 
 
 # ---------------------------------------------------------------------------

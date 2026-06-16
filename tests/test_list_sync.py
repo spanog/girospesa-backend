@@ -14,14 +14,14 @@ for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders"):
 
 _config_mod = types.ModuleType("core.config")
 _config_mod.settings = MagicMock(
-    supabase_jwt_secret="test-secret",
     supabase_url="http://supabase.local",
-    supabase_service_role_key="service-role",
+    supabase_secret_key="service-role",
 )
 sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
 
 _auth_mod = types.ModuleType("core.auth")
+_auth_mod.get_current_access_token = MagicMock()
 _auth_mod.get_current_user_id = MagicMock()
 sys.modules["core.auth"] = _auth_mod
 
@@ -30,13 +30,17 @@ import api.routers.lists as _lists_module
 from api.routers.lists import router as _lists_router
 
 _DEP_GET_USER_ID = _lists_module.get_current_user_id
+_DEP_GET_ACCESS_TOKEN = _lists_module.get_current_access_token
 
 _test_app = FastAPI()
 _test_app.include_router(_lists_router, prefix="/lists")
 
 
 def _deps(user_id: str = "user-1") -> dict:
-    return {_DEP_GET_USER_ID: lambda: user_id}
+    return {
+        _DEP_GET_USER_ID: lambda: user_id,
+        _DEP_GET_ACCESS_TOKEN: lambda: "test-access-token",
+    }
 
 
 async def _get(url: str, dep_overrides: dict | None = None) -> httpx.Response:

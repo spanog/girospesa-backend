@@ -25,7 +25,7 @@ def _anon_key() -> str:
 
 
 def _jwt_secret() -> str:
-    return os.environ["SUPABASE_JWT_SECRET"]
+    return os.environ["SUPABASE_INTERNAL_JWT_SECRET"]
 
 
 def _authenticated_token(user_id: str) -> str:

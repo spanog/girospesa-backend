@@ -52,8 +52,8 @@ def integration_env() -> dict[str, str]:
     return {
         "SUPABASE_URL": SUPABASE_URL,
         "SUPABASE_ANON_KEY": _anon_key(),
-        "SUPABASE_SERVICE_ROLE_KEY": _service_role_key(),
-        "SUPABASE_JWT_SECRET": JWT_SECRET,
+        "SUPABASE_SECRET_KEY": _service_role_key(),
+        "SUPABASE_INTERNAL_JWT_SECRET": JWT_SECRET,
         "SUPABASE_DB_CONTAINER": f"{PROJECT_NAME}-db-1",
         "DB_DSN": DB_DSN,
         "ADMIN_EMAIL": "test-admin@local.test",

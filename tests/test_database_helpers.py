@@ -15,7 +15,7 @@ def _load_database_module(monkeypatch):
         types.SimpleNamespace(
             settings=types.SimpleNamespace(
                 supabase_url="http://supabase.local",
-                supabase_service_role_key="service-role",
+                supabase_secret_key="service-role",
                 db_dsn="postgresql://example",
                 database_url="",
             )

@@ -10,10 +10,8 @@ class Settings(BaseSettings):
     )
 
     supabase_url: str
-    supabase_service_role_key: str
-    supabase_jwt_secret: str
+    supabase_secret_key: str
     app_session_secret: str
-    app_session_cookie_name: str = "girospesa_session"
     app_session_ttl_seconds: int = Field(default=60 * 60 * 24 * 7, gt=0)
     database_url: str = ""
     db_dsn: str = ""

@@ -20,8 +20,7 @@ Imposta nel servizio Render:
 - `FRONTEND_URL=https://www.girospesa.it` oppure dominio frontend reale
 - `BACKEND_URL=https://api.girospesa.it` oppure dominio backend reale
 - `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `SUPABASE_JWT_SECRET`
+- `SUPABASE_SECRET_KEY`
 - `APP_SESSION_SECRET`
 - `DB_DSN`
 - `GOOGLE_API_KEY`
@@ -84,7 +83,7 @@ Render dichiara che i servizi Free non sono pensati per produzione stabile, vann
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Il frontend web usa Supabase Auth con `@supabase/ssr`: browser, proxy Next.js e Server Components condividono la sessione tramite i cookie SSR di Supabase, mentre le chiamate autenticate a questo backend inoltrano sempre il token accesso Supabase in `Authorization: Bearer <token>`. Android/iOS dovranno seguire lo stesso contratto bearer. Il backend verifica token legacy `HS256` con il secret condiviso oppure token `ES256` via JWKS Supabase, e usa la service role key per tutte le operazioni su Supabase. I cookie sessione backend (`girospesa_session`) restano fallback legacy/compatibilita': vengono ancora usati per recovery token backend-owned e come adapter browser-only per trasporti senza header custom, per esempio lo stream SSE della lista. Ogni cookie backend incorpora anche il valore corrente di `auth.users.updated_at` e viene rifiutato se lo stato Auth dell'utente cambia, per esempio dopo cambio password, reset password o eliminazione account.
+Il frontend web usa Supabase Auth con `@supabase/ssr`: browser, proxy Next.js e Server Components condividono la sessione tramite i cookie SSR di Supabase, mentre le chiamate autenticate a questo backend inoltrano sempre il token accesso Supabase in `Authorization: Bearer <token>`. Android/iOS dovranno seguire lo stesso contratto bearer. Il backend valida i bearer token utente esclusivamente tramite le signing keys/JWKS di Supabase e usa `SUPABASE_SECRET_KEY` per tutte le operazioni server-side privilegiate su Auth, Database e Storage. Non esiste più un cookie sessione backend per auth applicativa o stream SSE.
 
 ---
 
@@ -155,7 +154,7 @@ Il backend usa tre livelli di autenticazione:
 | `PUT` | `/users/me` | ✅ | Aggiorna profilo; auto-geocode se cambia indirizzo e salva preferenza unica notifiche (`notifications_enabled`) |
 | `POST` | `/users/geocode` | ✅ | Geocodifica indirizzo di casa → aggiorna `home_lat/lng` e `home_location` PostGIS |
 | `POST` | `/users/me/avatar` | ✅ | Upload avatar (JPEG/PNG/WebP, max 5 MB) → bucket `avatars` |
-| `DELETE` | `/users/me` | ✅ | Elimina account + dati collegati; pulisce anche eventuale cookie legacy `girospesa_session`; risponde `204` |
+| `DELETE` | `/users/me` | ✅ | Elimina account + dati collegati; risponde `204` |
 
 ### Contatti pubblici (`/contact-requests`)
 
@@ -173,7 +172,7 @@ Per sync quasi immediato tra membri, il backend espone anche `GET /lists/{list_i
 | `GET` | `/lists` | ✅ | Elenca tutti i workspace visibili all'utente: unica lista owner protetta + eventuali liste condivise, con metadati `is_active`, `is_owner`, `member_role`, `owner_display_name`, contatori e ordinamento pronto per il selector frontend |
 | `POST` | `/lists/select` | ✅ | Imposta la lista attiva corrente scegliendo uno dei workspace visibili all'utente e persiste `active_list_id` |
 | `GET` | `/lists/active` | ✅ | Lista attiva; auto-crea la lista owner `La mia lista` se non esiste; arricchisce gli item con `brand`, `category` e `subcategory`, facendo backfill del brand da prodotto/offerta quando lo snapshot storico non lo contiene. Il nome risposta è già viewer-specifico: owner vede `La mia lista`, i membri vedono `La lista di <owner>`. Per liste condivise, il pin offerta resta canonico nel DB ma la risposta maschera prezzo/supermercato quando il viewer non vede quel supermercato nel proprio raggio attivo |
-| `GET` | `/lists/{id}/events` | ✅ member | Stream SSE autenticato nel browser tramite cookie sessione backend compatibile emesso da `POST /auth/exchange`; inoltra eventi `list_updated`, `members_updated`, `invites_updated` per sync live della lista condivisa |
+| `GET` | `/lists/{id}/events` | ✅ member | Stream SSE autenticato con `Authorization: Bearer <token>`; inoltra eventi `list_updated`, `members_updated`, `invites_updated` per sync live della lista condivisa |
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
 | `POST` | `/lists/{id}/items/remove-purchased` | ✅ member | Rimuove in blocco dalla lista solo gli item acquistati e restituisce la lista aggiornata, senza cancellare `purchase_history` |
 | `POST` | `/lists/{id}/items` | ✅ member | Aggiunge item (manuale o da offerta) e salva snapshot `brand`/`category`/`subcategory` quando collegato a prodotto/offerta; persistenza via RPC concorrente-safe `append_list_item` (`SECURITY INVOKER`, `search_path` fissato a `public`) |
@@ -359,8 +358,8 @@ curl -X POST http://localhost:8000/flyers/admin/cleanup \
 
 ## Note schema e RLS
 
-- `analytics_data` ed `extraction_log` sono tabelle interne. RLS resta abilitato con policy esplicite `deny all`; accesso e scrittura passano solo dal backend con `SUPABASE_SERVICE_ROLE_KEY`.
-- `manager_supermarkets` e `flyer_targets` sono tabelle di coordinamento backend/admin per gestione multi-branch e pubblicazione volantini. Anche qui RLS resta attivo con policy esplicite `deny all`; lettura e scrittura passano dal backend con `SUPABASE_SERVICE_ROLE_KEY`.
+- `analytics_data` ed `extraction_log` sono tabelle interne. RLS resta abilitato con policy esplicite `deny all`; accesso e scrittura passano solo dal backend con `SUPABASE_SECRET_KEY`.
+- `manager_supermarkets` e `flyer_targets` sono tabelle di coordinamento backend/admin per gestione multi-branch e pubblicazione volantini. Anche qui RLS resta attivo con policy esplicite `deny all`; lettura e scrittura passano dal backend con `SUPABASE_SECRET_KEY`.
 - Le richieste contatto, bug, collaborazione e volantini mancanti passano da `POST /contact-requests` con invio email al webmaster. Non esiste più persistenza applicativa su tabella `flyer_requests`.
 - Log estrazione canonico: `extraction_log`. Eventuali ambienti locali legacy con `scraping_log` vengono riallineati dalla migration di hardening.
 - PostGIS è abilitato nello schema `extensions`. `supermarkets.location`, `user_profiles.home_location` e `user_profiles.search_location` sono `geography(Point, 4326)` indicizzate GiST; la RPC `nearby_supermarkets` usa `ST_DWithin` e `ST_Distance`.
@@ -516,7 +515,7 @@ Valori locali canonici:
 - `GEOCODING_PROVIDER=nominatim` in locale, così signup/profilo/seed admin riflettono comportamento reale durante sviluppo manuale
 - `GOOGLE_API_KEY` richiesto solo se si vuole usare estrazione AI Gemini
 - `WEBMASTER_EMAIL`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` e `SMTP_USE_TLS` servono per i form pubblici `/contact-requests`
-- `SUPABASE_SERVICE_ROLE_KEY` e `SUPABASE_JWT_SECRET` si copiano da `supabase status -o env`
+- `SUPABASE_SECRET_KEY` si copia da `supabase status -o env` oppure dall'output equivalente del bootstrap locale
 - `ADMIN_EMAIL` e `ADMIN_PASSWORD` servono per seedare utente admin via API service-role
 - `.env` backend deve contenere solo variabili lette da FastAPI; credenziali Docker/Supabase CLI come `POSTGRES_PASSWORD`, `ANON_KEY`, `JWT_SECRET` e `SERVICE_ROLE_KEY` non vanno copiate qui
 - `.env.test` e' locale-only ed e' ignorato da Git; i test integration iniettano questi valori solo dentro processo `pytest`, puntando allo stack Docker isolato su porte `55421`/`55422`, poi ripristinano l'env della sessione a fine run
@@ -764,8 +763,7 @@ Soglie: LCP < 2500ms, CLS < 0.1, INP < 200ms sulla pagina `/offerte`.
 ```bash
 # ── Local dev obbligatorio per backend boot ----------------------------------
 SUPABASE_URL=http://127.0.0.1:54321
-SUPABASE_SERVICE_ROLE_KEY=<local-service-role-key>
-SUPABASE_JWT_SECRET=<local-jwt-secret>
+SUPABASE_SECRET_KEY=<local-secret-key>
 FRONTEND_URL=http://localhost:3000
 # `127.0.0.1:3000` resta supportato in sviluppo per compatibilita' loopback
 
@@ -791,8 +789,7 @@ VAPID_MAILTO=mailto:admin@girospesa.it
 WEBHOOK_SECRET=
 
 # ── Copia da `supabase status -o env` ---------------------------------------
-# SUPABASE_SERVICE_ROLE_KEY <- SERVICE_ROLE_KEY
-# SUPABASE_JWT_SECRET       <- JWT_SECRET
+# SUPABASE_SECRET_KEY <- SERVICE_ROLE_KEY
 
 # ── Admin seed condiviso -----------------------------------------------------
 ADMIN_EMAIL=admin@example.com

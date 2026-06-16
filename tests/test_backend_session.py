@@ -34,7 +34,6 @@ def clear_session_settings_cache():
 def stub_session_settings(monkeypatch: pytest.MonkeyPatch):
     settings = SimpleNamespace(
         app_session_secret="test-app-session-secret",
-        app_session_cookie_name="girospesa_session",
         app_session_ttl_seconds=60 * 60,
     )
     monkeypatch.setattr(session, "get_session_settings", lambda: settings)
@@ -80,8 +79,7 @@ def test_invalid_session_token_is_rejected(stub_session_settings) -> None:
 def test_session_settings_only_require_session_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
         "SUPABASE_URL",
-        "SUPABASE_SERVICE_ROLE_KEY",
-        "SUPABASE_JWT_SECRET",
+        "SUPABASE_SECRET_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -90,4 +88,3 @@ def test_session_settings_only_require_session_env(monkeypatch: pytest.MonkeyPat
     settings = session.get_session_settings()
 
     assert settings.app_session_secret == "env-session-secret"
-    assert settings.app_session_cookie_name == "girospesa_session"

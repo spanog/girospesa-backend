@@ -1,24 +1,17 @@
-"""
-JWT authentication for FastAPI routes.
-Prefers Supabase-issued Bearer JWTs, then falls back to legacy backend session cookies.
-"""
+"""JWT authentication for FastAPI routes via Supabase bearer tokens only."""
 
 from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
 from urllib.request import urlopen
 from typing import Annotated
 
-from fastapi import Cookie, Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from core.config import settings
-from core.session import read_session_token
-
-_COOKIE_NAME = "girospesa_session"
 
 _bearer = HTTPBearer()
 _optional_bearer = HTTPBearer(auto_error=False)
@@ -45,15 +38,20 @@ def _decode_token(token: str) -> dict:
     try:
         header = jwt.get_unverified_header(token)
         algorithm = header.get("alg")
-        key: str | dict
-        if algorithm == "HS256":
-            key = settings.supabase_jwt_secret
-        elif algorithm == "ES256":
-            key = _load_jwks()
-        else:
-            raise JWTError("Unsupported JWT algorithm")
-        payload = jwt.decode(token, key, algorithms=[algorithm], options={"verify_aud": False})
+        if algorithm not in {"ES256", "RS256"}:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+            )
+        payload = jwt.decode(
+            token,
+            _load_jwks(),
+            algorithms=[algorithm],
+            options={"verify_aud": False},
+        )
         return payload
+    except HTTPException:
+        raise
     except JWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -61,66 +59,22 @@ def _decode_token(token: str) -> dict:
         ) from exc
 
 
-def _normalize_auth_timestamp(value: object) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    normalized = value.replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _load_auth_user_state(user_id: str) -> tuple[bool, datetime | None]:
-    from core.database import get_supabase
-
-    try:
-        user = get_supabase().auth.admin.get_user_by_id(user_id).user
-    except Exception:
-        return False, None
-    if not user:
-        return False, None
-    return True, _normalize_auth_timestamp(getattr(user, "updated_at", None))
-
-
-def _validate_backend_session_payload(payload: dict | None) -> dict | None:
-    if not payload:
-        return None
-    user_id = payload.get("sub")
-    token_updated_at = _normalize_auth_timestamp(payload.get("auth_user_updated_at"))
-    issued_at = payload.get("iat")
-    if token_updated_at is None and isinstance(issued_at, (int, float)):
-        token_updated_at = datetime.fromtimestamp(issued_at, tz=timezone.utc)
-    if not isinstance(user_id, str) or not user_id or token_updated_at is None:
-        return None
-    exists, live_updated_at = _load_auth_user_state(user_id)
-    if not exists:
-        return None
-    if live_updated_at and live_updated_at > token_updated_at:
-        return None
-    return payload
-
-
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)],
-    session_cookie: Annotated[str | None, Cookie(alias=_COOKIE_NAME)] = None,
 ) -> dict:
-    """Dependency: resolves to the decoded JWT payload (user_id at payload['sub']).
+    """Dependency: resolves to the decoded Supabase bearer JWT payload."""
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    return _decode_token(credentials.credentials)
 
-    Checks Supabase Bearer JWT first; falls back to legacy backend session cookie.
-    """
-    if credentials is not None:
-        return _decode_token(credentials.credentials)
 
-    if session_cookie:
-        payload = _validate_backend_session_payload(read_session_token(session_cookie))
-        if payload:
-            return payload
-
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+async def get_current_access_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)],
+) -> str:
+    """Dependency: returns the raw Supabase bearer token."""
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+    return credentials.credentials
 
 
 async def get_current_user_id(
@@ -134,39 +88,27 @@ async def get_current_user_id(
 
 async def get_optional_user_id(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)],
-    session_cookie: Annotated[str | None, Cookie(alias=_COOKIE_NAME)] = None,
 ) -> str | None:
-    """Dependency: returns the user_id (sub) from Bearer JWT or session cookie, else None."""
-    if credentials is not None:
-        try:
-            payload = _decode_token(credentials.credentials)
-            return payload.get("sub")
-        except HTTPException:
-            return None
-
-    if session_cookie:
-        payload = _validate_backend_session_payload(read_session_token(session_cookie))
-        if payload and payload.get("sub"):
-            return payload["sub"]
-    return None
+    """Dependency: returns the user_id (sub) from bearer JWT, else None."""
+    if credentials is None:
+        return None
+    try:
+        payload = _decode_token(credentials.credentials)
+        return payload.get("sub")
+    except HTTPException:
+        return None
 
 
 async def get_optional_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_optional_bearer)],
-    session_cookie: Annotated[str | None, Cookie(alias=_COOKIE_NAME)] = None,
 ) -> dict | None:
-    """Dependency: returns decoded Bearer/session payload when available, else None."""
-    if credentials is not None:
-        try:
-            return _decode_token(credentials.credentials)
-        except HTTPException:
-            return None
-
-    if session_cookie:
-        payload = _validate_backend_session_payload(read_session_token(session_cookie))
-        if payload:
-            return payload
-    return None
+    """Dependency: returns decoded bearer payload when available, else None."""
+    if credentials is None:
+        return None
+    try:
+        return _decode_token(credentials.credentials)
+    except HTTPException:
+        return None
 
 
 async def require_admin(

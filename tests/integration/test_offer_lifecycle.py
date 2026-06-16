@@ -18,8 +18,7 @@ from tests.conftest import wait_for_user_bootstrap
 _config_mod = types.ModuleType("core.config")
 _config_mod.settings = types.SimpleNamespace(
     supabase_url=os.environ.get("SUPABASE_URL", ""),
-    supabase_service_role_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
-    supabase_jwt_secret=os.environ.get("SUPABASE_JWT_SECRET", ""),
+    supabase_secret_key=os.environ.get("SUPABASE_SECRET_KEY", ""),
     llm_provider="gemini",
     google_api_key="",
     gemini_model="gemma-4-31b-it",
@@ -70,7 +69,7 @@ def _make_supabase_real_db_mock_storage() -> object:
 
     sb = create_client(
         os.environ["SUPABASE_URL"],
-        os.environ["SUPABASE_SERVICE_ROLE_KEY"],
+        os.environ["SUPABASE_SECRET_KEY"],
     )
     storage_mock = MagicMock()
 
