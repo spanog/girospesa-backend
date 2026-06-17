@@ -26,6 +26,11 @@ def _load_database_module(monkeypatch):
         "supabase",
         types.SimpleNamespace(create_client=MagicMock(), Client=object),
     )
+    monkeypatch.setitem(
+        sys.modules,
+        "core.supabase_client",
+        types.SimpleNamespace(create_supabase_client=MagicMock()),
+    )
     return importlib.import_module("core.database")
 
 

@@ -8,8 +8,9 @@ from contextlib import contextmanager
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from supabase import create_client, Client
+from supabase import Client
 from core.config import settings
+from core.supabase_client import create_supabase_client as create_client
 
 
 _POSTGRES_POOL_MIN_CONN = 1

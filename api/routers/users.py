@@ -7,11 +7,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from supabase import create_client
-
 from core.auth import get_current_user_id
 from core.config import settings
 from core.database import get_supabase
+from core.supabase_client import create_supabase_client as create_client
 from services.geocoding import geocode_address
 
 router = APIRouter()
