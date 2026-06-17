@@ -6,7 +6,7 @@ ALTER TABLE storage.buckets
   ADD COLUMN IF NOT EXISTS public boolean NOT NULL DEFAULT false;
 SQL
 
-for file in /supabase-webapp-migrations/*.sql; do
+for file in /supabase-migrations/*.sql; do
   echo "Applying schema migration: $file"
   psql -v ON_ERROR_STOP=1 -U postgres -d postgres -f "$file"
 done

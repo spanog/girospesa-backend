@@ -11,7 +11,7 @@ services:
     volumes:
       - itest_pgdata:/var/lib/postgresql/data
       - ./supabase/init/001-bootstrap-local-db.sh:/docker-entrypoint-initdb.d/zzz-bootstrap-local-db.sh:ro
-      - ./supabase/migrations:/supabase-webapp-migrations:ro
+      - ./supabase/migrations:/supabase-migrations:ro
       - ./supabase/seed.sql:/supabase-backend/seed.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
