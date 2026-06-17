@@ -322,6 +322,31 @@ def test_private_list_helper_privileges_match_intended_access():
     ]
 
 
+def test_service_role_keeps_public_schema_access_for_backend_queries():
+    rows = _fetch_all(
+        """
+        SELECT
+          has_schema_privilege('service_role', 'public', 'USAGE') AS public_usage,
+          has_table_privilege('service_role', 'public.supermarkets', 'SELECT') AS supermarkets_select,
+          has_table_privilege('service_role', 'public.offers', 'SELECT') AS offers_select,
+          has_function_privilege(
+            'service_role',
+            'public.nearby_supermarkets(double precision, double precision, double precision)',
+            'EXECUTE'
+          ) AS nearby_supermarkets_execute
+        """
+    )
+
+    assert rows == [
+        {
+            "public_usage": True,
+            "supermarkets_select": True,
+            "offers_select": True,
+            "nearby_supermarkets_execute": True,
+        }
+    ]
+
+
 def test_public_list_rls_helpers_are_removed():
     rows = _fetch_all(
         """
