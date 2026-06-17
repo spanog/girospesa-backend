@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 
 from api.routers.lists import router as lists_router
-from core.auth import get_current_user_id
+from core.auth import get_current_access_token, get_current_user_id
 from tests.conftest import wait_for_user_bootstrap
 
 app = FastAPI()
@@ -122,6 +122,7 @@ class TestSharedListOfferVisibility:
     def _override_auth(self):
         current_user = {"id": None}
         app.dependency_overrides[get_current_user_id] = lambda: current_user["id"]
+        app.dependency_overrides[get_current_access_token] = lambda: "integration-access-token"
         yield current_user
         app.dependency_overrides.clear()
 
