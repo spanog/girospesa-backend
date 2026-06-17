@@ -37,6 +37,7 @@ def test_settings_ignore_unknown_env_keys(
     for key in (
         "SUPABASE_URL",
         "SUPABASE_SECRET_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
         "APP_SESSION_SECRET",
         "POSTGRES_PASSWORD",
         "ANON_KEY",
@@ -82,6 +83,35 @@ def test_settings_default_app_session_values(monkeypatch) -> None:
 
     assert settings.app_session_secret == "x" * 32
     assert settings.app_session_ttl_seconds == 60 * 60 * 24 * 7
+
+
+def test_settings_accept_supabase_service_role_key_alias(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "SUPABASE_URL=http://127.0.0.1:54321",
+                "SUPABASE_SERVICE_ROLE_KEY=test-service-role-key",
+                "APP_SESSION_SECRET=test-app-session-secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    for key in (
+        "SUPABASE_URL",
+        "SUPABASE_SECRET_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "APP_SESSION_SECRET",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    settings = Settings(_env_file=env_file)
+
+    assert settings.supabase_secret_key == "test-service-role-key"
 
 
 @pytest.mark.parametrize("secret", ["", "   "])

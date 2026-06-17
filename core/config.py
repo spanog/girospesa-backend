@@ -1,4 +1,4 @@
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,7 +10,9 @@ class Settings(BaseSettings):
     )
 
     supabase_url: str
-    supabase_secret_key: str
+    supabase_secret_key: str = Field(
+        validation_alias=AliasChoices("SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY")
+    )
     app_session_secret: str
     app_session_ttl_seconds: int = Field(default=60 * 60 * 24 * 7, gt=0)
     database_url: str = ""

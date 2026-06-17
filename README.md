@@ -791,6 +791,12 @@ WEBHOOK_SECRET=
 # ── Copia da `supabase status -o env` ---------------------------------------
 # SUPABASE_SECRET_KEY <- SERVICE_ROLE_KEY
 
+Compatibilita' deploy:
+
+- il backend usa come nome canonico `SUPABASE_SECRET_KEY`
+- per retrocompatibilita' accetta anche `SUPABASE_SERVICE_ROLE_KEY`, utile se qualche provider o vecchio `.env` usa ancora quel nome
+- il backend supporta sia le chiavi legacy JWT (`service_role`) sia le nuove chiavi opache `sb_secret_...`
+
 # ── Admin seed condiviso -----------------------------------------------------
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=change-me

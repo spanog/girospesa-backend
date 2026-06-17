@@ -8,11 +8,11 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from supabase import create_client
 
 from core.config import settings
 from core.database import get_supabase
 from core.session import create_session_token, read_session_token
+from core.supabase_client import create_supabase_client as create_client
 
 _PASSWORD_RESET_TTL_SECONDS = 60 * 60  # 1-hour recovery window
 
