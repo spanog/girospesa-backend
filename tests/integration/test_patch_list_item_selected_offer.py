@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 
 from api.routers.lists import router as lists_router
-from core.auth import get_current_user_id
+from core.auth import get_current_access_token, get_current_user_id
 from tests.conftest import wait_for_user_bootstrap
 
 app = FastAPI()
@@ -110,6 +110,7 @@ class TestPatchItemSelectedOfferIntegration:
     @pytest.fixture(autouse=True)
     def _override_auth(self, auth_user):
         app.dependency_overrides[get_current_user_id] = lambda: auth_user
+        app.dependency_overrides[get_current_access_token] = lambda: "integration-access-token"
         yield
         app.dependency_overrides.clear()
 

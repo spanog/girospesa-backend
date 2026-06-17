@@ -5,8 +5,22 @@ import time
 import uuid
 
 import psycopg2
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from api.routers.users import router as users_router
+from core.auth import get_current_user_id
 from tests.conftest import wait_for_user_bootstrap
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(users_router, prefix="/users")
 
 
 def _row_count(query: str, value: str) -> int:
@@ -42,17 +56,10 @@ def _scalar_value(query: str, value: str):
 
 
 async def test_delete_me_removes_auth_user_and_related_rows(
-    async_client,
     clean_db,
     supabase_client,
 ):
-    from main import app
-    from core.auth import get_current_user_id
-
-    route = next(
-        item for item in app.routes
-        if item.path == "/users/me" and "DELETE" in getattr(item, "methods", set())
-    )
+    route = next(item for item in app.routes if item.path == "/users/me" and "DELETE" in getattr(item, "methods", set()))
     original_delete_auth_user = route.endpoint.__globals__["_delete_auth_user"]
     route.endpoint.__globals__["_delete_auth_user"] = (
         lambda user_id: supabase_client.auth.admin.delete_user(user_id)
@@ -73,10 +80,13 @@ async def test_delete_me_removes_auth_user_and_related_rows(
         ).execute()
         app.dependency_overrides[get_current_user_id] = lambda: user.id
 
-        response = await async_client.delete(
-            "/users/me",
-            headers={"Origin": "http://127.0.0.1:3000"},
-        )
+        import httpx
+
+        async with httpx.AsyncClient(app=app, base_url="http://test") as async_client:
+            response = await async_client.delete(
+                "/users/me",
+                headers={"Origin": "http://127.0.0.1:3000"},
+            )
 
         assert response.status_code == 204, response.text
         assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:3000"
@@ -89,17 +99,10 @@ async def test_delete_me_removes_auth_user_and_related_rows(
 
 
 async def test_delete_me_cleans_invite_references_before_auth_delete(
-    async_client,
     clean_db,
     supabase_client,
 ):
-    from main import app
-    from core.auth import get_current_user_id
-
-    route = next(
-        item for item in app.routes
-        if item.path == "/users/me" and "DELETE" in getattr(item, "methods", set())
-    )
+    route = next(item for item in app.routes if item.path == "/users/me" and "DELETE" in getattr(item, "methods", set()))
     original_delete_auth_user = route.endpoint.__globals__["_delete_auth_user"]
     route.endpoint.__globals__["_delete_auth_user"] = (
         lambda user_id: supabase_client.auth.admin.delete_user(user_id)
@@ -151,10 +154,13 @@ async def test_delete_me_cleans_invite_references_before_auth_delete(
         ).execute().data[0]
         app.dependency_overrides[get_current_user_id] = lambda: member.id
 
-        response = await async_client.delete(
-            "/users/me",
-            headers={"Origin": "http://127.0.0.1:3000"},
-        )
+        import httpx
+
+        async with httpx.AsyncClient(app=app, base_url="http://test") as async_client:
+            response = await async_client.delete(
+                "/users/me",
+                headers={"Origin": "http://127.0.0.1:3000"},
+            )
 
         assert response.status_code == 204, response.text
         _wait_for_row_count("SELECT count(*) FROM auth.users WHERE id = %s", member.id, 0)

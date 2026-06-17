@@ -15,6 +15,7 @@
 
 ## Deploy / CI conventions
 
+- Production/runtime baseline is Python `3.14.3`: keep `.python-version`, `pyproject.toml`, `render.yaml`, runtime guards, and CI aligned when changing interpreter support.
 - Keep `render.yaml` aligned with runtime expectations and required env vars.
 - GitHub Actions under `.github/workflows/` are part of the production contract: update them when commands, Python version, or test entrypoints change.
 - Scheduled maintenance for free-tier production uses `POST /ops/cron/daily-maintenance` with `X-Ops-Secret`; if cleanup logic changes, keep the route and workflow in sync.
