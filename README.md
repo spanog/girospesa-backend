@@ -498,7 +498,7 @@ Workflow ufficiale:
 ### 1. Prerequisiti
 
 - Docker + Docker Compose
-- Python 3.11+
+- Python 3.14+
 - Node.js 20+ (per il frontend separato)
 
 ### 2. Variabili d'ambiente
@@ -594,7 +594,7 @@ supabase db reset              # reset totale locale: utenti, prodotti, offerte,
 ### 4. Avviare FastAPI
 
 ```bash
-python3.11 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 .venv/bin/task dev-setup
@@ -604,7 +604,7 @@ python -m uvicorn main:app --reload --port 8000
 - API locale: `http://localhost:8000`
 - Swagger: `http://localhost:8000/docs`
 - Health check: `http://localhost:8000/health`
-- Se usi Python < 3.11, boot fallisce subito con errore esplicito prima di caricare router/app.
+- Se usi Python < 3.14, boot fallisce subito con errore esplicito prima di caricare router/app.
 - Se shell mostra `zsh: command not found: uvicorn`, virtualenv non e' attivo oppure dipendenze non sono ancora installate.
 - `requirements.txt` tiene `httpx==0.27.2` per compatibilita' con `supabase==2.10.0` (`supabase` richiede `httpx<0.28`).
 - Avvio equivalente senza activation:
@@ -622,7 +622,7 @@ supabase start
 
 # Terminale 2
 cd girospesa-backend
-python3.11 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 python -m scripts.seed_admin
