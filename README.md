@@ -785,7 +785,7 @@ SMTP_USE_TLS=false
 # ── Web Push / webhook opzionali --------------------------------------------
 VAPID_PRIVATE_KEY=
 VAPID_PUBLIC_KEY=
-VAPID_MAILTO=mailto:admin@girospesa.it
+VAPID_MAILTO=mailto:info@girospesa.it
 WEBHOOK_SECRET=
 
 # ── Copia da `supabase status -o env` ---------------------------------------
