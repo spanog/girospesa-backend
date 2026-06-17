@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,9 +18,6 @@ def _read_optional(relative_path: str) -> str | None:
 
 
 def _canonical_migrations_dir() -> Path:
-    frontend_dir = BACKEND_ROOT.parent / "girospesa-webapp/supabase/migrations"
-    if any(frontend_dir.glob("*.sql")):
-        return frontend_dir
     return BACKEND_ROOT / "supabase/migrations"
 
 
@@ -55,7 +50,7 @@ def test_compose_mounts_local_bootstrap_inputs():
     compose = _read("docker-compose.yml")
 
     assert "./supabase/init/001-bootstrap-local-db.sh:/docker-entrypoint-initdb.d/zzz-bootstrap-local-db.sh:ro" in compose
-    assert "../girospesa-webapp/supabase/migrations:/supabase-webapp-migrations:ro" in compose
+    assert "./supabase/migrations:/supabase-migrations:ro" in compose
     assert "./supabase/seed.sql:/supabase-backend/seed.sql:ro" in compose
 
 
@@ -63,7 +58,7 @@ def test_integration_compose_mounts_bootstrap_inputs():
     compose = _read("docker-compose.integration.yml")
 
     assert "./supabase/init/001-bootstrap-local-db.sh:/docker-entrypoint-initdb.d/zzz-bootstrap-local-db.sh:ro" in compose
-    assert "./supabase/migrations:/supabase-webapp-migrations:ro" in compose
+    assert "./supabase/migrations:/supabase-migrations:ro" in compose
     assert "./supabase/seed.sql:/supabase-backend/seed.sql:ro" in compose
 
 
@@ -87,7 +82,7 @@ def test_integration_fixture_scopes_env_to_pytest_session():
 def test_bootstrap_script_applies_schema_then_seed():
     bootstrap = _read("supabase/init/001-bootstrap-local-db.sh")
 
-    assert "/supabase-webapp-migrations/*.sql" in bootstrap
+    assert "/supabase-migrations/*.sql" in bootstrap
     assert "/supabase-backend/seed.sql" in bootstrap
 
 
@@ -133,23 +128,18 @@ def test_local_auth_allows_email_confirmation_callback_redirects():
         assert redirect_url in compose
 
 
-def test_shared_backend_migration_copies_match_frontend_canonical_files():
-    migrations_dir = BACKEND_ROOT / "supabase/migrations"
-    expected_root = BACKEND_ROOT.parent / "girospesa-webapp/supabase/migrations"
+def test_backend_migrations_dir_contains_single_active_baseline():
+    migration_files = sorted(_canonical_migrations_dir().glob("*.sql"))
 
-    if not expected_root.exists():
-        pytest.skip("Frontend repo not available in this checkout.")
+    assert [path.name for path in migration_files] == [
+        "20260617000000_initial_schema.sql"
+    ]
 
-    mismatches = []
-    for frontend_path in expected_root.glob("*.sql"):
-        backend_path = migrations_dir / frontend_path.name
-        if not backend_path.exists() or backend_path.is_symlink():
-            mismatches.append(frontend_path.name)
-            continue
-        if backend_path.read_text() != frontend_path.read_text():
-            mismatches.append(frontend_path.name)
 
-    assert mismatches == []
+def test_repo_has_no_historical_migration_archive():
+    archive_dir = BACKEND_ROOT / "supabase/migrations_archive"
+
+    assert not archive_dir.exists()
 
 
 def test_sql_seed_no_longer_owns_admin_user_bootstrap():

@@ -16,6 +16,8 @@
 ## Deploy / CI conventions
 
 - Production/runtime baseline is Python `3.14.3`: keep `.python-version`, `pyproject.toml`, `render.yaml`, runtime guards, and CI aligned when changing interpreter support.
+- Supabase schema source of truth for this repo is `girospesa-backend/supabase/migrations/`; keep one active baseline or forward-only migration chain there, and archive any retired history outside that directory.
 - Keep `render.yaml` aligned with runtime expectations and required env vars.
 - GitHub Actions under `.github/workflows/` are part of the production contract: update them when commands, Python version, or test entrypoints change.
+- Production Supabase migrations are deployed by `.github/workflows/supabase-db-production.yml`; when schema deployment assumptions change, update workflow, README secrets list, and guard tests together.
 - Scheduled maintenance for free-tier production uses `POST /ops/cron/daily-maintenance` with `X-Ops-Secret`; if cleanup logic changes, keep the route and workflow in sync.

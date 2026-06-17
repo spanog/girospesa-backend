@@ -11,6 +11,7 @@ Per minimizzare costo e complessita', questo repo ora e' pronto per deploy autom
 - `render.yaml` descrive il servizio web FastAPI (`uvicorn main:app --host 0.0.0.0 --port $PORT`)
 - `.github/workflows/ci.yml` esegue la suite backend ad ogni PR
 - `.github/workflows/daily-maintenance.yml` esegue ogni giorno una manutenzione remota compatibile con il free tier
+- `.github/workflows/supabase-db-production.yml` applica automaticamente le migration Supabase quando `supabase/**` viene mergiato su `main`
 
 ### Variabili Render richieste
 
@@ -37,6 +38,9 @@ Nel repo GitHub backend configura:
 - `BACKEND_HEALTHCHECK_URL`
 - `BACKEND_DAILY_MAINTENANCE_URL`
 - `OPS_CRON_SECRET`
+- `SUPABASE_ACCESS_TOKEN`
+- `SUPABASE_DB_PASSWORD`
+- `SUPABASE_PROJECT_ID`
 
 Esempio:
 
@@ -44,6 +48,21 @@ Esempio:
 BACKEND_HEALTHCHECK_URL=https://api.girospesa.it/health
 BACKEND_DAILY_MAINTENANCE_URL=https://api.girospesa.it/ops/cron/daily-maintenance
 ```
+
+Per le migration Supabase:
+
+```text
+SUPABASE_PROJECT_ID=<project-ref produzione>
+SUPABASE_DB_PASSWORD=<database password produzione>
+SUPABASE_ACCESS_TOKEN=<personal access token Supabase>
+```
+
+Note deploy database:
+
+- Il deploy Render del backend non applica migration Supabase.
+- Lo schema production si aggiorna tramite `.github/workflows/supabase-db-production.yml`.
+- Il workflow parte su push a `main` quando cambia `supabase/**`, ed e' lanciabile anche a mano con `workflow_dispatch`.
+- Primo setup consigliato: lanciare una volta il workflow manualmente dopo aver configurato i secret, cosi' verifichi che baseline e credenziali siano corrette prima del prossimo merge.
 
 ### Nota importante sul piano free
 
@@ -544,7 +563,8 @@ Servizi disponibili dopo l'avvio:
 
 Bootstrap admin condiviso per locale/test/prod:
 
-- Schema canonico: `../girospesa-webapp/supabase/migrations/*.sql`
+- Schema canonico: `supabase/migrations/*.sql`
+- Baseline attiva iniziale: `supabase/migrations/20260617000000_initial_schema.sql`
 - SQL seed locale: `supabase/seed.sql` non crea piu' admin auth
 - Script Python canonico: `.venv/bin/python -m scripts.seed_admin`
 - Alias task locale: `.venv/bin/task dev-setup`
@@ -849,5 +869,5 @@ La tabella `analytics_data` contiene metriche aggregate e anonimizzate per le ca
 | `description` | text | Note opzionali |
 | `created_at` | timestamptz | Timestamp inserimento |
 
-Migrazione: `supabase/migrations/20260415075251_analytics_schema.sql`. I dati sono sempre anonimi e GDPR-compliant — nessuna informazione personale.
+Definizione inclusa nella baseline `supabase/migrations/20260617000000_initial_schema.sql`. I dati sono sempre anonimi e GDPR-compliant — nessuna informazione personale.
 RLS resta abilitato anche su questa tabella; accesso previsto solo tramite backend/service role.
