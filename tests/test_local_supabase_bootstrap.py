@@ -128,12 +128,14 @@ def test_local_auth_allows_email_confirmation_callback_redirects():
         assert redirect_url in compose
 
 
-def test_backend_migrations_dir_contains_single_active_baseline():
+def test_backend_migrations_dir_starts_from_initial_baseline():
     migration_files = sorted(_canonical_migrations_dir().glob("*.sql"))
 
-    assert [path.name for path in migration_files] == [
-        "20260617000000_initial_schema.sql"
-    ]
+    assert migration_files[0].name == "20260617000000_initial_schema.sql"
+    assert any(
+        path.name == "20260617124848_grant_service_role_public_schema_access.sql"
+        for path in migration_files
+    )
 
 
 def test_repo_has_no_historical_migration_archive():
