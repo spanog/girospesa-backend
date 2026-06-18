@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
 
 from core.config import settings
+from services.contact_requests import (
+    ContactRequestConfigurationError,
+    SmtpProbeResponse,
+    SmtpProbeService,
+)
 from services.flyer_cleanup import FlyerCleanupService
 from services.purchased_items_cleanup import PurchasedItemsCleanupService
 
@@ -35,3 +40,18 @@ async def trigger_daily_maintenance(
         "deleted_offers": deleted_offers,
         "removed_purchased_items": removed_purchased_items,
     }
+
+
+@router.get("/smtp-probe", response_model=SmtpProbeResponse, status_code=status.HTTP_200_OK)
+async def probe_smtp(
+    x_ops_secret: str | None = Header(default=None),
+    timeout_seconds: int = Query(default=10, ge=1, le=30),
+) -> SmtpProbeResponse:
+    _require_ops_secret(x_ops_secret)
+    try:
+        return SmtpProbeService().run(timeout_seconds=timeout_seconds)
+    except ContactRequestConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc

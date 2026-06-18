@@ -5,7 +5,10 @@ from email.message import EmailMessage
 from enum import StrEnum
 from html import escape
 import re
+import socket
 import smtplib
+import ssl
+import time
 from typing import Sequence
 
 from fastapi import UploadFile
@@ -107,6 +110,24 @@ class ContactRequestResponse(BaseModel):
     status: str
 
 
+class SmtpProbeResponse(BaseModel):
+    status: str
+    host: str
+    port: int
+    timeout_seconds: int
+    ssl_mode: bool
+    tls_mode: bool
+    stage: str
+    resolved_addresses: list[str]
+    connect_duration_ms: int | None = None
+    ehlo_code: int | None = None
+    ehlo_message: str | None = None
+    tls_established: bool = False
+    tls_cipher: str | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+
+
 @dataclass(frozen=True)
 class ContactRequestContext:
     user_id: str | None
@@ -184,6 +205,90 @@ class ContactMailer:
         smtp.login(settings.smtp_username, settings.smtp_password)
 
 
+class SmtpProbeService:
+    def run(self, timeout_seconds: int = 10) -> SmtpProbeResponse:
+        _validate_probe_settings()
+        try:
+            resolved = _resolve_smtp_addresses(settings.smtp_host)
+        except OSError as exc:
+            return self._failure("connect", exc, [], timeout_seconds)
+        try:
+            return self._probe_transport(resolved, timeout_seconds)
+        except smtplib.SMTPException as exc:
+            return self._failure("smtp", exc, resolved, timeout_seconds)
+        except OSError as exc:
+            return self._failure("connect", exc, resolved, timeout_seconds)
+
+    def _probe_transport(
+        self,
+        resolved: list[str],
+        timeout_seconds: int,
+    ) -> SmtpProbeResponse:
+        started = time.monotonic()
+        if settings.smtp_use_ssl:
+            with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=timeout_seconds) as smtp:
+                return self._build_success_response(smtp, resolved, started, timeout_seconds)
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=timeout_seconds) as smtp:
+            response = self._build_success_response(smtp, resolved, started, timeout_seconds)
+            if not settings.smtp_use_tls:
+                return response
+            smtp.starttls(context=ssl.create_default_context())
+            code, message = smtp.ehlo()
+            return response.model_copy(
+                update={
+                    "stage": "starttls",
+                    "ehlo_code": code,
+                    "ehlo_message": _decode_smtp_message(message),
+                    "tls_established": True,
+                    "tls_cipher": _extract_tls_cipher(smtp),
+                }
+            )
+
+    def _build_success_response(
+        self,
+        smtp: smtplib.SMTP,
+        resolved: list[str],
+        started: float,
+        timeout_seconds: int,
+    ) -> SmtpProbeResponse:
+        code, message = smtp.ehlo()
+        return SmtpProbeResponse(
+            status="ok",
+            host=settings.smtp_host,
+            port=settings.smtp_port,
+            timeout_seconds=timeout_seconds,
+            ssl_mode=settings.smtp_use_ssl,
+            tls_mode=settings.smtp_use_tls,
+            stage="ehlo",
+            resolved_addresses=resolved,
+            connect_duration_ms=_elapsed_ms(started),
+            ehlo_code=code,
+            ehlo_message=_decode_smtp_message(message),
+            tls_established=settings.smtp_use_ssl,
+            tls_cipher=_extract_tls_cipher(smtp),
+        )
+
+    def _failure(
+        self,
+        stage: str,
+        exc: Exception,
+        resolved: list[str],
+        timeout_seconds: int,
+    ) -> SmtpProbeResponse:
+        return SmtpProbeResponse(
+            status="error",
+            host=settings.smtp_host,
+            port=settings.smtp_port,
+            timeout_seconds=timeout_seconds,
+            ssl_mode=settings.smtp_use_ssl,
+            tls_mode=settings.smtp_use_tls,
+            stage=stage,
+            resolved_addresses=resolved,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
+
+
 class ContactRequestService:
     def __init__(self, mailer: ContactMailer) -> None:
         self._mailer = mailer
@@ -258,11 +363,40 @@ def _validate_mail_settings() -> None:
         "smtp_host": settings.smtp_host,
         "webmaster_email": settings.webmaster_email,
     }
+    _raise_for_missing_mail_settings(required)
+
+
+def _validate_probe_settings() -> None:
+    _raise_for_missing_mail_settings({"smtp_host": settings.smtp_host})
+
+
+def _raise_for_missing_mail_settings(required: dict[str, str]) -> None:
     missing = [name for name, value in required.items() if not value]
     if missing:
         raise ContactRequestConfigurationError(
             f"Missing contact mail configuration: {', '.join(missing)}"
         )
+
+
+def _resolve_smtp_addresses(host: str) -> list[str]:
+    infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    return sorted({info[4][0] for info in infos})
+
+
+def _extract_tls_cipher(smtp: smtplib.SMTP) -> str | None:
+    sock = getattr(smtp, "sock", None)
+    if sock is None or not hasattr(sock, "cipher"):
+        return None
+    cipher = sock.cipher()
+    return None if not cipher else str(cipher[0])
+
+
+def _decode_smtp_message(message: bytes) -> str:
+    return message.decode("utf-8", errors="replace")
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.monotonic() - started) * 1000)
 
 
 def _validate_email(value: str) -> str:

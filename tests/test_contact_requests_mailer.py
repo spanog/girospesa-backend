@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import sys
 import types
+from socket import gaierror
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -25,7 +26,7 @@ _config_mod.settings = _settings  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 
 import services.contact_requests as _module
-from services.contact_requests import ContactMailer
+from services.contact_requests import ContactMailer, SmtpProbeService
 
 _module.settings = _settings
 
@@ -61,3 +62,53 @@ def test_mailer_uses_implicit_ssl_when_enabled():
     smtp.starttls.assert_not_called()
     smtp.login.assert_called_once_with("user", "secret")
     smtp.send_message.assert_called_once()
+
+
+def test_smtp_probe_reports_ssl_success():
+    _settings.smtp_host = "smtps.aruba.it"
+    _settings.smtp_port = 465
+    _settings.smtp_use_tls = False
+    _settings.smtp_use_ssl = True
+    probe = SmtpProbeService()
+
+    smtp_socket = MagicMock()
+    smtp_socket.cipher.return_value = ("TLS_AES_256_GCM_SHA384", "TLSv1.3", 256)
+
+    with patch("services.contact_requests.socket.getaddrinfo") as getaddrinfo, patch(
+        "services.contact_requests.smtplib.SMTP_SSL"
+    ) as smtp_ssl_cls:
+        getaddrinfo.return_value = [
+            (0, 0, 0, "", ("62.149.128.200", 0)),
+            (0, 0, 0, "", ("62.149.128.201", 0)),
+        ]
+        smtp = smtp_ssl_cls.return_value.__enter__.return_value
+        smtp.ehlo.return_value = (250, b"ok")
+        smtp.sock = smtp_socket
+
+        response = probe.run(timeout_seconds=12)
+
+    assert response.status == "ok"
+    assert response.host == "smtps.aruba.it"
+    assert response.port == 465
+    assert response.timeout_seconds == 12
+    assert response.tls_established is True
+    assert response.tls_cipher == "TLS_AES_256_GCM_SHA384"
+    assert response.ehlo_code == 250
+    assert response.resolved_addresses == ["62.149.128.200", "62.149.128.201"]
+    smtp_ssl_cls.assert_called_once_with("smtps.aruba.it", 465, timeout=12)
+
+
+def test_smtp_probe_reports_dns_failure():
+    probe = SmtpProbeService()
+
+    with patch(
+        "services.contact_requests.socket.getaddrinfo",
+        side_effect=gaierror("lookup failed"),
+    ):
+        response = probe.run()
+
+    assert response.status == "error"
+    assert response.stage == "connect"
+    assert response.error_type == "gaierror"
+    assert response.error_message == "lookup failed"
+    assert response.resolved_addresses == []
