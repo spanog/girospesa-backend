@@ -158,16 +158,30 @@ class ContactMailer:
 
     def _deliver(self, message: EmailMessage) -> None:
         try:
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
-                if settings.smtp_use_tls:
-                    smtp.starttls()
-                if settings.smtp_username:
-                    smtp.login(settings.smtp_username, settings.smtp_password)
+            with self._connect() as smtp:
+                self._upgrade_transport(smtp)
+                self._authenticate(smtp)
                 smtp.send_message(message)
         except smtplib.SMTPException as exc:
             raise ContactRequestDeliveryError("Failed to send contact request email") from exc
         except OSError as exc:
             raise ContactRequestDeliveryError("Failed to connect to SMTP server") from exc
+
+    def _connect(self) -> smtplib.SMTP:
+        client_class = smtplib.SMTP_SSL if settings.smtp_use_ssl else smtplib.SMTP
+        return client_class(settings.smtp_host, settings.smtp_port, timeout=10)
+
+    def _upgrade_transport(self, smtp: smtplib.SMTP) -> None:
+        if not settings.smtp_use_tls:
+            return
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.ehlo()
+
+    def _authenticate(self, smtp: smtplib.SMTP) -> None:
+        if not settings.smtp_username:
+            return
+        smtp.login(settings.smtp_username, settings.smtp_password)
 
 
 class ContactRequestService:

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_password: str = ""
     smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
 
     llm_provider: str = "gemini"
     google_api_key: str = ""
@@ -55,6 +56,13 @@ class Settings(BaseSettings):
         if not normalized:
             raise ValueError("app_session_secret must not be empty")
         return normalized
+
+    @field_validator("smtp_use_ssl")
+    @classmethod
+    def validate_smtp_ssl_mode(cls, value: bool, info) -> bool:
+        if value and info.data.get("smtp_use_tls"):
+            raise ValueError("smtp_use_ssl and smtp_use_tls cannot both be true")
+        return value
 
 
 
