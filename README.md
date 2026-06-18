@@ -533,7 +533,7 @@ Valori locali canonici:
 - `FRONTEND_URL=http://localhost:3000` come valore canonico; `http://127.0.0.1:3000` resta supportato in CORS per compatibilita' loopback
 - `GEOCODING_PROVIDER=nominatim` in locale, così signup/profilo/seed admin riflettono comportamento reale durante sviluppo manuale
 - `GOOGLE_API_KEY` richiesto solo se si vuole usare estrazione AI Gemini
-- `WEBMASTER_EMAIL`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` e `SMTP_USE_TLS` servono per i form pubblici `/contact-requests`
+- `WEBMASTER_EMAIL`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS` e `SMTP_USE_SSL` servono per i form pubblici `/contact-requests`
 - `SUPABASE_SECRET_KEY` si copia da `supabase status -o env` oppure dall'output equivalente del bootstrap locale
 - `ADMIN_EMAIL` e `ADMIN_PASSWORD` servono per seedare utente admin via API service-role
 - `.env` backend deve contenere solo variabili lette da FastAPI; credenziali Docker/Supabase CLI come `POSTGRES_PASSWORD`, `ANON_KEY`, `JWT_SECRET` e `SERVICE_ROLE_KEY` non vanno copiate qui
@@ -801,6 +801,7 @@ SMTP_PORT=1025
 SMTP_USERNAME=
 SMTP_PASSWORD=
 SMTP_USE_TLS=false
+SMTP_USE_SSL=false
 
 # ── Web Push / webhook opzionali --------------------------------------------
 VAPID_PRIVATE_KEY=
@@ -837,7 +838,7 @@ Flow identica in locale, test, prod: cambia solo valore env.
 |----------|-------|----------------|------|
 | **Google Gemini** | Estrazione AI volantini | `GOOGLE_API_KEY` + `GEMINI_MODEL` | Unica dipendenza esterna richiesta quando usi AI extraction |
 | **Nominatim (OpenStreetMap)** | Geocoding indirizzi | `GEOCODING_PROVIDER=nominatim` | Default in locale per test manuali end-to-end; disabilitalo solo se vuoi evitare chiamate esterne |
-| **SMTP provider** | Email transazionali / contatto pubblico | `MAIL_FROM` + `SMTP_*` | Backend runtime attuale usa SMTP diretto via `smtplib` |
+| **SMTP provider** | Email transazionali / contatto pubblico | `MAIL_FROM` + `SMTP_*` | Backend runtime attuale usa SMTP diretto via `smtplib`, con supporto sia `STARTTLS` sia `SMTP_SSL` implicito |
 | **Web Push (VAPID)** | Notifiche browser | Coppia VAPID + `WEBHOOK_SECRET` | Standard W3C, nessun servizio proprietario |
 
 ---
