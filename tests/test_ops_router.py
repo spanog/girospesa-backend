@@ -36,15 +36,6 @@ async def _post(secret: str | None = None) -> httpx.Response:
         return await client.post("/ops/cron/daily-maintenance", headers=headers)
 
 
-async def _get_probe(secret: str | None = None) -> httpx.Response:
-    headers = {}
-    if secret is not None:
-        headers["x-ops-secret"] = secret
-    transport = httpx.ASGITransport(app=_test_app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.get("/ops/smtp-probe", headers=headers)
-
-
 @pytest.mark.asyncio
 async def test_daily_maintenance_requires_matching_secret():
     response = await _post("wrong-secret")
@@ -81,52 +72,3 @@ async def test_daily_maintenance_runs_both_cleanup_services():
     }
     flyer_cleanup.assert_called_once_with()
     purchased_cleanup.assert_called_once_with()
-
-
-@pytest.mark.asyncio
-async def test_smtp_probe_requires_matching_secret():
-    response = await _get_probe("wrong-secret")
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Invalid ops secret"
-
-
-@pytest.mark.asyncio
-async def test_smtp_probe_returns_service_payload():
-    payload = _ops_module.SmtpProbeResponse(
-        status="ok",
-        host="smtps.aruba.it",
-        port=465,
-        timeout_seconds=10,
-        ssl_mode=True,
-        tls_mode=False,
-        stage="ehlo",
-        resolved_addresses=["62.149.128.200"],
-        connect_duration_ms=123,
-        ehlo_code=250,
-        ehlo_message="ok",
-        tls_established=True,
-        tls_cipher="TLS_AES_256_GCM_SHA384",
-        error_type=None,
-        error_message=None,
-    )
-
-    with patch.object(_ops_module.SmtpProbeService, "run", return_value=payload):
-        response = await _get_probe("test-ops-secret")
-
-    assert response.status_code == 200
-    assert response.json()["host"] == "smtps.aruba.it"
-    assert response.json()["tls_established"] is True
-
-
-@pytest.mark.asyncio
-async def test_smtp_probe_maps_configuration_errors_to_503():
-    with patch.object(
-        _ops_module.SmtpProbeService,
-        "run",
-        side_effect=_ops_module.ContactRequestConfigurationError("Missing contact mail configuration: smtp_host"),
-    ):
-        response = await _get_probe("test-ops-secret")
-
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Missing contact mail configuration: smtp_host"

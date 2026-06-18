@@ -315,7 +315,6 @@ Le notifiche `favorite_offer` restano guidate dal prodotto preferito, non da `pr
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
 | `POST` | `/ops/cron/daily-maintenance` | Header `X-Ops-Secret` | Esegue cleanup offerte di flyer scaduti e rimozione item acquistati scaduti; usato dal workflow GitHub schedulato |
-| `GET` | `/ops/smtp-probe` | Header `X-Ops-Secret` | Diagnostica SMTP lato runtime: risolve `SMTP_HOST`, apre la connessione, esegue `EHLO` e, se configurato, handshake TLS/SSL senza tentare login o invio |
 
 ### Acquisti (`/purchases`)
 
@@ -534,7 +533,7 @@ Valori locali canonici:
 - `FRONTEND_URL=http://localhost:3000` come valore canonico; `http://127.0.0.1:3000` resta supportato in CORS per compatibilita' loopback
 - `GEOCODING_PROVIDER=nominatim` in locale, così signup/profilo/seed admin riflettono comportamento reale durante sviluppo manuale
 - `GOOGLE_API_KEY` richiesto solo se si vuole usare estrazione AI Gemini
-- `WEBMASTER_EMAIL`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS` e `SMTP_USE_SSL` servono per i form pubblici `/contact-requests`; `SMTP_HOST`/porta/modalita' vengono anche letti dal probe protetto `GET /ops/smtp-probe`
+- `WEBMASTER_EMAIL`, `MAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_USE_TLS` e `SMTP_USE_SSL` servono per i form pubblici `/contact-requests`
 - in produzione attuale GiroSpesa usa `Brevo` come relay SMTP applicativo; `Aruba` resta il provider delle mailbox umane (`info@`, ecc.)
 - `SUPABASE_SECRET_KEY` si copia da `supabase status -o env` oppure dall'output equivalente del bootstrap locale
 - `ADMIN_EMAIL` e `ADMIN_PASSWORD` servono per seedare utente admin via API service-role
