@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -22,6 +23,7 @@ from services.contact_requests import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ContactRequestResponse)
@@ -68,8 +70,16 @@ async def create_contact_request(
             detail=_serializable_validation_errors(exc),
         ) from exc
     except ContactRequestConfigurationError as exc:
+        logger.warning(
+            "Contact request mail misconfigured",
+            extra={"request_type": request_type, "user_id": context.user_id},
+        )
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except ContactRequestDeliveryError as exc:
+        logger.exception(
+            "Contact request delivery failed",
+            extra={"request_type": request_type, "user_id": context.user_id},
+        )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 

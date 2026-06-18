@@ -837,8 +837,16 @@ Flow identica in locale, test, prod: cambia solo valore env.
 |----------|-------|----------------|------|
 | **Google Gemini** | Estrazione AI volantini | `GOOGLE_API_KEY` + `GEMINI_MODEL` | Unica dipendenza esterna richiesta quando usi AI extraction |
 | **Nominatim (OpenStreetMap)** | Geocoding indirizzi | `GEOCODING_PROVIDER=nominatim` | Default in locale per test manuali end-to-end; disabilitalo solo se vuoi evitare chiamate esterne |
-| **Resend** | Email transazionali (richieste volantini) | `RESEND_API_KEY` | Opzionale, fallisce gracefully |
+| **SMTP provider** | Email transazionali / contatto pubblico | `MAIL_FROM` + `SMTP_*` | Backend runtime attuale usa SMTP diretto via `smtplib` |
 | **Web Push (VAPID)** | Notifiche browser | Coppia VAPID + `WEBHOOK_SECRET` | Standard W3C, nessun servizio proprietario |
+
+---
+
+## Logging
+
+- In locale e ambienti non-production, il backend logga a livello `INFO`.
+- In produzione (`ENVIRONMENT=production`), il root logger sale a `WARNING`, mentre `uvicorn.access` viene ridotto per evitare rumore nei log applicativi.
+- Gli errori dei contact form (`POST /contact-requests`) vengono loggati esplicitamente come `warning` per misconfigurazioni e `exception` per failure SMTP, cosi' i log `Render` mostrano la causa reale del `500`.
 
 ---
 

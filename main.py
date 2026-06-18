@@ -32,8 +32,11 @@ from api.routers import (
     users,
 )
 from core.config import settings
+from core.logging_setup import configure_logging
 from services.flyer_cleanup import FlyerCleanupService
 from services.purchased_items_cleanup import PurchasedItemsCleanupService
+
+configure_logging()
 
 logger = logging.getLogger(__name__)
 
