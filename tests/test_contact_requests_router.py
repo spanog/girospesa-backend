@@ -32,7 +32,7 @@ sys.modules["core.auth"] = _auth_mod
 
 import api.routers.contact_requests as _module
 from api.routers.contact_requests import router
-from services.contact_requests import ContactRequestConfigurationError
+from services.contact_requests import ContactRequestConfigurationError, ContactRequestDeliveryError
 
 test_app = FastAPI()
 test_app.include_router(router, prefix="/contact-requests")
@@ -179,7 +179,7 @@ async def test_configuration_errors_return_503():
     service.submit_missing_flyer_request = AsyncMock(
         side_effect=ContactRequestConfigurationError("Missing contact mail configuration: webmaster_email")
     )
-    with patch.object(_module, "_build_service", return_value=service):
+    with patch.object(_module, "_build_service", return_value=service), patch.object(_module, "logger") as logger:
         response = await _post(
             data={
                 "request_type": "missing_flyer_request",
@@ -188,6 +188,25 @@ async def test_configuration_errors_return_503():
         )
 
     assert response.status_code == 503
+    logger.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_delivery_errors_return_500_and_log_exception():
+    service = MagicMock()
+    service.submit_missing_flyer_request = AsyncMock(
+        side_effect=ContactRequestDeliveryError("Failed to connect to SMTP server")
+    )
+    with patch.object(_module, "_build_service", return_value=service), patch.object(_module, "logger") as logger:
+        response = await _post(
+            data={
+                "request_type": "missing_flyer_request",
+                "city": "Napoli",
+            }
+        )
+
+    assert response.status_code == 500
+    logger.exception.assert_called_once()
 
 
 @pytest.mark.asyncio
