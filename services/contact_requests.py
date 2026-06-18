@@ -189,7 +189,7 @@ class ContactMailer:
             raise ContactRequestDeliveryError("Failed to connect to SMTP server") from exc
 
     def _connect(self) -> smtplib.SMTP:
-        client_class = _Ipv4OnlySmtpSslClient if settings.smtp_use_ssl else _Ipv4OnlySmtpClient
+        client_class = smtplib.SMTP_SSL if settings.smtp_use_ssl else smtplib.SMTP
         return client_class(settings.smtp_host, settings.smtp_port, timeout=10)
 
     def _upgrade_transport(self, smtp: smtplib.SMTP) -> None:
@@ -226,9 +226,9 @@ class SmtpProbeService:
     ) -> SmtpProbeResponse:
         started = time.monotonic()
         if settings.smtp_use_ssl:
-            with _Ipv4OnlySmtpSslClient(settings.smtp_host, settings.smtp_port, timeout=timeout_seconds) as smtp:
+            with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=timeout_seconds) as smtp:
                 return self._build_success_response(smtp, resolved, started, timeout_seconds)
-        with _Ipv4OnlySmtpClient(settings.smtp_host, settings.smtp_port, timeout=timeout_seconds) as smtp:
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=timeout_seconds) as smtp:
             response = self._build_success_response(smtp, resolved, started, timeout_seconds)
             if not settings.smtp_use_tls:
                 return response
@@ -379,48 +379,8 @@ def _raise_for_missing_mail_settings(required: dict[str, str]) -> None:
 
 
 def _resolve_smtp_addresses(host: str) -> list[str]:
-    infos = socket.getaddrinfo(
-        host,
-        None,
-        family=socket.AF_INET,
-        type=socket.SOCK_STREAM,
-    )
+    infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     return sorted({info[4][0] for info in infos})
-
-
-class _Ipv4OnlySmtpClient(smtplib.SMTP):
-    def _get_socket(self, host: str, port: int, timeout: float):
-        return _connect_ipv4_socket(host, port, timeout)
-
-
-class _Ipv4OnlySmtpSslClient(smtplib.SMTP_SSL):
-    def _get_socket(self, host: str, port: int, timeout: float):
-        sock = _connect_ipv4_socket(host, port, timeout)
-        if self.context is None:
-            self.context = ssl._create_stdlib_context()
-        return self.context.wrap_socket(sock, server_hostname=host)
-
-
-def _connect_ipv4_socket(host: str, port: int, timeout: float) -> socket.socket:
-    last_error: OSError | None = None
-    for family, socktype, proto, _, sockaddr in socket.getaddrinfo(
-        host,
-        port,
-        family=socket.AF_INET,
-        type=socket.SOCK_STREAM,
-    ):
-        sock = socket.socket(family, socktype, proto)
-        try:
-            if timeout is not None:
-                sock.settimeout(timeout)
-            sock.connect(sockaddr)
-            return sock
-        except OSError as exc:
-            last_error = exc
-            sock.close()
-    if last_error is not None:
-        raise last_error
-    raise OSError(f"Could not resolve IPv4 address for {host}:{port}")
 
 
 def _extract_tls_cipher(smtp: smtplib.SMTP) -> str | None:

@@ -34,7 +34,7 @@ _module.settings = _settings
 def test_mailer_uses_starttls_for_submission_ports():
     mailer = ContactMailer()
 
-    with patch("services.contact_requests._Ipv4OnlySmtpClient") as smtp_cls:
+    with patch("services.contact_requests.smtplib.SMTP") as smtp_cls:
         smtp = smtp_cls.return_value.__enter__.return_value
         mailer.send("Subject", "Text", "<p>Html</p>")
 
@@ -51,8 +51,8 @@ def test_mailer_uses_implicit_ssl_when_enabled():
     _settings.smtp_use_ssl = True
     mailer = ContactMailer()
 
-    with patch("services.contact_requests._Ipv4OnlySmtpClient") as smtp_cls, patch(
-        "services.contact_requests._Ipv4OnlySmtpSslClient"
+    with patch("services.contact_requests.smtplib.SMTP") as smtp_cls, patch(
+        "services.contact_requests.smtplib.SMTP_SSL"
     ) as smtp_ssl_cls:
         smtp = smtp_ssl_cls.return_value.__enter__.return_value
         mailer.send("Subject", "Text", "<p>Html</p>")
@@ -75,7 +75,7 @@ def test_smtp_probe_reports_ssl_success():
     smtp_socket.cipher.return_value = ("TLS_AES_256_GCM_SHA384", "TLSv1.3", 256)
 
     with patch("services.contact_requests.socket.getaddrinfo") as getaddrinfo, patch(
-        "services.contact_requests._Ipv4OnlySmtpSslClient"
+        "services.contact_requests.smtplib.SMTP_SSL"
     ) as smtp_ssl_cls:
         getaddrinfo.return_value = [
             (0, 0, 0, "", ("62.149.128.200", 0)),
@@ -112,22 +112,3 @@ def test_smtp_probe_reports_dns_failure():
     assert response.error_type == "gaierror"
     assert response.error_message == "lookup failed"
     assert response.resolved_addresses == []
-
-
-def test_connect_ipv4_socket_ignores_ipv6_results():
-    ipv4_sock = MagicMock()
-
-    with patch("services.contact_requests.socket.getaddrinfo") as getaddrinfo, patch(
-        "services.contact_requests.socket.socket",
-        return_value=ipv4_sock,
-    ) as socket_cls:
-        getaddrinfo.return_value = [
-            (2, 1, 6, "", ("142.251.127.109", 587)),
-        ]
-
-        sock = _module._connect_ipv4_socket("smtp.gmail.com", 587, 10)
-
-    assert sock is ipv4_sock
-    socket_cls.assert_called_once_with(2, 1, 6)
-    ipv4_sock.settimeout.assert_called_once_with(10)
-    ipv4_sock.connect.assert_called_once_with(("142.251.127.109", 587))
