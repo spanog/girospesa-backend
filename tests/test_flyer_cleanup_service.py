@@ -43,7 +43,7 @@ def _make_sb(expired_flyers: list[dict], offer_counts: dict[str, int] | None = N
 
     flyers_result = MagicMock()
     flyers_result.data = expired_flyers
-    flyers_table.select.return_value.lt.return_value.neq.return_value.execute.return_value = flyers_result
+    flyers_table.select.return_value.lt.return_value.not_.is_.return_value.execute.return_value = flyers_result
 
     def offers_select_side_effect(*args, **kwargs):
         if kwargs.get("count") != "exact":
@@ -71,6 +71,14 @@ class TestNoExpiredFlyers:
         sb = _make_sb([])
         assert _make_svc(sb).run() == 0
         sb.table.return_value.delete.assert_not_called()
+
+    def test_query_filters_out_null_valid_to_with_is_null_syntax(self):
+        sb = _make_sb([])
+
+        _make_svc(sb).run()
+
+        flyers_table = sb.table("flyers")
+        flyers_table.select.return_value.lt.return_value.not_.is_.assert_called_once_with("valid_to", None)
 
 
 class TestDeletesOffersOnly:

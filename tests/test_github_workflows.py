@@ -23,6 +23,7 @@ def test_daily_maintenance_workflow_calls_production_cleanup_endpoint():
     assert 'cron: "5 4 * * *"' in workflow
     assert "BACKEND_DAILY_MAINTENANCE_URL" in workflow
     assert "OPS_CRON_SECRET" in workflow
+    assert "--fail-with-body" in workflow
 
 
 def test_render_keepalive_workflow_pings_healthcheck_every_ten_minutes():

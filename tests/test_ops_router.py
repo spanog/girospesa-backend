@@ -69,6 +69,29 @@ async def test_daily_maintenance_runs_both_cleanup_services():
         "status": "ok",
         "deleted_offers": 7,
         "removed_purchased_items": 3,
+        "errors": [],
+    }
+    flyer_cleanup.assert_called_once_with()
+    purchased_cleanup.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_daily_maintenance_returns_partial_error_when_one_cleanup_crashes():
+    flyer_cleanup = MagicMock(side_effect=RuntimeError("boom"))
+    purchased_cleanup = MagicMock(return_value=3)
+
+    with (
+        patch.object(_ops_module.FlyerCleanupService, "run", flyer_cleanup),
+        patch.object(_ops_module.PurchasedItemsCleanupService, "run", purchased_cleanup),
+    ):
+        response = await _post("test-ops-secret")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "partial_error",
+        "deleted_offers": 0,
+        "removed_purchased_items": 3,
+        "errors": ["flyer_cleanup"],
     }
     flyer_cleanup.assert_called_once_with()
     purchased_cleanup.assert_called_once_with()
