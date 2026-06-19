@@ -244,6 +244,56 @@ class TestExtractionServiceErrorPath:
         error_calls = [c for c in update_calls if c[0][0].get("status") == "error"]
         assert len(error_calls) >= 1
 
+    def test_run_late_failure_after_completed_pdf_keeps_flyer_done(self):
+        sb = _make_sb(
+            flyer_data={
+                "id": "flyer-1",
+                "file_url": "https://example.com/flyer.pdf",
+                "file_name": "flyer.pdf",
+                "supermarket_id": "sup-1",
+                "supermarket_name": "Test Super",
+                "valid_from": None,
+                "valid_to": "2026-05-01",
+                "user_id": "user-1",
+                "status": "pending",
+                "extraction_metadata": None,
+            }
+        )
+        mock_provider = MagicMock()
+        mock_provider.chunk_size_pages = 3
+        mock_provider.extract_products.return_value = (_EXTRACTED_PRODUCTS, [])
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=3),
+            patch(
+                "services.extraction.service.notify_extraction_complete",
+                side_effect=[RuntimeError("[Errno 11] Resource temporarily unavailable"), None],
+            ),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+            svc = ExtractionService(provider=mock_provider, supabase_factory=lambda: sb)
+            svc.run("flyer-1")
+
+        update_calls = sb.table.return_value.update.call_args_list
+        error_calls = [c for c in update_calls if c[0][0].get("status") == "error"]
+        done_payloads = [c[0][0] for c in update_calls if c[0][0].get("status") == "done"]
+
+        assert not error_calls
+        assert done_payloads
+        assert done_payloads[-1]["products_count"] == 1
+        assert done_payloads[-1]["extraction_metadata"]["resume_available"] is False
+
+        error_log_payload = _extraction_log_insert_payloads(sb)[-1]
+        assert error_log_payload["event_type"] == "error"
+        assert (
+            error_log_payload["details"]["resume"]["reason"]
+            == "completed_persistence_after_late_runtime_failure"
+        )
+
     def test_run_keeps_partial_chunk_offers_and_marks_resume_metadata(self):
         sb = _make_sb(
             flyer_data={
