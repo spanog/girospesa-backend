@@ -71,6 +71,8 @@ Render dichiara che i servizi Free non sono pensati per produzione stabile, vann
 
 Per ridurre il rischio di idle durante il giorno, `.github/workflows/render-keepalive.yml` esegue anche un `curl` a `BACKEND_HEALTHCHECK_URL` ogni 10 minuti. Questo mitiga il cold start del piano Free, ma non offre garanzia forte come un piano paid: GitHub Actions schedulato puo' accumulare ritardi e Render puo' comunque riavviare l'istanza.
 
+Il workflow `.github/workflows/daily-maintenance.yml` usa `curl --fail-with-body`, cosi' eventuali errori HTTP mantengono il body nei log GitHub. L'endpoint `/ops/cron/daily-maintenance` resta best-effort: se un singolo step interno fallisce, la risposta segnala `status=partial_error` e il nome degli step falliti in `errors`, ma gli altri cleanup continuano.
+
 ---
 
 ## Come si colloca nel sistema
@@ -317,7 +319,7 @@ Le notifiche `favorite_offer` restano guidate dal prodotto preferito, non da `pr
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `POST` | `/ops/cron/daily-maintenance` | Header `X-Ops-Secret` | Esegue cleanup offerte di flyer scaduti e rimozione item acquistati scaduti; usato dal workflow GitHub schedulato |
+| `POST` | `/ops/cron/daily-maintenance` | Header `X-Ops-Secret` | Esegue cleanup offerte di flyer scaduti e rimozione item acquistati scaduti; se uno step fallisce risponde `status=partial_error` con array `errors` e continua gli altri cleanup; usato dal workflow GitHub schedulato |
 
 ### Acquisti (`/purchases`)
 

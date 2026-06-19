@@ -35,7 +35,7 @@ class FlyerCleanupService:
             sb.table("flyers")
             .select(_SELECT)
             .lt("valid_to", today)
-            .neq("valid_to", None)
+            .not_.is_("valid_to", None)
             .execute()
         )
         expired: list[dict] = result.data or []

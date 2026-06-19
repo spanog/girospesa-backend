@@ -21,4 +21,5 @@
 - GitHub Actions under `.github/workflows/` are part of the production contract: update them when commands, Python version, or test entrypoints change.
 - Production Supabase migrations are deployed by `.github/workflows/supabase-db-production.yml`; when schema deployment assumptions change, update workflow, README secrets list, and guard tests together.
 - Scheduled maintenance for free-tier production uses `POST /ops/cron/daily-maintenance` with `X-Ops-Secret`; if cleanup logic changes, keep the route and workflow in sync.
+- Keep `POST /ops/cron/daily-maintenance` best-effort: one failing cleanup step must not block the others, and workflow logs must preserve the response body for production debugging.
 - Free-tier Render anti-idle relies on `.github/workflows/render-keepalive.yml` pinging `BACKEND_HEALTHCHECK_URL` every 10 minutes; if hostnames or sleep strategy change, update workflow, secrets docs, and tests together.
