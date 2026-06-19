@@ -348,16 +348,22 @@ class ExtractionService:
     def _resume_state(self, flyer: dict, mime_type: str, pages_count: int) -> dict:
         metadata = flyer.get("extraction_metadata")
         current = metadata if isinstance(metadata, dict) else {}
-        resume_available = (
-            mime_type == "application/pdf"
-            and bool(current.get("resume_available"))
-            and self._int_metadata(current.get("next_chunk_index"), minimum=1) is not None
-        )
-        start_chunk_index = self._int_metadata(current.get("next_chunk_index"), minimum=1) if resume_available else 1
         chunk_size = getattr(self._provider, "chunk_size_pages", 1) if mime_type == "application/pdf" else 1
         if not isinstance(chunk_size, int) or chunk_size < 1:
             chunk_size = 1
         chunks_total = max(1, (pages_count + chunk_size - 1) // chunk_size)
+        chunks_completed = self._int_metadata(current.get("last_completed_chunk"), minimum=0) or self._int_metadata(
+            current.get("chunks_completed"),
+            minimum=0,
+        ) or 0
+        next_chunk_index = self._int_metadata(current.get("next_chunk_index"), minimum=1)
+        resume_available = (
+            mime_type == "application/pdf"
+            and next_chunk_index is not None
+            and next_chunk_index <= chunks_total
+            and (bool(current.get("resume_available")) or chunks_completed > 0)
+        )
+        start_chunk_index = next_chunk_index if resume_available and next_chunk_index is not None else 1
         if start_chunk_index is None or start_chunk_index > chunks_total:
             start_chunk_index = 1
             resume_available = False
@@ -395,9 +401,7 @@ class ExtractionService:
                 minimum=0,
             )
             or 0,
-            "chunks_completed": self._int_metadata(current.get("last_completed_chunk"), minimum=0)
-            or self._int_metadata(current.get("chunks_completed"), minimum=0)
-            or 0,
+            "chunks_completed": chunks_completed,
             "chunk_failures": self._int_metadata(current.get("chunk_failures"), minimum=0) or 0,
         }
 
@@ -723,12 +727,13 @@ class ExtractionService:
     def _error_metadata(self, sb: object, flyer_id: str, exc: Exception) -> dict | None:
         result = (
             sb.table("flyers")  # type: ignore[union-attr]
-            .select("extraction_metadata")
+            .select("file_name, extraction_metadata")
             .eq("id", flyer_id)
             .maybe_single()
             .execute()
         )
-        current = result.data.get("extraction_metadata") if result and result.data else None
+        flyer = result.data if result and result.data else None
+        current = flyer.get("extraction_metadata") if isinstance(flyer, dict) else None
         if not isinstance(current, dict):
             return None
         metadata = {
@@ -749,7 +754,34 @@ class ExtractionService:
                 or current.get("products_found")
                 or 0
             )
+            return metadata
+        if self._should_resume_after_error(current, flyer.get("file_name") if isinstance(flyer, dict) else None):
+            metadata["resume_available"] = True
+            metadata["partial_products_count"] = int(
+                current.get("partial_products_count")
+                or current.get("products_found")
+                or 0
+            )
+            metadata.pop("failed_chunk_index", None)
+            metadata.pop("failed_chunk_start", None)
+            metadata.pop("failed_chunk_end", None)
         return metadata
+
+    def _should_resume_after_error(self, metadata: dict, file_name: str | None) -> bool:
+        if not is_pdf(file_name or ""):
+            return False
+        chunks_total = self._int_metadata(metadata.get("chunks_total"), minimum=1)
+        next_chunk_index = self._int_metadata(metadata.get("next_chunk_index"), minimum=1)
+        chunks_completed = self._int_metadata(metadata.get("last_completed_chunk"), minimum=0) or self._int_metadata(
+            metadata.get("chunks_completed"),
+            minimum=0,
+        ) or 0
+        return bool(
+            chunks_total is not None
+            and next_chunk_index is not None
+            and chunks_completed > 0
+            and next_chunk_index <= chunks_total
+        )
 
     def _int_metadata(self, value: object, *, minimum: int) -> int | None:
         if isinstance(value, int) and value >= minimum:
@@ -874,7 +906,9 @@ class ExtractionService:
             error_update["extraction_metadata"] = error_metadata
         sb.table("flyers").update(error_update).eq("id", flyer_id).execute()  # type: ignore[union-attr]
         details = {"error": str(exc), "elapsed_seconds": elapsed}
+        resumable = False
         if isinstance(exc, PdfChunkExtractionError):
+            resumable = True
             details["chunk"] = {
                 "chunk_index": exc.chunk_index,
                 "chunks_total": exc.chunks_total,
@@ -882,6 +916,21 @@ class ExtractionService:
                 "end_page": exc.end_page,
             }
             details["retry_errors"] = exc.retry_errors
+        elif error_metadata is not None:
+            resumable = bool(error_metadata.get("resume_available"))
+        details["resume"] = {
+            "available": resumable,
+            "reason": (
+                "provider_chunk_failure"
+                if isinstance(exc, PdfChunkExtractionError)
+                else "generic_runtime_failure_after_persisted_chunk"
+                if resumable
+                else "not_available"
+            ),
+            "next_chunk_index": error_metadata.get("next_chunk_index") if error_metadata else None,
+            "last_completed_chunk": error_metadata.get("last_completed_chunk") if error_metadata else None,
+            "partial_products_count": error_metadata.get("partial_products_count") if error_metadata else None,
+        }
         log_event(
             sb,
             event_type=ERROR,
