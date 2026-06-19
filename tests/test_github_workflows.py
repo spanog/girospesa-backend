@@ -25,6 +25,14 @@ def test_daily_maintenance_workflow_calls_production_cleanup_endpoint():
     assert "OPS_CRON_SECRET" in workflow
 
 
+def test_render_keepalive_workflow_pings_healthcheck_every_ten_minutes():
+    workflow = _read(".github/workflows/render-keepalive.yml")
+
+    assert 'cron: "*/10 * * * *"' in workflow
+    assert "BACKEND_HEALTHCHECK_URL" in workflow
+    assert 'curl --fail --silent --show-error "$BACKEND_HEALTHCHECK_URL"' in workflow
+
+
 def test_supabase_production_workflow_pushes_migrations_from_main():
     workflow = _read(".github/workflows/supabase-db-production.yml")
 
