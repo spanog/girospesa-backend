@@ -10,6 +10,7 @@
 - Keep notification flows aligned across transports: `favorite_offer` logic must stay shared between the `/push/notify-favorites` webhook path and any local/development fallback executed during flyer publication.
 - `favorite_offer` should follow anti-spam semantics: aggregate multiple matches from the same flyer into one notification per `user + flyer`, updating the existing row/push payload instead of inserting one card per matched product.
 - Multi-page extraction resume is part of the backend contract: if at least one PDF chunk has already been persisted, generic transient runtime failures (for example `httpx` / Supabase read errors) must preserve `next_chunk_*`, `partial_products_count`, and a resumable retry path instead of forcing chunk 1 to rerun.
+- Completed extraction is also part of that contract: once all chunks have already been persisted, late runtime failures in final status updates or post-success side effects must keep the flyer terminally `done` instead of degrading it back to `error`.
 - Run:
   - `.venv/bin/python -m pytest tests -v --ignore=tests/integration --ignore=tests/performance`
   - `.venv/bin/python -m pytest tests/integration -v`

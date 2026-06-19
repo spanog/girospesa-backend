@@ -767,6 +767,42 @@ class ExtractionService:
             metadata.pop("failed_chunk_end", None)
         return metadata
 
+    def _error_file_name(self, sb: object, flyer_id: str) -> str | None:
+        result = (
+            sb.table("flyers")  # type: ignore[union-attr]
+            .select("file_name")
+            .eq("id", flyer_id)
+            .maybe_single()
+            .execute()
+        )
+        row = result.data if result and result.data else None
+        if not isinstance(row, dict):
+            return None
+        file_name = row.get("file_name")
+        return file_name if isinstance(file_name, str) else None
+
+    def _should_finalize_after_error(self, metadata: dict | None, file_name: str | None) -> bool:
+        if not isinstance(metadata, dict):
+            return False
+        partial_products_count = self._int_metadata(
+            metadata.get("partial_products_count") or metadata.get("products_found"),
+            minimum=1,
+        )
+        if partial_products_count is None:
+            return False
+        if is_pdf(file_name or ""):
+            chunks_total = self._int_metadata(metadata.get("chunks_total"), minimum=1)
+            chunks_completed = self._int_metadata(
+                metadata.get("last_completed_chunk"),
+                minimum=0,
+            ) or self._int_metadata(metadata.get("chunks_completed"), minimum=0)
+            return bool(
+                chunks_total is not None
+                and chunks_completed is not None
+                and chunks_completed >= chunks_total
+            )
+        return metadata.get("stage") == "saving"
+
     def _should_resume_after_error(self, metadata: dict, file_name: str | None) -> bool:
         if not is_pdf(file_name or ""):
             return False
@@ -897,14 +933,36 @@ class ExtractionService:
             elapsed,
             exc,
         )
-        error_update = {
-            "status": "error",
-            "error_message": str(exc)[:500],
-        }
         error_metadata = self._error_metadata(sb, flyer_id, exc)
-        if error_metadata is not None:
-            error_update["extraction_metadata"] = error_metadata
-        sb.table("flyers").update(error_update).eq("id", flyer_id).execute()  # type: ignore[union-attr]
+        file_name = self._error_file_name(sb, flyer_id)
+        finalized_after_error = self._should_finalize_after_error(error_metadata, file_name)
+        if finalized_after_error:
+            done_update = {
+                "status": "done",
+                "error_message": None,
+                "products_count": int(
+                    error_metadata.get("partial_products_count")
+                    or error_metadata.get("products_found")
+                    or 0
+                ),
+            }
+            pages_total = self._int_metadata(error_metadata.get("pages_total"), minimum=1)
+            if pages_total is not None:
+                done_update["pages_count"] = pages_total
+            done_update["extraction_metadata"] = {
+                **error_metadata,
+                "resume_available": False,
+            }
+            sb.table("flyers").update(done_update).eq("id", flyer_id).execute()  # type: ignore[union-attr]
+        else:
+            error_update = {
+                "status": "error",
+                "error_message": str(exc)[:500],
+            }
+            if error_metadata is not None:
+                error_update["extraction_metadata"] = error_metadata
+            sb.table("flyers").update(error_update).eq("id", flyer_id).execute()  # type: ignore[union-attr]
+
         details = {"error": str(exc), "elapsed_seconds": elapsed}
         resumable = False
         if isinstance(exc, PdfChunkExtractionError):
@@ -919,8 +977,11 @@ class ExtractionService:
         elif error_metadata is not None:
             resumable = bool(error_metadata.get("resume_available"))
         details["resume"] = {
-            "available": resumable,
+            "available": False if finalized_after_error else resumable,
             "reason": (
+                "completed_persistence_after_late_runtime_failure"
+                if finalized_after_error
+                else
                 "provider_chunk_failure"
                 if isinstance(exc, PdfChunkExtractionError)
                 else "generic_runtime_failure_after_persisted_chunk"
@@ -945,7 +1006,14 @@ class ExtractionService:
                 sb,
                 flyer_id=flyer_id,
                 user_id=user_id,
-                success=False,
+                success=finalized_after_error,
                 supermarket_name=supermarket_name,
-                error_message=str(exc)[:100],
+                products_count=int(
+                    error_metadata.get("partial_products_count")
+                    or error_metadata.get("products_found")
+                    or 0
+                )
+                if finalized_after_error and error_metadata is not None
+                else 0,
+                error_message="" if finalized_after_error else str(exc)[:100],
             )
