@@ -67,12 +67,20 @@ def _make_sb(
 
     # .select(...).eq(...).single().execute() → flyer
     table_mock.select.return_value.eq.return_value.single.return_value.execute.return_value = flyer_result
+    table_mock.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
     # .upsert(...).execute() → products and offers
     table_mock.upsert.return_value.execute.return_value = upsert_result
     # .insert(...).execute() → extraction log
     table_mock.insert.return_value.execute.return_value = insert_result
     # .update(...).eq(...).execute() → flyer status update
     table_mock.update.return_value.eq.return_value.execute.return_value = update_result
+
+    def _update_side_effect(payload: dict):
+        if isinstance(flyer_result.data, dict):
+            flyer_result.data.update(payload)
+        return table_mock.update.return_value
+
+    table_mock.update.side_effect = _update_side_effect
 
     return sb
 
@@ -90,6 +98,14 @@ def _product_upsert_calls(sb: MagicMock) -> list:
         call
         for call in sb.table.return_value.upsert.call_args_list
         if call.kwargs.get("on_conflict") == "name,brand"
+    ]
+
+
+def _extraction_log_insert_payloads(sb: MagicMock) -> list[dict]:
+    return [
+        call[0][0]
+        for call in sb.table.return_value.insert.call_args_list
+        if call[0] and isinstance(call[0][0], dict) and "event_type" in call[0][0]
     ]
 
 
@@ -503,6 +519,208 @@ class TestExtractionServiceErrorPath:
         ]
         assert done_payloads
         assert done_payloads[-1]["products_count"] == 2
+
+    def test_run_marks_generic_failure_after_saved_chunk_as_resumable(self):
+        sb = _make_sb(
+            flyer_data={
+                "id": "flyer-1",
+                "file_url": "https://example.com/flyer.pdf",
+                "file_name": "flyer.pdf",
+                "supermarket_id": "sup-1",
+                "supermarket_name": "Test Super",
+                "valid_from": None,
+                "valid_to": "2026-05-01",
+                "user_id": "user-1",
+            }
+        )
+
+        def _extract_products(
+            file_bytes,
+            mime_type,
+            progress_callback=None,
+            chunk_result_callback=None,
+            start_chunk_index=1,
+        ):
+            assert start_chunk_index == 1
+            if chunk_result_callback:
+                chunk_result_callback(
+                    {
+                        "chunk_index": 1,
+                        "chunks_total": 2,
+                        "current_chunk_start": 1,
+                        "current_chunk_end": 3,
+                        "products": _EXTRACTED_PRODUCTS,
+                        "retry_errors": [],
+                    }
+                )
+            if progress_callback:
+                progress_callback(
+                    {
+                        "chunks_completed": 1,
+                        "chunks_total": 2,
+                        "current_chunk_start": 1,
+                        "current_chunk_end": 3,
+                        "pages_processed": 3,
+                        "products_found": 1,
+                    }
+                )
+            raise RuntimeError("transient supabase read failed")
+
+        mock_provider = MagicMock()
+        mock_provider.chunk_size_pages = 3
+        mock_provider.extract_products.side_effect = _extract_products
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=6),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+
+            ExtractionService(provider=mock_provider, supabase_factory=lambda: sb).run("flyer-1")
+
+        error_payloads = [
+            c[0][0] for c in sb.table.return_value.update.call_args_list if c[0][0].get("status") == "error"
+        ]
+        assert error_payloads
+        metadata = error_payloads[-1]["extraction_metadata"]
+        assert metadata["resume_available"] is True
+        assert metadata["next_chunk_index"] == 2
+        assert metadata["next_chunk_start"] == 4
+        assert metadata["next_chunk_end"] == 6
+        assert metadata["partial_products_count"] == 1
+        assert "failed_chunk_index" not in metadata
+
+        error_log_payload = _extraction_log_insert_payloads(sb)[-1]
+        assert error_log_payload["details"]["resume"]["available"] is True
+        assert error_log_payload["details"]["resume"]["reason"] == "generic_runtime_failure_after_persisted_chunk"
+
+    def test_run_resumes_from_generic_failure_metadata_without_resume_flag(self):
+        sb = _make_sb(
+            flyer_data={
+                "id": "flyer-1",
+                "file_url": "https://example.com/flyer.pdf",
+                "file_name": "flyer.pdf",
+                "supermarket_id": "sup-1",
+                "supermarket_name": "Test Super",
+                "valid_from": None,
+                "valid_to": "2026-05-01",
+                "user_id": "user-1",
+                "status": "error",
+                "extraction_metadata": {
+                    "stage": "extracting",
+                    "extraction_started_at": "2026-05-08T10:00:00Z",
+                    "resume_available": False,
+                    "next_chunk_index": 2,
+                    "next_chunk_start": 4,
+                    "next_chunk_end": 6,
+                    "partial_products_count": 1,
+                    "products_raw_count": 1,
+                    "products_after_variants_count": 1,
+                    "products_unique_count": 1,
+                    "last_completed_chunk": 1,
+                    "chunks_completed": 1,
+                    "chunks_total": 2,
+                    "chunk_failures": 0,
+                },
+            }
+        )
+
+        def _extract_products(
+            file_bytes,
+            mime_type,
+            progress_callback=None,
+            chunk_result_callback=None,
+            start_chunk_index=1,
+        ):
+            assert start_chunk_index == 2
+            if chunk_result_callback:
+                chunk_result_callback(
+                    {
+                        "chunk_index": 2,
+                        "chunks_total": 2,
+                        "current_chunk_start": 4,
+                        "current_chunk_end": 6,
+                        "products": _EXTRACTED_PRODUCTS,
+                        "retry_errors": [],
+                    }
+                )
+            if progress_callback:
+                progress_callback(
+                    {
+                        "chunks_completed": 2,
+                        "chunks_total": 2,
+                        "current_chunk_start": 4,
+                        "current_chunk_end": 6,
+                        "pages_processed": 6,
+                        "products_found": 2,
+                    }
+                )
+            return (_EXTRACTED_PRODUCTS, [])
+
+        mock_provider = MagicMock()
+        mock_provider.chunk_size_pages = 3
+        mock_provider.extract_products.side_effect = _extract_products
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=6),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+
+            ExtractionService(provider=mock_provider, supabase_factory=lambda: sb).run("flyer-1")
+
+        assert len(_offer_upsert_calls(sb)) == 1
+        done_payloads = [
+            c[0][0] for c in sb.table.return_value.update.call_args_list if c[0][0].get("status") == "done"
+        ]
+        assert done_payloads
+        assert done_payloads[-1]["products_count"] == 2
+
+    def test_run_keeps_generic_failure_without_saved_chunks_non_resumable(self):
+        sb = _make_sb(
+            flyer_data={
+                "id": "flyer-1",
+                "file_url": "https://example.com/flyer.pdf",
+                "file_name": "flyer.pdf",
+                "supermarket_id": "sup-1",
+                "supermarket_name": "Test Super",
+                "valid_from": None,
+                "valid_to": "2026-05-01",
+                "user_id": "user-1",
+            }
+        )
+        mock_provider = MagicMock()
+        mock_provider.chunk_size_pages = 3
+        mock_provider.extract_products.side_effect = RuntimeError("boom before first chunk")
+
+        with (
+            patch("services.extraction.service.requests.get") as mock_get,
+            patch("services.extraction.service.count_pdf_pages", return_value=6),
+        ):
+            mock_get.return_value.content = b"%PDF-fake"
+            mock_get.return_value.raise_for_status = MagicMock()
+
+            from services.extraction.service import ExtractionService
+
+            ExtractionService(provider=mock_provider, supabase_factory=lambda: sb).run("flyer-1")
+
+        error_payloads = [
+            c[0][0] for c in sb.table.return_value.update.call_args_list if c[0][0].get("status") == "error"
+        ]
+        assert error_payloads
+        metadata = error_payloads[-1]["extraction_metadata"]
+        assert metadata["resume_available"] is False
+        assert metadata["next_chunk_index"] == 1
+
+        error_log_payload = _extraction_log_insert_payloads(sb)[-1]
+        assert error_log_payload["details"]["resume"]["available"] is False
+        assert error_log_payload["details"]["resume"]["reason"] == "not_available"
 
 
 class TestUpsertProductFallback:
