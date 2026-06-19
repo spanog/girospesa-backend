@@ -1,0 +1,15 @@
+name: Render Keepalive
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend healthcheck
+        run: curl --fail --silent --show-error "$BACKEND_HEALTHCHECK_URL"
+        env:
+          BACKEND_HEALTHCHECK_URL: ${{ secrets.BACKEND_HEALTHCHECK_URL }}
