@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import uuid
 import hashlib
 from typing import Annotated
@@ -43,6 +44,7 @@ ALLOWED_PRODUCT_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/g
 MAX_PRODUCT_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 OFFER_KIND_SOURCE_MASTER = "source_master"
 OFFER_KIND_PUBLISHED_TARGET = "published_target"
+PROCESSING_RESUME_STALE_AFTER = timedelta(minutes=5)
 
 
 class DraftOfferUpdate(BaseModel):
@@ -80,6 +82,30 @@ class FlyerValidityUpdate(BaseModel):
 
 class FlyerTargetsUpdate(BaseModel):
     supermarket_ids: list[str] = Field(default_factory=list, min_length=1)
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _can_resume_stale_processing(flyer: dict) -> bool:
+    if flyer.get("status") != "processing":
+        return False
+    metadata = flyer.get("extraction_metadata")
+    if not isinstance(metadata, dict):
+        return False
+    if not metadata.get("next_chunk_index") or not metadata.get("last_completed_chunk"):
+        return False
+    updated_at = _parse_timestamp(flyer.get("updated_at"))
+    if updated_at is None:
+        return False
+    return datetime.now(timezone.utc) - updated_at >= PROCESSING_RESUME_STALE_AFTER
 
 
 def _confirmed_count_by_flyer(sb, flyer_ids: list[str]) -> dict[str, int]:
@@ -911,8 +937,9 @@ async def trigger_extraction(
     _source_flyer_required(flyer)
     _assert_flyer_access(sb, profile, flyer)
 
+    resumable_processing = _can_resume_stale_processing(flyer)
     allowed_statuses = {"pending", "error"}
-    if flyer.get("status") not in allowed_statuses:
+    if flyer.get("status") not in allowed_statuses and not resumable_processing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot trigger extraction: flyer status is '{flyer.get('status')}'",

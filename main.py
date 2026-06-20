@@ -1,3 +1,4 @@
+import asyncio
 from core.runtime import ensure_supported_python
 
 ensure_supported_python()
@@ -34,11 +35,21 @@ from api.routers import (
 from core.config import settings
 from core.logging_setup import configure_logging
 from services.flyer_cleanup import FlyerCleanupService
+from services.extraction_startup_recovery import ExtractionStartupRecoveryService
 from services.purchased_items_cleanup import PurchasedItemsCleanupService
 
 configure_logging()
 
 logger = logging.getLogger(__name__)
+
+
+def _resume_processing_flyer(flyer_id: str) -> None:
+    from core.database import get_supabase
+    from services.extraction.service import ExtractionService
+
+    sb = get_supabase()
+    sb.table("flyers").update({"status": "processing", "error_message": None}).eq("id", flyer_id).execute()
+    ExtractionService().run(flyer_id)
 
 
 def _frontend_origin() -> str:
@@ -92,6 +103,9 @@ def _allow_origins() -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    for flyer_id in ExtractionStartupRecoveryService().run():
+        asyncio.create_task(asyncio.to_thread(_resume_processing_flyer, flyer_id))
+
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         FlyerCleanupService().run,

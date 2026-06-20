@@ -66,6 +66,13 @@ def _import_main(monkeypatch):
     )
     monkeypatch.setitem(
         sys.modules,
+        "services.extraction_startup_recovery",
+        types.SimpleNamespace(
+            ExtractionStartupRecoveryService=lambda: types.SimpleNamespace(run=lambda: []),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
         "services.purchased_items_cleanup",
         types.SimpleNamespace(
             PurchasedItemsCleanupService=lambda: types.SimpleNamespace(run=lambda: None),

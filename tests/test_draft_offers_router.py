@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import sys
 import os
 import types
@@ -122,6 +123,56 @@ class TestTriggerExtraction:
     @pytest.mark.asyncio
     async def test_done_status_returns_409(self):
         sb = _sb_with_flyer({"id": "flyer-1", "supermarket_id": "sup-1", "status": "done"})
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post(
+                "/flyers/flyer-1/extract",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+            )
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_stale_processing_with_checkpoint_returns_202(self):
+        stale_updated_at = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        flyer = {
+            "id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "status": "processing",
+            "updated_at": stale_updated_at,
+            "extraction_metadata": {
+                "last_completed_chunk": 4,
+                "next_chunk_index": 5,
+            },
+        }
+        sb = _sb_with_flyer(flyer)
+        mock_svc = MagicMock()
+        mock_svc.return_value.run = MagicMock()
+        mock_service_module = types.ModuleType("services.extraction.service")
+        mock_service_module.ExtractionService = mock_svc  # type: ignore[attr-defined]
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch.dict(sys.modules, {"services.extraction.service": mock_service_module}),
+        ):
+            resp = await _post(
+                "/flyers/flyer-1/extract",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+            )
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "processing"
+
+    @pytest.mark.asyncio
+    async def test_fresh_processing_still_returns_409(self):
+        fresh_updated_at = datetime.now(timezone.utc).isoformat()
+        flyer = {
+            "id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "status": "processing",
+            "updated_at": fresh_updated_at,
+            "extraction_metadata": {
+                "last_completed_chunk": 4,
+                "next_chunk_index": 5,
+            },
+        }
+        sb = _sb_with_flyer(flyer)
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post(
                 "/flyers/flyer-1/extract",
