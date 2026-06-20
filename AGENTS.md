@@ -14,6 +14,7 @@
 - A `processing` flyer with persisted `last_completed_chunk` + `next_chunk_*` that stays stale after a web-service restart must be manually retriggerable through the same extract endpoint; stale in-flight state is not a permanent lock.
 - Startup recovery is part of the production contract: when the web service boots, it must scan orphaned `processing` flyers left by the previous instance, queue automatic resume for rows with a saved chunk checkpoint, and fail fast rows that died before the first checkpoint.
 - Completed extraction is also part of that contract: once all chunks have already been persisted, late runtime failures in final status updates or post-success side effects must keep the flyer terminally `done` instead of degrading it back to `error`.
+- Flyer confirmation is part of the publish contract: `POST /flyers/{flyer_id}/offers/confirm` must confirm every source offer first, then sync all derived `published_target` clones in an idempotent pass so rerunning confirm can finish missing public offers after an interrupted publish.
 - Run:
   - `.venv/bin/python -m pytest tests -v --ignore=tests/integration --ignore=tests/performance`
   - `.venv/bin/python -m pytest tests/integration -v`

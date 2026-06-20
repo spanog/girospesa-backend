@@ -297,50 +297,98 @@ def _clone_offer_fields(
     }
 
 
+def _sync_published_clones_for_source_offers(
+    sb,
+    *,
+    source_offers: list[dict],
+    target_flyers: dict[str, dict],
+) -> dict[str, int]:
+    if not target_flyers:
+        return {}
+
+    if not source_offers:
+        stale_rows = (
+            sb.table("offers")
+            .select("id")
+            .in_("flyer_id", [target["flyer_id"] for target in target_flyers.values()])
+            .eq("offer_kind", OFFER_KIND_PUBLISHED_TARGET)
+            .execute()
+        ).data or []
+        stale_ids = [row["id"] for row in stale_rows if row.get("id")]
+        if stale_ids:
+            sb.table("offers").delete().in_("id", stale_ids).execute()
+        return {target["flyer_id"]: 0 for target in target_flyers.values()}
+
+    source_offer_ids = [source_offer["id"] for source_offer in source_offers]
+    target_supermarket_ids = list(target_flyers.keys())
+    existing_rows = (
+        sb.table("offers")
+        .select("id, flyer_id, supermarket_id, source_offer_id")
+        .in_("source_offer_id", source_offer_ids)
+        .in_("supermarket_id", target_supermarket_ids)
+        .eq("offer_kind", OFFER_KIND_PUBLISHED_TARGET)
+        .execute()
+    ).data or []
+    existing_by_key = {
+        (row["source_offer_id"], row["supermarket_id"]): row
+        for row in existing_rows
+        if row.get("id") and row.get("source_offer_id") and row.get("supermarket_id")
+    }
+
+    desired_keys: set[tuple[str, str]] = set()
+    existing_payloads: list[dict] = []
+    missing_payloads: list[dict] = []
+    inserted_notifications: list[dict] = []
+    counts_by_flyer: dict[str, int] = {}
+
+    for source_offer in source_offers:
+        for supermarket_id, target in target_flyers.items():
+            payload = _clone_offer_fields(
+                source_offer,
+                flyer_id=target["flyer_id"],
+                supermarket_id=supermarket_id,
+                supermarket_name=target["supermarket_name"],
+            )
+            desired_keys.add((source_offer["id"], supermarket_id))
+            counts_by_flyer[target["flyer_id"]] = counts_by_flyer.get(target["flyer_id"], 0) + 1
+            existing = existing_by_key.get((source_offer["id"], supermarket_id))
+            if existing:
+                existing_payloads.append({"id": existing["id"], **payload})
+            else:
+                clone = {"id": str(uuid.uuid4()), **payload}
+                missing_payloads.append(clone)
+                inserted_notifications.append(clone)
+
+    if existing_payloads:
+        sb.table("offers").upsert(existing_payloads, on_conflict="id").execute()
+    if missing_payloads:
+        sb.table("offers").insert(missing_payloads).execute()
+        if not getattr(settings, "webhook_secret", None):
+            for clone in inserted_notifications:
+                notify_favorite_offer_published(sb, clone)
+
+    stale_clone_ids = [
+        row["id"]
+        for row in existing_rows
+        if (row.get("source_offer_id"), row.get("supermarket_id")) not in desired_keys
+    ]
+    if stale_clone_ids:
+        sb.table("offers").delete().in_("id", stale_clone_ids).execute()
+
+    return counts_by_flyer
+
+
 def _sync_published_clones_for_source_offer(
     sb,
     *,
     source_offer: dict,
     target_flyers: dict[str, dict],
 ) -> None:
-    if not target_flyers:
-        return
-
-    clone_rows = (
-        sb.table("offers")
-        .select("id, supermarket_id, source_offer_id")
-        .eq("source_offer_id", source_offer["id"])
-        .execute()
-    ).data or []
-    clones_by_supermarket = {
-        row["supermarket_id"]: row
-        for row in clone_rows
-        if row.get("supermarket_id") and row.get("id")
-    }
-
-    for supermarket_id, target in target_flyers.items():
-        payload = _clone_offer_fields(
-            source_offer,
-            flyer_id=target["flyer_id"],
-            supermarket_id=supermarket_id,
-            supermarket_name=target["supermarket_name"],
-        )
-        existing = clones_by_supermarket.get(supermarket_id)
-        if existing:
-            sb.table("offers").update(payload).eq("id", existing["id"]).execute()
-            continue
-        clone = {"id": str(uuid.uuid4()), **payload}
-        sb.table("offers").insert(clone).execute()
-        if not getattr(settings, "webhook_secret", None):
-            notify_favorite_offer_published(sb, clone)
-
-    stale_clone_ids = [
-        row["id"]
-        for supermarket_id, row in clones_by_supermarket.items()
-        if supermarket_id not in target_flyers
-    ]
-    if stale_clone_ids:
-        sb.table("offers").delete().in_("id", stale_clone_ids).execute()
+    _sync_published_clones_for_source_offers(
+        sb,
+        source_offers=[source_offer],
+        target_flyers=target_flyers,
+    )
 
 
 def _profile_supermarket_ids(profile: dict) -> list[str]:
@@ -1341,6 +1389,7 @@ async def confirm_offers(
     }
 
     published_flyers: list[dict] = []
+    published_flyer_ids: list[str] = []
     for target in targets:
         target_supermarket_id = target["supermarket_id"]
         target_supermarket_name = target.get("supermarket_name") or "Supermercato"
@@ -1361,7 +1410,7 @@ async def confirm_offers(
                         "valid_to": flyer.get("valid_to"),
                         "status": "done",
                         "error_message": None,
-                        "products_count": source_offer_count,
+                        "products_count": 0,
                         "pages_count": flyer.get("pages_count"),
                         "extraction_metadata": flyer.get("extraction_metadata"),
                         "is_public": True,
@@ -1386,7 +1435,6 @@ async def confirm_offers(
                 {
                     "supermarket_name": target_supermarket_name,
                     "status": "done",
-                    "products_count": source_offer_count,
                     "valid_from": flyer.get("valid_from"),
                     "valid_to": flyer.get("valid_to"),
                     "is_public": True,
@@ -1400,14 +1448,18 @@ async def confirm_offers(
                 "supermarket_name": target_supermarket_name,
             }
         )
+        published_flyer_ids.append(published_flyer_id)
 
     target_flyers = _published_target_flyers(sb, flyer_id)
-    for source_offer in source_offers:
-        _sync_published_clones_for_source_offer(
-            sb,
-            source_offer=source_offer,
-            target_flyers=target_flyers,
-        )
+    published_counts = _sync_published_clones_for_source_offers(
+        sb,
+        source_offers=source_offers,
+        target_flyers=target_flyers,
+    )
+    for published_flyer_id in published_flyer_ids:
+        sb.table("flyers").update(
+            {"products_count": published_counts.get(published_flyer_id, 0)}
+        ).eq("id", published_flyer_id).execute()
 
     return {
         "confirmed": confirmed_count,
