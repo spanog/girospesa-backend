@@ -1,5 +1,7 @@
 # GiroSpesa — Backend
 
+> Scope: questo file e' documentazione per persone. Regole operative per agenti e convenzioni di esecuzione vivono in `AGENTS.md`.
+
 FastAPI backend per GiroSpesa. Contiene tutta la logica di business dell'applicazione: ottimizzazione lista della spesa, gestione liste condivise, geocoding indirizzi, push notification, analytics B2B e gestione del catalogo prodotti.
 
 > **Estrazione AI volantini:** questo repo contiene runtime, review flow e CLI di valutazione. Il vecchio workspace di estrazione è stato assorbito in questo backend.
