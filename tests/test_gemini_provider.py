@@ -86,6 +86,14 @@ class _FakeGeminiError(Exception):
         )
 
 
+class _FakeUnavailableGeminiError(Exception):
+    def __init__(self) -> None:
+        super().__init__("503 UNAVAILABLE.")
+        self.code = 503
+        self.status = "UNAVAILABLE"
+        self.message = "This model is currently experiencing high demand."
+
+
 def test_extract_products_chunks_pdf_in_fixed_groups_of_three_pages() -> None:
     fake_client = _FakeClient(
         responses=[
@@ -278,3 +286,36 @@ def test_extract_products_logs_structured_gemini_error_details(caplog: pytest.Lo
     assert "request_id=req-123" in retry_errors[0]
     assert "response={\"error\":{\"code\":500,\"message\":\"Internal error encountered.\",\"status\":\"INTERNAL\"}}" in retry_errors[0]
     assert retry_errors[0] in caplog.text
+
+
+def test_retry_delay_uses_exponential_backoff_for_transient_server_errors() -> None:
+    from services.extraction.providers.gemini import _retry_delay
+
+    with patch("services.extraction.providers.gemini.random.uniform", return_value=0.0):
+        first_delay = _retry_delay(_FakeGeminiError(), 0)
+        second_delay = _retry_delay(_FakeGeminiError(), 1)
+        third_delay = _retry_delay(_FakeGeminiError(), 2)
+
+    assert first_delay == 10
+    assert second_delay == 20
+    assert third_delay == 40
+
+
+def test_retry_delay_keeps_stronger_backoff_for_unavailable_errors() -> None:
+    from services.extraction.providers.gemini import _retry_delay
+
+    with patch("services.extraction.providers.gemini.random.uniform", return_value=0.0):
+        first_delay = _retry_delay(_FakeUnavailableGeminiError(), 0)
+        second_delay = _retry_delay(_FakeUnavailableGeminiError(), 1)
+
+    assert first_delay == 20
+    assert second_delay == 40
+
+
+def test_retry_delay_adds_jitter_around_base_delay() -> None:
+    from services.extraction.providers.gemini import _retry_delay
+
+    with patch("services.extraction.providers.gemini.random.uniform", return_value=2.5):
+        delay = _retry_delay(_FakeGeminiError(), 0)
+
+    assert delay == 12.5

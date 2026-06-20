@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import sys
 import os
 import types
@@ -122,6 +123,56 @@ class TestTriggerExtraction:
     @pytest.mark.asyncio
     async def test_done_status_returns_409(self):
         sb = _sb_with_flyer({"id": "flyer-1", "supermarket_id": "sup-1", "status": "done"})
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post(
+                "/flyers/flyer-1/extract",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+            )
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_stale_processing_with_checkpoint_returns_202(self):
+        stale_updated_at = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        flyer = {
+            "id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "status": "processing",
+            "updated_at": stale_updated_at,
+            "extraction_metadata": {
+                "last_completed_chunk": 4,
+                "next_chunk_index": 5,
+            },
+        }
+        sb = _sb_with_flyer(flyer)
+        mock_svc = MagicMock()
+        mock_svc.return_value.run = MagicMock()
+        mock_service_module = types.ModuleType("services.extraction.service")
+        mock_service_module.ExtractionService = mock_svc  # type: ignore[attr-defined]
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch.dict(sys.modules, {"services.extraction.service": mock_service_module}),
+        ):
+            resp = await _post(
+                "/flyers/flyer-1/extract",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+            )
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "processing"
+
+    @pytest.mark.asyncio
+    async def test_fresh_processing_still_returns_409(self):
+        fresh_updated_at = datetime.now(timezone.utc).isoformat()
+        flyer = {
+            "id": "flyer-1",
+            "supermarket_id": "sup-1",
+            "status": "processing",
+            "updated_at": fresh_updated_at,
+            "extraction_metadata": {
+                "last_completed_chunk": 4,
+                "next_chunk_index": 5,
+            },
+        }
+        sb = _sb_with_flyer(flyer)
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post(
                 "/flyers/flyer-1/extract",
@@ -602,7 +653,12 @@ class TestUploadDraftOfferImage:
 # ---------------------------------------------------------------------------
 
 class TestConfirmOffers:
-    def _make_sb(self, flyer_status: str = "done", confirmed_count: int = 3) -> MagicMock:
+    def _make_sb(
+        self,
+        flyer_status: str = "done",
+        confirmed_count: int = 3,
+        source_offer_count: int | None = None,
+    ) -> MagicMock:
         sb = MagicMock()
         flyer_result = MagicMock()
         flyer_result.data = {
@@ -619,19 +675,31 @@ class TestConfirmOffers:
             "pages_count": 1,
             "file_hash": "hash-1",
         }
-        sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
-
-        updated_result = MagicMock()
-        updated_result.data = [{"id": f"offer-{i}"} for i in range(confirmed_count)]
-        sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = updated_result
+        total_source_offer_count = confirmed_count if source_offer_count is None else source_offer_count
+        drafts_result = MagicMock()
+        drafts_result.data = [{"id": f"offer-{i}"} for i in range(confirmed_count)]
         total_confirmed_result = MagicMock()
         total_confirmed_result.data = [
             {"id": f"offer-{i}", "product_id": f"prod-{i}"}
-            for i in range(confirmed_count)
+            for i in range(total_source_offer_count)
         ]
-        total_confirmed_result.count = confirmed_count
-        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value = total_confirmed_result
-        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = total_confirmed_result
+        total_confirmed_result.count = total_source_offer_count
+        select_calls = 0
+
+        def select_side_effect(*args, **kwargs):
+            nonlocal select_calls
+            select_calls += 1
+            chain = MagicMock()
+            if select_calls == 1:
+                chain.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+            elif select_calls == 2:
+                chain.eq.return_value.eq.return_value.execute.return_value = drafts_result
+            else:
+                chain.eq.return_value.eq.return_value.eq.return_value.execute.return_value = total_confirmed_result
+            return chain
+
+        sb.table.return_value.select.side_effect = select_side_effect
+        sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
         return sb
 
     @pytest.mark.asyncio
@@ -653,7 +721,10 @@ class TestConfirmOffers:
                     },
                 ],
             ),
-            patch("api.routers.flyers._sync_published_clones_for_source_offer") as sync_mock,
+            patch(
+                "api.routers.flyers._sync_published_clones_for_source_offers",
+                return_value={"published-1": 3, "published-2": 3},
+            ) as sync_mock,
             patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
         ):
             resp = await _post(
@@ -702,6 +773,37 @@ class TestConfirmOffers:
         notify_mock.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_confirm_reuses_all_source_offers_when_no_new_drafts_exist(self):
+        sb = self._make_sb("done", confirmed_count=0, source_offer_count=3)
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._flyer_targets", return_value=[{"supermarket_id": "sup-1", "supermarket_name": "Coop"}]),
+            patch(
+                "api.routers.flyers._published_target_flyers",
+                side_effect=[
+                    {"sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"}},
+                    {"sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"}},
+                ],
+            ),
+            patch(
+                "api.routers.flyers._sync_published_clones_for_source_offers",
+                return_value={"published-1": 3},
+            ) as sync_mock,
+            patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
+        ):
+            resp = await _post(
+                "/flyers/flyer-1/offers/confirm",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["confirmed"] == 0
+        sync_mock.assert_called_once()
+        synced_source_offers = sync_mock.call_args.kwargs["source_offers"]
+        assert len(synced_source_offers) == 3
+        notify_mock.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_confirm_does_not_notify_when_flyer_already_public(self):
         sb = self._make_sb("done", 2)
         flyer_result = MagicMock()
@@ -733,7 +835,10 @@ class TestConfirmOffers:
                     {"sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"}},
                 ],
             ),
-            patch("api.routers.flyers._sync_published_clones_for_source_offer"),
+            patch(
+                "api.routers.flyers._sync_published_clones_for_source_offers",
+                return_value={"published-1": 2},
+            ),
             patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
         ):
             resp = await _post(
@@ -835,7 +940,10 @@ class TestConfirmOffers:
                     {"sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"}},
                 ],
             ),
-            patch("api.routers.flyers._sync_published_clones_for_source_offer"),
+            patch(
+                "api.routers.flyers._sync_published_clones_for_source_offers",
+                return_value={"published-1": 1},
+            ),
             patch("api.routers.flyers.upsert_product", return_value="prod-new") as mock_upsert,
         ):
             resp = await _post(
@@ -851,12 +959,19 @@ class TestConfirmOffers:
     def test_sync_published_clones_updates_existing_rows_without_inserting_duplicates(self):
         sb = MagicMock()
         clone_result = MagicMock()
-        clone_result.data = [{"id": "clone-1", "supermarket_id": "sup-1", "source_offer_id": "offer-1"}]
-        sb.table.return_value.select.return_value.eq.return_value.execute.return_value = clone_result
+        clone_result.data = [
+            {
+                "id": "clone-1",
+                "flyer_id": "flyer-target-1",
+                "supermarket_id": "sup-1",
+                "source_offer_id": "offer-1",
+            }
+        ]
+        sb.table.return_value.select.return_value.in_.return_value.in_.return_value.eq.return_value.execute.return_value = clone_result
 
-        _flyers_module._sync_published_clones_for_source_offer(
+        counts = _flyers_module._sync_published_clones_for_source_offers(
             sb,
-            source_offer={
+            source_offers=[{
                 "id": "offer-1",
                 "product_id": "prod-1",
                 "draft_name": "Pasta",
@@ -882,11 +997,12 @@ class TestConfirmOffers:
                 "format_key": "fmt-1",
                 "format_label": "500 g",
                 "is_reviewed": False,
-            },
+            }],
             target_flyers={"sup-1": {"flyer_id": "flyer-target-1", "supermarket_name": "Coop"}},
         )
 
-        sb.table.return_value.update.assert_called_once()
+        assert counts == {"flyer-target-1": 1}
+        sb.table.return_value.upsert.assert_called_once()
         sb.table.return_value.insert.assert_not_called()
 
     @pytest.mark.asyncio

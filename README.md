@@ -238,6 +238,12 @@ Nota implementativa: `/products` restituisce sempre `{ items, nextPage, total?, 
 | `PATCH` | `/flyers/{flyer_id}` | ✅ admin/manager | Aggiorna `valid_from`/`valid_to` del flyer sorgente e propaga le stesse date a tutte le offerte collegate |
 | `GET` | `/flyers/{flyer_id}/targets` | ✅ admin/manager | Legge i supermercati target di un flyer sorgente |
 | `PUT/PATCH` | `/flyers/{flyer_id}/targets` | ✅ admin/manager | Aggiorna i supermercati target prima della conferma finale |
+
+Contratto di conferma:
+
+- `POST /flyers/{flyer_id}/offers/confirm` conferma sempre le offerte del flyer sorgente come `source_master`.
+- La visibilita' pubblica su `/products` e `/flyers/public` dipende invece dai cloni `published_target`.
+- La conferma deve quindi essere idempotente: se una pubblicazione si interrompe dopo aver confermato il source ma prima di aver clonato tutto, rilanciare `confirm` deve completare i `published_target` mancanti e riallineare `products_count` del flyer pubblico al numero reale di offerte pubblicate.
 | `POST` | `/flyers/upload` | ✅ admin/manager | Upload volantino sorgente (PDF/JPG/PNG/WebP, max 50 MB) con uno o piu `supermarket_ids`; crea un solo flyer `status='pending'` + righe `flyer_targets` |
 | `POST` | `/flyers/{flyer_id}/extract` | ✅ admin/manager | Avvia estrazione AI per un volantino `pending` oppure riprende dal prossimo chunk non ancora completato quando esiste progresso PDF persistito (`status='error'` o retry manuale dopo failure transiente) |
 | `GET` | `/flyers/{flyer_id}/draft-offers` | ✅ admin/manager | Lista offerte estratte ma non confermate |
@@ -284,6 +290,8 @@ Nota implementativa: `/products` restituisce sempre `{ items, nextPage, total?, 
 - Per PDF multipagina il backend divide il file in chunk PDF rigidi da 3 pagine e invia un chunk per volta a Gemini. Dopo ogni chunk riuscito persiste subito le draft offers di quel chunk e aggiorna `flyers.extraction_metadata` con pagina corrente, percentuale, `last_completed_chunk` e `next_chunk_*`, così il frontend può mostrare avanzamento live durante il polling e review parziale.
 - Se un chunk fallisce dopo i retry, il flyer passa a `status='error'`, ma le draft offers dei chunk già riusciti restano salvate. `flyers.extraction_metadata` espone `resume_available`, `failed_chunk_*`, `next_chunk_*` e `partial_products_count`; una nuova `POST /flyers/{flyer_id}/extract` riparte dal primo chunk non completato correttamente senza duplicare le offerte già persistite. La ripresa si basa su `extraction_metadata` persistito, non sullo `status` transitorio del flyer mentre il retry è già tornato a `processing`.
 - Anche un failure runtime generico dopo almeno un chunk già persistito (per esempio errori transienti `httpx`/Supabase durante polling, review o altri accessi concorrenti) deve lasciare un resume point valido: `next_chunk_*` resta fonte di verità, `resume_available` viene rialzato e il retry successivo riparte dal prossimo chunk salvato invece di rieseguire il chunk 1.
+- Se il processo web viene riavviato mentre il flyer è ancora `processing`, il backend deve trattare un record stale con `last_completed_chunk` + `next_chunk_*` come resumable anche senza transizione preventiva a `error`: lo stesso `POST /flyers/{flyer_id}/extract` deve poter riagganciare il checkpoint e riprendere dal chunk successivo.
+- Allo startup del backend, un recovery pass scansiona i flyer rimasti `processing` dopo il crash/riavvio dell'istanza precedente. Se trova `last_completed_chunk` + `next_chunk_*`, marca il flyer come recoverable e mette automaticamente in coda un nuovo `ExtractionService().run(...)`; se invece il crash e' avvenuto prima del primo checkpoint, il flyer viene chiuso in `error` con messaggio esplicito e senza retry automatico.
 - Se tutti i chunk risultano già persistiti e il failure arriva solo in coda (per esempio su update finale o side effect post-successo), il flyer non deve tornare a `status='error'`: il backend deve consolidarlo a `done`, con `resume_available=false`, perché non esiste più alcun checkpoint utile da riprendere.
 - Quando Gemini fallisce o va in retry, backend logga anche contesto strutturato se disponibile: tipo eccezione, `code`, `status`, `message`, HTTP status/body e request id. Stesso dettaglio finisce in `retry_errors` dentro `extraction_log`.
 
@@ -858,6 +866,13 @@ Flow identica in locale, test, prod: cambia solo valore env.
 | **Nominatim (OpenStreetMap)** | Geocoding indirizzi | `GEOCODING_PROVIDER=nominatim` | Default in locale per test manuali end-to-end; disabilitalo solo se vuoi evitare chiamate esterne |
 | **SMTP provider** | Email transazionali / contatto pubblico | `MAIL_FROM` + `SMTP_*` | Backend runtime attuale usa SMTP diretto via `smtplib`; in produzione GiroSpesa usa `Brevo` come relay SMTP e `Aruba` solo per ricezione mailbox |
 | **Web Push (VAPID)** | Notifiche browser | Coppia VAPID + `WEBHOOK_SECRET` | Standard W3C, nessun servizio proprietario |
+
+### Retry policy Gemini
+
+- I chunk PDF Gemini usano `MAX_RETRIES = 3`.
+- Errori provider `503/UNAVAILABLE` usano backoff esponenziale lungo con jitter.
+- Errori transient server-side `500/502/504` e `INTERNAL` usano backoff esponenziale dedicato con jitter, per evitare tre retry troppo ravvicinati quando il provider e' in stato instabile.
+- Se i retry si esauriscono, il flyer passa a `error` con checkpoint di resume sul chunk fallito.
 
 ---
 
