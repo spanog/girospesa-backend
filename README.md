@@ -861,6 +861,13 @@ Flow identica in locale, test, prod: cambia solo valore env.
 | **SMTP provider** | Email transazionali / contatto pubblico | `MAIL_FROM` + `SMTP_*` | Backend runtime attuale usa SMTP diretto via `smtplib`; in produzione GiroSpesa usa `Brevo` come relay SMTP e `Aruba` solo per ricezione mailbox |
 | **Web Push (VAPID)** | Notifiche browser | Coppia VAPID + `WEBHOOK_SECRET` | Standard W3C, nessun servizio proprietario |
 
+### Retry policy Gemini
+
+- I chunk PDF Gemini usano `MAX_RETRIES = 3`.
+- Errori provider `503/UNAVAILABLE` usano backoff esponenziale lungo con jitter.
+- Errori transient server-side `500/502/504` e `INTERNAL` usano backoff esponenziale dedicato con jitter, per evitare tre retry troppo ravvicinati quando il provider e' in stato instabile.
+- Se i retry si esauriscono, il flyer passa a `error` con checkpoint di resume sul chunk fallito.
+
 ---
 
 ## Logging

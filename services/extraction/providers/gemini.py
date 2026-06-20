@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import time
 from typing import Callable
@@ -17,19 +18,29 @@ logger = logging.getLogger(__name__)
 MAX_INLINE_BYTES = 20 * 1024 * 1024
 MAX_RETRIES = 3
 RETRY_BACKOFF_S = 2
+TRANSIENT_ERROR_BACKOFF_S = 10
 SERVER_OVERLOAD_BACKOFF_S = 20
+RETRY_JITTER_RATIO = 0.25
 PDF_CHUNK_SIZE_PAGES = 3
 _RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)s'")
 _UNAVAILABLE_RE = re.compile(r"503|UNAVAILABLE", re.IGNORECASE)
+_TRANSIENT_SERVER_ERROR_RE = re.compile(r"500|502|504|INTERNAL|BAD_GATEWAY|GATEWAY_TIMEOUT", re.IGNORECASE)
 
 
 def _retry_delay(exc: Exception, attempt: int = 0) -> float:
     m = _RETRY_DELAY_RE.search(str(exc))
     if m:
-        return float(m.group(1))
+        return _with_jitter(float(m.group(1)))
     if _UNAVAILABLE_RE.search(str(exc)):
-        return SERVER_OVERLOAD_BACKOFF_S * (2**attempt)
-    return RETRY_BACKOFF_S
+        return _with_jitter(SERVER_OVERLOAD_BACKOFF_S * (2**attempt))
+    if _TRANSIENT_SERVER_ERROR_RE.search(str(exc)):
+        return _with_jitter(TRANSIENT_ERROR_BACKOFF_S * (2**attempt))
+    return _with_jitter(RETRY_BACKOFF_S)
+
+
+def _with_jitter(delay: float) -> float:
+    jitter = delay * RETRY_JITTER_RATIO
+    return max(RETRY_BACKOFF_S, delay + random.uniform(-jitter, jitter))
 
 
 def _trim_text(value: object, limit: int = 280) -> str:
