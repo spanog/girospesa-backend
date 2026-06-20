@@ -1,5 +1,11 @@
 # Backend agent notes
 
+## Scope
+
+- `README.md` = human-facing documentation only: architecture, setup, configuration, deploy, runbooks, and API behavior notes.
+- `AGENTS.md` = agent-facing operating rules only: commands, test expectations, deploy guardrails, and repo workflow conventions.
+- When a change affects both domains, update both files but keep each change inside its own scope.
+
 ## Testing Guardrails
 
 - Every backend change must update the closest test layer first: unit/service for pure logic, integration for real DB/API contracts.
