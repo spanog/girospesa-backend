@@ -18,6 +18,7 @@ sys.modules["core.database"] = MagicMock()
 
 _auth_mod = types.ModuleType("core.auth")
 _auth_mod.get_current_user_id = MagicMock()
+_auth_mod.get_current_access_token = MagicMock()
 sys.modules["core.auth"] = _auth_mod
 
 from fastapi import FastAPI, HTTPException
@@ -28,13 +29,17 @@ import api.routers.purchases as _purchases_module
 from api.routers.purchases import router as _purchases_router
 
 _DEP_GET_USER_ID = _purchases_module.get_current_user_id
+_DEP_GET_ACCESS_TOKEN = _purchases_module.get_current_access_token
 
 _test_app = FastAPI()
 _test_app.include_router(_purchases_router, prefix="/purchases")
 
 
 def _deps(user_id: str = "user-1") -> dict:
-    return {_DEP_GET_USER_ID: lambda: user_id}
+    return {
+        _DEP_GET_USER_ID: lambda: user_id,
+        _DEP_GET_ACCESS_TOKEN: lambda: "test-access-token",
+    }
 
 
 @pytest.mark.asyncio
@@ -197,6 +202,7 @@ async def test_purchase_item_scales_totals_by_quantity():
             "purchased_at": rpc_mock.await_args.args[2]["purchased_at"],
         },
         "user-1",
+        "test-access-token",
     )
     shopping_lists_table.update.assert_not_called()
 
@@ -358,6 +364,7 @@ async def test_undo_purchase_uses_item_patch_rpc():
             "purchased_at": None,
         },
         "user-1",
+        "test-access-token",
     )
     publish_mock.assert_called_once_with(
         "list-1",

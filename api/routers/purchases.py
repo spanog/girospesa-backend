@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 
-from core.auth import get_current_user_id
+from core.auth import get_current_access_token, get_current_user_id
 from core.database import get_supabase
 from api.routers.lists import _rpc_update_list_item
 from services.list_sync import publish_list_sync_event
@@ -192,6 +192,7 @@ async def purchase_item(
     item_id: str,
     body: PurchaseItemBody,
     user_id: Annotated[str, Depends(get_current_user_id)],
+    access_token: Annotated[str, Depends(get_current_access_token)],
 ) -> PurchaseRecord:
     """Mark a list item as purchased. Records offer details if available."""
     sb = get_supabase()
@@ -273,6 +274,7 @@ async def purchase_item(
         item_id,
         _purchase_patch(purchased=True, user_id=user_id, at=now),
         user_id,
+        access_token,
     )
     publish_list_sync_event(body.list_id, "list_updated", "item_purchased")
 
@@ -288,6 +290,7 @@ async def undo_purchase(
     item_id: str,
     list_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],
+    access_token: Annotated[str, Depends(get_current_access_token)],
 ) -> Response:
     """Undo a purchase: clears purchased flags and deletes the matching purchase_history row."""
     sb = get_supabase()
@@ -310,6 +313,7 @@ async def undo_purchase(
         item_id,
         _purchase_patch(purchased=False, user_id=None, at=None),
         user_id,
+        access_token,
     )
     publish_list_sync_event(list_id, "list_updated", "item_purchase_undone")
 
