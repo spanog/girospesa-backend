@@ -14,8 +14,10 @@ from pydantic import BaseModel, Field
 from core.auth import require_admin, require_admin_or_manager
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
+from services.product_format import ProductFormat, build_format_bundle
 
 router = APIRouter()
+PUBLIC_OFFER_KIND = "published_target"
 
 # ── Pydantic schemas ───────────────────────────────────────────────────────────
 
@@ -39,6 +41,7 @@ class OfferUpdate(BaseModel):
     price_original: float | None = None
     unit_price_value: float | None = None
     unit_price_unit: str | None = None
+    format: ProductFormat | None = None
     valid_from: str | None = None
     valid_to: str | None = None
     offer_type: str | None = None
@@ -65,6 +68,7 @@ def _require_offer(product_id: str, offer_id: str) -> dict:
         .select("*, supermarkets(name, logo_url)")
         .eq("id", offer_id)
         .eq("product_id", product_id)
+        .eq("offer_kind", PUBLIC_OFFER_KIND)
         .single()
         .execute()
     )
@@ -118,7 +122,7 @@ async def list_products(
     # Count offers per product via a join
     query = (
         sb.table("products")
-        .select("*, offers(id)")
+        .select("*, offers(id, offer_kind)")
         .eq("is_archived", archived)
         .order(safe_sort_by, desc=safe_sort_dir_desc)
         .range(offset, offset + limit - 1)
@@ -141,7 +145,11 @@ async def list_products(
 
     # Flatten: replace nested offers list with a count
     for product in products:
-        offers = product.pop("offers", None) or []
+        offers = [
+            offer
+            for offer in product.pop("offers", None) or []
+            if offer.get("offer_kind") == PUBLIC_OFFER_KIND
+        ]
         product["offers_count"] = len(offers)
 
     return products
@@ -201,6 +209,7 @@ async def get_product(
         sb.table("offers")
         .select("*, supermarkets(name, logo_url)")
         .eq("product_id", product_id)
+        .eq("offer_kind", PUBLIC_OFFER_KIND)
         .order("created_at", desc=True)
         .execute()
     )
@@ -355,6 +364,11 @@ async def update_offer(
             updates["unit_price_value"],
             updates["unit_price_unit"],
         )
+    if "format" in payload.model_fields_set and payload.format is not None:
+        bundle = build_format_bundle(payload.format.model_dump(mode="json"))
+        updates["format"] = bundle.format_compact
+        updates["format_key"] = bundle.format_key
+        updates["format_label"] = bundle.format_label
 
     sb = get_supabase()
     resp = sb.table("offers").update(updates).eq("id", offer_id).execute()

@@ -353,13 +353,13 @@ Le notifiche `favorite_offer` restano guidate dal prodotto preferito, non da `pr
 |--------|------|------|-------------|
 | `GET` | `/admin/products` | 👑 admin | Catalogo prodotti con filtri (`q`, `category`, `subcategory`, `archived`, `no_image`) e paginazione |
 | `POST` | `/admin/products` | 👑 admin | Crea prodotto manuale |
-| `GET` | `/admin/products/{id}` | 👑 admin | Dettaglio prodotto con tutte le offerte |
+| `GET` | `/admin/products/{id}` | 👑 admin | Dettaglio prodotto con le offerte pubbliche (`offer_kind='published_target'`) e il formato corrente di ciascuna offerta |
 | `PATCH` | `/admin/products/{id}` | 👑 admin | Modifica prodotto |
 | `POST` | `/admin/products/{id}/archive` | 👑 admin | Archivia prodotto (soft delete) |
 | `POST` | `/admin/products/{id}/restore` | 👑 admin | Ripristina prodotto archiviato |
 | `DELETE` | `/admin/products/{id}` | 👑 admin | Elimina definitivamente prodotto senza offerte collegate; rimuove anche i preferiti collegati |
 | `POST` | `/admin/products/{id}/image` | 👑 admin | Upload immagine prodotto → bucket `product-images` |
-| `PATCH` | `/admin/products/{id}/offers/{oid}` | 👑 admin | Modifica offerta |
+| `PATCH` | `/admin/products/{id}/offers/{oid}` | 👑 admin | Modifica offerta pubblica, incluso `format` strutturato; backend ricalcola `format_key` e `format_label` |
 | `DELETE` | `/admin/products/{id}/offers/{oid}` | 👑 admin | Elimina offerta |
 ---
 
