@@ -55,6 +55,23 @@ async def _delete(url: str) -> httpx.Response:
         return await client.delete(url)
 
 
+async def _patch(url: str, json: dict) -> httpx.Response:
+    test_app.dependency_overrides = {_DEP_REQUIRE_ADMIN: _admin_dep}
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.patch(url, json=json)
+
+
+def _query(data=None) -> MagicMock:
+    query = MagicMock()
+    query.select.return_value = query
+    query.eq.return_value = query
+    query.single.return_value = query
+    query.order.return_value = query
+    query.execute.return_value = MagicMock(data=data)
+    return query
+
+
 @pytest.mark.asyncio
 async def test_list_products_applies_category_and_subcategory_filters():
     sb = MagicMock()
@@ -142,3 +159,60 @@ async def test_delete_product_returns_404_when_missing():
 
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Prodotto non trovato"
+
+
+@pytest.mark.asyncio
+async def test_get_product_returns_only_published_target_offers():
+    sb = MagicMock()
+    product_table = MagicMock()
+    offers_table = MagicMock()
+    product_query = _query({"id": "product-1", "name": "Pasta"})
+    offers_query = _query([])
+    product_table.select.return_value = product_query
+    offers_table.select.return_value = offers_query
+    sb.table.side_effect = lambda name: {
+        "products": product_table,
+        "offers": offers_table,
+    }[name]
+
+    with patch("api.routers.admin_products.get_supabase", return_value=sb):
+        resp = await _get("/admin/products/product-1")
+
+    assert resp.status_code == 200
+    offers_query.eq.assert_any_call("product_id", "product-1")
+    offers_query.eq.assert_any_call("offer_kind", "published_target")
+
+
+@pytest.mark.asyncio
+async def test_update_offer_accepts_structured_format():
+    sb = MagicMock()
+    offers_table = MagicMock()
+    existing_query = _query({"id": "offer-1", "product_id": "product-1"})
+    update_query = _query([{"id": "offer-1", "format_label": "500 g"}])
+    offers_table.select.return_value = existing_query
+    offers_table.update.return_value = update_query
+    sb.table.return_value = offers_table
+
+    payload = {
+        "price_offer": 1.99,
+        "format": {
+            "tipo": "confezione_singola",
+            "peso_volume": 500,
+            "unita_misura": "g",
+        },
+    }
+
+    with patch("api.routers.admin_products.get_supabase", return_value=sb):
+        resp = await _patch("/admin/products/product-1/offers/offer-1", payload)
+
+    assert resp.status_code == 200
+    updates = offers_table.update.call_args.args[0]
+    assert updates["format"] == {
+        "tipo": "confezione_singola",
+        "peso_volume": 500.0,
+        "unita_misura": "g",
+    }
+    assert updates["format_label"] == "500 g"
+    assert updates["format_key"] == (
+        'v1:{"peso_volume":500.0,"tipo":"confezione_singola","unita_misura":"g"}'
+    )
