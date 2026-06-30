@@ -42,6 +42,11 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 
+MOBILE_CAPACITOR_ORIGINS = [
+    "https://app.girospesa.local",
+    "capacitor://app.girospesa.local",
+]
+
 
 def _resume_processing_flyer(flyer_id: str) -> None:
     from core.database import get_supabase
@@ -97,7 +102,7 @@ def _dev_allow_origins() -> list[str]:
 
 def _allow_origins() -> list[str]:
     if getattr(settings, "environment", "development") == "production":
-        return [_frontend_origin()]
+        return list(dict.fromkeys([_frontend_origin(), *MOBILE_CAPACITOR_ORIGINS]))
     return _dev_allow_origins()
 
 

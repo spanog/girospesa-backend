@@ -116,7 +116,7 @@ def test_dev_allow_origins_include_loopback_variants(monkeypatch):
     assert "http://127.0.0.1:3000" in origins
 
 
-def test_production_allow_origins_use_only_frontend_url(monkeypatch):
+def test_production_allow_origins_include_frontend_and_capacitor(monkeypatch):
     main = _import_main(monkeypatch)
     monkeypatch.setattr(
         main,
@@ -127,4 +127,8 @@ def test_production_allow_origins_use_only_frontend_url(monkeypatch):
         ),
     )
 
-    assert main._allow_origins() == ["https://app.girospesa.it"]
+    assert main._allow_origins() == [
+        "https://app.girospesa.it",
+        "https://app.girospesa.local",
+        "capacitor://app.girospesa.local",
+    ]
