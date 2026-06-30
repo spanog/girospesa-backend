@@ -97,6 +97,7 @@ def _dev_allow_origins() -> list[str]:
         for host in _loopback_host_variants(parsed.hostname):
             origins.append(_with_hostname(frontend_origin, host))
     origins.extend(_dev_extra_origins())
+    origins.extend(MOBILE_CAPACITOR_ORIGINS)
     return list(dict.fromkeys(origins))
 
 

@@ -114,6 +114,8 @@ def test_dev_allow_origins_include_loopback_variants(monkeypatch):
 
     assert "http://localhost:3000" in origins
     assert "http://127.0.0.1:3000" in origins
+    assert "https://app.girospesa.local" in origins
+    assert "capacitor://app.girospesa.local" in origins
 
 
 def test_production_allow_origins_include_frontend_and_capacitor(monkeypatch):
