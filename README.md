@@ -23,6 +23,7 @@ Imposta nel servizio Render:
 - `ENVIRONMENT=production`
 - `FRONTEND_URL=https://www.girospesa.it` oppure dominio frontend reale
 - `BACKEND_URL=https://api.girospesa.it` oppure dominio backend reale
+- `CORS_EXTRA_ORIGINS=https://app.girospesa.local,capacitor://app.girospesa.local` per autorizzare gli origin Capacitor app-specific necessari alle app iOS/Android installabili.
 - `SUPABASE_URL`
 - `SUPABASE_SECRET_KEY`
 - `APP_SESSION_SECRET`
@@ -31,6 +32,7 @@ Imposta nel servizio Render:
 - `GEMINI_MODEL`
 - `VAPID_PRIVATE_KEY`
 - `VAPID_PUBLIC_KEY`
+- `FCM_ENABLED`, `FCM_PROJECT_ID`, `FCM_CLIENT_EMAIL`, `FCM_PRIVATE_KEY`
 - `WEBHOOK_SECRET`
 - `OPS_CRON_SECRET`
 
@@ -321,10 +323,13 @@ Contratto di conferma:
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
 | `POST` | `/push/subscribe` | ✅ | Registra subscription Web Push del browser |
-| `POST` | `/push/unsubscribe` | ✅ | Cancella subscription |
+| `POST` | `/push/unsubscribe` | ✅ | Cancella subscription Web Push |
+| `POST` | `/push/native/subscribe` | ✅ | Registra token FCM app mobile |
+| `POST` | `/push/native/unsubscribe` | ✅ | Cancella token FCM app mobile |
+| `DELETE` | `/push/subscriptions` | ✅ | Cancella tutte le subscription web/native dell'utente |
 | `POST` | `/push/notify-favorites` | Webhook secret | Webhook Supabase: nuova offerta pubblica, confermata e attiva → aggiorna una singola `app_notifications.favorite_offer` per `utente + flyer` e invia Web Push agli utenti che hanno quel prodotto tra i preferiti |
 
-Le notifiche Web Push di completamento/fallimento estrazione includono nel campo `data` anche `kind`, `flyer_id`, `status`, `products_count` e `url`. Il frontend usa questi campi per aggiornare subito la cache della gestione volantini e poi confermare lo stato tramite refetch HTTP.
+Le notifiche Web Push e native FCM condividono lo stesso payload `data`, incluso `kind`, `flyer_id`, `status`, `products_count` e `url`. Il frontend usa questi campi per aggiornare subito la cache e aprire il deep link corretto.
 Le notifiche `favorite_offer` restano guidate dal prodotto preferito, non da `preferred_supermarkets`: il supermercato preferito serve ai filtri customer, non al routing notifiche. In locale o in ambienti senza `WEBHOOK_SECRET`, la conferma volantino pubblica le stesse `favorite_offer` direttamente durante la creazione dei cloni `published_target`, così l'inbox non dipende dal solo webhook esterno. Quando più prodotti preferiti dello stesso utente compaiono nello stesso flyer, il backend aggiorna una sola notifica aggregata per quel `user_id + flyer_id` invece di generarne una per ogni offerta.
 
 ### Ops (`/ops`)
@@ -804,6 +809,7 @@ SUPABASE_URL=http://127.0.0.1:54321
 SUPABASE_SECRET_KEY=<local-secret-key>
 FRONTEND_URL=http://localhost:3000
 # `127.0.0.1:3000` resta supportato in sviluppo per compatibilita' loopback
+CORS_EXTRA_ORIGINS=
 
 # ── Gemini extraction (solo se usi estrazione AI) ---------------------------
 LLM_PROVIDER=gemini
@@ -835,6 +841,10 @@ SMTP_USE_SSL=false
 VAPID_PRIVATE_KEY=
 VAPID_PUBLIC_KEY=
 VAPID_MAILTO=mailto:info@girospesa.it
+FCM_ENABLED=false
+FCM_PROJECT_ID=
+FCM_CLIENT_EMAIL=
+FCM_PRIVATE_KEY=
 WEBHOOK_SECRET=
 
 # ── Copia da `supabase status -o env` ---------------------------------------

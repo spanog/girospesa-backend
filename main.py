@@ -42,11 +42,6 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 
-MOBILE_CAPACITOR_ORIGINS = [
-    "https://app.girospesa.local",
-    "capacitor://app.girospesa.local",
-]
-
 
 def _resume_processing_flyer(flyer_id: str) -> None:
     from core.database import get_supabase
@@ -60,6 +55,13 @@ def _resume_processing_flyer(flyer_id: str) -> None:
 def _frontend_origin() -> str:
     value = getattr(settings, "frontend_url", "http://localhost:3000")
     return value if isinstance(value, str) and value else "http://localhost:3000"
+
+
+def _cors_extra_origins() -> list[str]:
+    value = getattr(settings, "cors_extra_origins", "")
+    if not isinstance(value, str) or not value.strip():
+        return []
+    return [origin.strip() for origin in value.split(",") if origin.strip()]
 
 
 def _dev_extra_origins(frontend_port: int = 3000) -> list[str]:
@@ -97,13 +99,13 @@ def _dev_allow_origins() -> list[str]:
         for host in _loopback_host_variants(parsed.hostname):
             origins.append(_with_hostname(frontend_origin, host))
     origins.extend(_dev_extra_origins())
-    origins.extend(MOBILE_CAPACITOR_ORIGINS)
+    origins.extend(_cors_extra_origins())
     return list(dict.fromkeys(origins))
 
 
 def _allow_origins() -> list[str]:
     if getattr(settings, "environment", "development") == "production":
-        return list(dict.fromkeys([_frontend_origin(), *MOBILE_CAPACITOR_ORIGINS]))
+        return list(dict.fromkeys([_frontend_origin(), *_cors_extra_origins()]))
     return _dev_allow_origins()
 
 

@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     vapid_private_key: str = ""
     vapid_public_key: str = ""
     vapid_mailto: str = "mailto:info@girospesa.it"
+    fcm_enabled: bool = False
+    fcm_project_id: str = ""
+    fcm_client_email: str = ""
+    fcm_private_key: str = ""
 
     # Shared secret for the Supabase Database Webhook → /push/notify-favorites
     webhook_secret: str = ""
@@ -44,6 +48,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
+    cors_extra_origins: str = ""
 
     # Product fuzzy deduplication thresholds (pre-upsert similarity check)
     product_name_similarity_threshold: float = 0.85   # rapidfuzz partial_ratio / 100

@@ -107,6 +107,9 @@ def test_dev_allow_origins_include_loopback_variants(monkeypatch):
         types.SimpleNamespace(
             environment="development",
             frontend_url="http://127.0.0.1:3000",
+            cors_extra_origins=(
+                "https://app.girospesa.local, capacitor://app.girospesa.local"
+            ),
         ),
     )
 
@@ -126,6 +129,9 @@ def test_production_allow_origins_include_frontend_and_capacitor(monkeypatch):
         types.SimpleNamespace(
             environment="production",
             frontend_url="https://app.girospesa.it",
+            cors_extra_origins=(
+                "https://app.girospesa.local, capacitor://app.girospesa.local"
+            ),
         ),
     )
 
@@ -133,4 +139,22 @@ def test_production_allow_origins_include_frontend_and_capacitor(monkeypatch):
         "https://app.girospesa.it",
         "https://app.girospesa.local",
         "capacitor://app.girospesa.local",
+    ]
+
+
+def test_cors_extra_origins_ignore_empty_values(monkeypatch):
+    main = _import_main(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "settings",
+        types.SimpleNamespace(
+            environment="production",
+            frontend_url="https://app.girospesa.it",
+            cors_extra_origins=" https://app.girospesa.local, ,",
+        ),
+    )
+
+    assert main._allow_origins() == [
+        "https://app.girospesa.it",
+        "https://app.girospesa.local",
     ]
