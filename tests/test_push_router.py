@@ -36,6 +36,10 @@ _settings_stub = MagicMock()
 _settings_stub.vapid_private_key = "test-private-key"
 _settings_stub.vapid_mailto = "mailto:test@example.com"
 _settings_stub.webhook_secret = "super-secret"
+_settings_stub.fcm_enabled = True
+_settings_stub.fcm_project_id = "test-project"
+_settings_stub.fcm_client_email = "fcm@example.com"
+_settings_stub.fcm_private_key = "private-key"
 _config_mod.settings = _settings_stub  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 
@@ -48,12 +52,20 @@ import httpx
 from pydantic import ValidationError
 
 import api.routers.push as _push_module
-from api.routers.push import SubscribeBody, UnsubscribeBody, router as _push_router
+from api.routers.push import (
+    NativeSubscribeBody,
+    NativeUnsubscribeBody,
+    SubscribeBody,
+    UnsubscribeBody,
+    router as _push_router,
+)
 from services.push_notify import (
+    NativePushTokenGoneError,
     PushEndpointGoneError,
     PushSubscription,
     notify_extraction_complete,
     notify_public_flyer_published,
+    send_native_push_notification,
     send_push_notification,
 )
 
@@ -113,6 +125,21 @@ class TestUnsubscribeBody:
     def test_missing_endpoint_raises(self):
         with pytest.raises(ValidationError):
             UnsubscribeBody()  # type: ignore[call-arg]
+
+
+class TestNativeBodies:
+    def test_native_subscribe_valid_payload(self):
+        body = NativeSubscribeBody(
+            token="fcm-token",
+            platform="ios",
+            device_id="device-1",
+        )
+        assert body.token == "fcm-token"
+        assert body.platform == "ios"
+
+    def test_native_unsubscribe_valid_payload(self):
+        body = NativeUnsubscribeBody(token="fcm-token")
+        assert body.token == "fcm-token"
 
 
 # ── PushSubscription dataclass ────────────────────────────────────────────────
@@ -191,6 +218,40 @@ class TestSendPushNotification:
         assert payload["title"] == "Nuova offerta"
         assert payload["body"] == "€1.99"
         assert payload["data"]["url"] == "/offerte?product=abc"
+
+
+class TestSendNativePushNotification:
+    def test_calls_fcm_with_string_data_payload(self):
+        responses = [
+            MagicMock(status_code=200, json=lambda: {"access_token": "token"}),
+            MagicMock(status_code=200, text="", raise_for_status=MagicMock()),
+        ]
+        responses[0].raise_for_status = MagicMock()
+
+        with patch("services.push_notify.jwt.encode", return_value="assertion"):
+            with patch("services.push_notify.httpx.post", side_effect=responses) as mock_post:
+                send_native_push_notification(
+                    "fcm-token",
+                    title="Nuova offerta",
+                    body="Apri GiroSpesa",
+                    data={"url": "/offerte", "count": 2},
+                )
+
+        fcm_call = mock_post.call_args_list[1]
+        assert fcm_call.kwargs["headers"]["Authorization"] == "Bearer token"
+        message = fcm_call.kwargs["json"]["message"]
+        assert message["token"] == "fcm-token"
+        assert message["data"]["count"] == "2"
+
+    def test_unregistered_fcm_token_raises(self):
+        token_resp = MagicMock(status_code=200, json=lambda: {"access_token": "token"})
+        token_resp.raise_for_status = MagicMock()
+        fcm_resp = MagicMock(status_code=404, text="UNREGISTERED")
+
+        with patch("services.push_notify.jwt.encode", return_value="assertion"):
+            with patch("services.push_notify.httpx.post", side_effect=[token_resp, fcm_resp]):
+                with pytest.raises(NativePushTokenGoneError):
+                    send_native_push_notification("fcm-token", "Titolo", "Corpo")
 
 
 # ── notify_extraction_complete ────────────────────────────────────────────────
@@ -302,6 +363,60 @@ class TestNotifyFavoritesVisibility:
         assert resp.status_code == 409
 
     @pytest.mark.asyncio
+    async def test_native_subscribe_upserts_fcm_token(self):
+        app = FastAPI()
+        app.include_router(_push_router, prefix="/push")
+        app.dependency_overrides[_push_module.get_current_user_id] = lambda: "user-1"
+        transport = httpx.ASGITransport(app=app)
+
+        profile_table = MagicMock()
+        profile_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "notifications_enabled": True,
+        }
+        subscriptions_table = MagicMock()
+        subscriptions_table.delete.return_value.eq.return_value.neq.return_value.execute.return_value = MagicMock()
+        subscriptions_table.upsert.return_value.execute.return_value.data = [{"id": "sub-1"}]
+
+        def table(name: str) -> MagicMock:
+            return profile_table if name == "user_profiles" else subscriptions_table
+
+        sb = MagicMock()
+        sb.table.side_effect = table
+
+        with patch.object(_push_module, "get_supabase", return_value=sb):
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post(
+                    "/push/native/subscribe",
+                    json={"token": "fcm-token", "platform": "ios"},
+                )
+
+        assert resp.status_code == 201
+        subscriptions_table.upsert.assert_called_once()
+        payload = subscriptions_table.upsert.call_args.args[0]
+        assert payload["channel"] == "native_fcm"
+        assert payload["endpoint"] == "fcm:fcm-token"
+
+    @pytest.mark.asyncio
+    async def test_native_unsubscribe_deletes_token(self):
+        app = FastAPI()
+        app.include_router(_push_router, prefix="/push")
+        app.dependency_overrides[_push_module.get_current_user_id] = lambda: "user-1"
+        transport = httpx.ASGITransport(app=app)
+
+        sb = MagicMock()
+        delete_chain = sb.table.return_value.delete.return_value
+        delete_chain.eq.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+
+        with patch.object(_push_module, "get_supabase", return_value=sb):
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post(
+                    "/push/native/unsubscribe",
+                    json={"token": "fcm-token"},
+                )
+
+        assert resp.status_code == 204
+
+    @pytest.mark.asyncio
     async def test_draft_offer_insert_does_not_notify(self):
         app = FastAPI()
         app.include_router(_push_router, prefix="/push")
@@ -384,7 +499,7 @@ class TestNotifyFavoritesVisibility:
                             "flyer_id": "flyer-1",
                             "supermarket_id": "super-1",
                             "discounted_price": 4.99,
-                            "valid_to": "2026-06-30",
+                            "valid_to": "2026-12-31",
                             "is_confirmed": True,
                         },
                     },
@@ -396,7 +511,7 @@ class TestNotifyFavoritesVisibility:
                 "user_id": "user-1",
                 "kind": "favorite_offer",
                 "title": "Nuova offerta: Parmigiano Reggiano",
-                "body": "€4.99 — da Coop — Valida fino al 2026-06-30",
+                "body": "€4.99 — da Coop — Valida fino al 2026-12-31",
                 "data": {
                     "kind": "favorite_offer",
                     "url": "/offerte?product_id=prod-1",
@@ -463,7 +578,7 @@ class TestNotifyFavoritesVisibility:
                             "product_id": "prod-1",
                             "flyer_id": "flyer-1",
                             "discounted_price": 4.99,
-                            "valid_to": "2026-06-30",
+                            "valid_to": "2026-12-31",
                             "is_confirmed": True,
                         },
                     },
@@ -554,7 +669,7 @@ class TestNotifyFavoritesVisibility:
                 "flyer_id": "flyer-1",
                 "supermarket_id": "super-1",
                 "discounted_price": 4.99,
-                "valid_to": "2026-06-30",
+                "valid_to": "2026-12-31",
                 "is_confirmed": True,
             },
         )
@@ -566,7 +681,7 @@ class TestNotifyFavoritesVisibility:
                 "flyer_id": "flyer-1",
                 "supermarket_id": "super-1",
                 "discounted_price": 2.49,
-                "valid_to": "2026-06-30",
+                "valid_to": "2026-12-31",
                 "is_confirmed": True,
             },
         )

@@ -4,7 +4,6 @@ import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Annotated, Literal
-from uuid import UUID
 import json
 
 import httpx
@@ -27,12 +26,7 @@ from services.list_offer_visibility import (
     visible_supermarket_ids_for_user,
 )
 from services.offer_visibility import apply_current_offer_window
-from services.push_notify import (
-    PushEndpointGoneError,
-    PushSubscription,
-    notifications_enabled_for_user,
-    send_push_notification,
-)
+from services.push_notify import notifications_enabled_for_user, send_push_to_user
 from services.list_sync import (
     LIST_SYNC_HEARTBEAT_SECONDS,
     connect_listener,
@@ -826,56 +820,7 @@ def _impacted_member_user_ids_for_list(list_id: str) -> list[str]:
 
 
 def _notify_invited_user(sb: object, user_id: str, title: str, body: str, data: dict) -> None:
-    try:
-        UUID(user_id)
-        use_direct_postgres = has_direct_postgres()
-    except ValueError:
-        use_direct_postgres = False
-
-    if use_direct_postgres:
-        with get_postgres_cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT endpoint, p256dh, auth_key
-                FROM public.push_subscriptions
-                WHERE user_id = %s
-                ORDER BY created_at ASC NULLS LAST, id ASC
-                """,
-                (user_id,),
-            )
-            subscriptions = [dict(row) for row in cursor.fetchall()]
-    else:
-        subs_resp = (
-            sb.table("push_subscriptions")  # type: ignore[union-attr,attr-defined]
-            .select("endpoint, p256dh, auth_key")
-            .eq("user_id", user_id)
-            .execute()
-        )
-        subscriptions = subs_resp.data
-
-    for sub in subscriptions:
-        subscription = PushSubscription(
-            endpoint=sub["endpoint"],
-            p256dh=sub["p256dh"],
-            auth_key=sub["auth_key"],
-        )
-        try:
-            send_push_notification(
-                subscription=subscription,
-                title=title,
-                body=body,
-                data=data,
-            )
-        except PushEndpointGoneError:
-            (
-                sb.table("push_subscriptions")  # type: ignore[union-attr,attr-defined]
-                .delete()
-                .eq("user_id", user_id)
-                .eq("endpoint", sub["endpoint"])
-                .execute()
-            )
-        except Exception:
-            continue
+    send_push_to_user(sb, user_id=user_id, title=title, body=body, data=data)
 
 
 def _raise_invalid_invite_status(invite: dict) -> None:
