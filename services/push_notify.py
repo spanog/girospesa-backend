@@ -5,14 +5,18 @@ import json
 import logging
 import math
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
+import httpx
+from jose import jwt
 from pywebpush import WebPushException, webpush  # type: ignore[import-untyped]
 
 from core.config import settings
 
 logger = logging.getLogger(__name__)
 _EARTH_RADIUS_KM = 6371.0088
+_FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
+_FCM_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
 @dataclass(frozen=True)
@@ -83,12 +87,32 @@ def _load_push_subscriptions(sb: object, user_id: str) -> list[dict]:
         return []
 
 
+def _web_push_subscriptions(subscriptions: list[dict]) -> list[dict]:
+    return [
+        sub for sub in subscriptions if sub.get("channel", "web_push") == "web_push"
+    ]
+
+
+def _native_push_subscriptions(subscriptions: list[dict]) -> list[dict]:
+    return [
+        sub for sub in subscriptions if sub.get("channel") == "native_fcm" and sub.get("token")
+    ]
+
+
 def _delete_stale_push_endpoints(sb: object, endpoints: list[str]) -> None:
     for endpoint in endpoints:
         try:
             sb.table("push_subscriptions").delete().eq("endpoint", endpoint).execute()  # type: ignore[union-attr]
         except Exception as exc:
             logger.warning("Failed to delete stale push endpoint %s: %s", endpoint, exc)
+
+
+def _delete_stale_native_tokens(sb: object, tokens: list[str]) -> None:
+    for token in tokens:
+        try:
+            sb.table("push_subscriptions").delete().eq("channel", "native_fcm").eq("token", token).execute()  # type: ignore[union-attr]
+        except Exception as exc:
+            logger.warning("Failed to delete stale FCM token %s: %s", token, exc)
 
 
 def notifications_enabled_for_user(sb: object, user_id: str) -> bool:
@@ -127,7 +151,7 @@ def _send_push_to_user(
         return
 
     stale_endpoints: list[str] = []
-    for sub in subscriptions:
+    for sub in _web_push_subscriptions(subscriptions):
         try:
             send_push_notification(
                 subscription=PushSubscription(
@@ -144,7 +168,33 @@ def _send_push_to_user(
         except Exception as exc:
             logger.warning("Push notify failed for %s: %s", sub["endpoint"], exc)
 
+    stale_tokens: list[str] = []
+    for sub in _native_push_subscriptions(subscriptions):
+        try:
+            send_native_push_notification(
+                token=str(sub["token"]),
+                title=title,
+                body=body,
+                data=data,
+            )
+        except NativePushTokenGoneError:
+            stale_tokens.append(str(sub["token"]))
+        except Exception as exc:
+            logger.warning("Native push notify failed for %s: %s", sub["token"], exc)
+
     _delete_stale_push_endpoints(sb, stale_endpoints)
+    _delete_stale_native_tokens(sb, stale_tokens)
+
+
+def send_push_to_user(
+    sb: object,
+    *,
+    user_id: str,
+    title: str,
+    body: str,
+    data: dict,
+) -> None:
+    _send_push_to_user(sb, user_id=user_id, title=title, body=body, data=data)
 
 
 def _profile_reference_point(profile: dict) -> tuple[float | None, float | None]:
@@ -313,7 +363,7 @@ def _find_existing_favorite_notification(
         .limit(1)
         .execute()
     )
-    rows = resp.data or []
+    rows = resp.data if isinstance(resp.data, list) else []
     return rows[0] if rows else None
 
 
@@ -467,6 +517,85 @@ def send_push_notification(
         if exc.response is not None and exc.response.status_code == 410:
             raise PushEndpointGoneError(subscription.endpoint) from exc
         raise
+
+
+class NativePushTokenGoneError(Exception):
+    """Raised when FCM reports a token is invalid or unregistered."""
+
+
+def _fcm_is_configured() -> bool:
+    return bool(
+        settings.fcm_enabled
+        and settings.fcm_project_id
+        and settings.fcm_client_email
+        and settings.fcm_private_key
+    )
+
+
+def _fcm_private_key() -> str:
+    return settings.fcm_private_key.replace("\\n", "\n")
+
+
+def _fcm_access_token() -> str:
+    now = datetime.now(UTC)
+    claims = {
+        "iss": settings.fcm_client_email,
+        "scope": _FCM_SCOPE,
+        "aud": _FCM_TOKEN_URL,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=55)).timestamp()),
+    }
+    assertion = jwt.encode(claims, _fcm_private_key(), algorithm="RS256")
+    resp = httpx.post(
+        _FCM_TOKEN_URL,
+        data={
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": assertion,
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return str(resp.json()["access_token"])
+
+
+def _fcm_url() -> str:
+    return f"https://fcm.googleapis.com/v1/projects/{settings.fcm_project_id}/messages:send"
+
+
+def _fcm_data(data: dict | None) -> dict[str, str]:
+    payload: dict[str, str] = {}
+    for key, value in (data or {}).items():
+        if isinstance(value, str):
+            payload[key] = value
+        else:
+            payload[key] = json.dumps(value)
+    return payload
+
+
+def send_native_push_notification(
+    token: str,
+    title: str,
+    body: str,
+    data: dict | None = None,
+) -> None:
+    if not _fcm_is_configured():
+        return
+    payload = {
+        "message": {
+            "token": token,
+            "notification": {"title": title, "body": body},
+            "data": _fcm_data(data),
+        }
+    }
+    resp = httpx.post(
+        _fcm_url(),
+        headers={"Authorization": f"Bearer {_fcm_access_token()}"},
+        json=payload,
+        timeout=10,
+    )
+    if resp.status_code in {400, 404} and "UNREGISTERED" in resp.text:
+        raise NativePushTokenGoneError(token)
+    resp.raise_for_status()
 
 
 def notify_extraction_complete(

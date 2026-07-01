@@ -14,6 +14,7 @@
 - Supabase schema or RLS changes must keep `supabase db advisors --local` clean for touched areas; wrap `auth.uid()` / `auth.jwt()` as `select` expressions in policies when possible to avoid advisor performance warnings.
 - Snapshot tests support, not replace, explicit assertions on permissions, ordering, lifecycle transitions, and domain invariants.
 - Keep notification flows aligned across transports: `favorite_offer` logic must stay shared between the `/push/notify-favorites` webhook path and any local/development fallback executed during flyer publication.
+- Push delivery must stay transport-shared: inbox persistence, Web Push, and native FCM must receive the same notification payload and deep-link `data.url`.
 - `favorite_offer` should follow anti-spam semantics: aggregate multiple matches from the same flyer into one notification per `user + flyer`, updating the existing row/push payload instead of inserting one card per matched product.
 - Multi-page extraction resume is part of the backend contract: if at least one PDF chunk has already been persisted, generic transient runtime failures (for example `httpx` / Supabase read errors) must preserve `next_chunk_*`, `partial_products_count`, and a resumable retry path instead of forcing chunk 1 to rerun.
 - Gemini retry policy is part of that contract too: provider-side transient `500/502/504` and `503/UNAVAILABLE` failures must use exponential backoff with jitter so the backend does not burn all retries in a few seconds during temporary provider instability.

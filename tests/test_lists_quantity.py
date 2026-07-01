@@ -731,21 +731,9 @@ async def test_toggle_item_403_non_member():
 
 
 def test_notify_invited_user_sends_push_for_each_subscription():
-    subscription_rows = [
-        {
-            "endpoint": "https://push.example.com/sub-1",
-            "p256dh": "key-1",
-            "auth_key": "auth-1",
-        }
-    ]
-    select_chain = (
-        MagicMock()
-    )
-    select_chain.eq.return_value.execute.return_value.data = subscription_rows
     sb_mock = MagicMock()
-    sb_mock.table.return_value.select.return_value = select_chain
 
-    with patch.object(_lists_module, "send_push_notification") as push_mock:
+    with patch.object(_lists_module, "send_push_to_user") as push_mock:
         _lists_module._notify_invited_user(
             sb_mock,
             "user-1",
@@ -756,6 +744,7 @@ def test_notify_invited_user_sends_push_for_each_subscription():
 
     push_mock.assert_called_once()
     push_kwargs = push_mock.call_args.kwargs
+    assert push_kwargs["user_id"] == "user-1"
     assert push_kwargs["title"] == "Lista rimossa"
     assert push_kwargs["body"] == "Owner ha rimosso lista Weekend"
     assert push_kwargs["data"]["list_id"] == "list-1"
