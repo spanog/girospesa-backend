@@ -26,12 +26,15 @@ def test_daily_maintenance_workflow_calls_production_cleanup_endpoint():
     assert "--fail-with-body" in workflow
 
 
-def test_render_keepalive_workflow_pings_healthcheck_every_ten_minutes():
+def test_render_keepalive_workflow_pings_healthcheck_every_five_minutes():
     workflow = _read(".github/workflows/render-keepalive.yml")
 
-    assert 'cron: "*/10 * * * *"' in workflow
+    assert 'cron: "2/5 * * * *"' in workflow
     assert "BACKEND_HEALTHCHECK_URL" in workflow
-    assert 'curl --fail --silent --show-error "$BACKEND_HEALTHCHECK_URL"' in workflow
+    assert "Validate healthcheck secret" in workflow
+    assert "curl --fail-with-body --silent --show-error" in workflow
+    assert "--max-time 90" in workflow
+    assert "--retry 2" in workflow
 
 
 def test_supabase_production_workflow_pushes_migrations_from_main():

@@ -12,7 +12,7 @@ Per minimizzare costo e complessita', questo repo ora e' pronto per deploy autom
 
 - `render.yaml` descrive il servizio web FastAPI (`uvicorn main:app --host 0.0.0.0 --port $PORT`)
 - `.github/workflows/ci.yml` esegue la suite backend ad ogni PR
-- `.github/workflows/render-keepalive.yml` invia un ping a `/health` ogni 10 minuti per ridurre il rischio di spin down su Render Free
+- `.github/workflows/render-keepalive.yml` invia un ping a `/health` ogni 5 minuti, sfalsato rispetto ai minuti più affollati, per ridurre il rischio di spin down su Render Free
 - `.github/workflows/daily-maintenance.yml` esegue ogni giorno una manutenzione remota compatibile con il free tier
 - `.github/workflows/supabase-db-production.yml` applica automaticamente le migration Supabase quando `supabase/**` viene mergiato su `main`
 
@@ -73,7 +73,7 @@ Note deploy database:
 
 Render dichiara che i servizi Free non sono pensati per produzione stabile, vanno in spin down dopo inattivita' e possono essere riavviati in qualsiasi momento. Per questo il backend mantiene APScheduler locale, ma la pulizia giornaliera in produzione viene anche richiamata da GitHub Actions tramite `POST /ops/cron/daily-maintenance`, cosi' i cleanup non dipendono dal fatto che il container sia sveglio a mezzanotte.
 
-Per ridurre il rischio di idle durante il giorno, `.github/workflows/render-keepalive.yml` esegue anche un `curl` a `BACKEND_HEALTHCHECK_URL` ogni 10 minuti. Questo mitiga il cold start del piano Free, ma non offre garanzia forte come un piano paid: GitHub Actions schedulato puo' accumulare ritardi e Render puo' comunque riavviare l'istanza.
+Per ridurre il rischio di idle durante il giorno, `.github/workflows/render-keepalive.yml` esegue anche un `curl` a `BACKEND_HEALTHCHECK_URL` ogni 5 minuti con retry e timeout espliciti. La schedulazione usa minuti sfalsati (`2/5`) per evitare le finestre più affollate di GitHub Actions. Questo mitiga il cold start del piano Free, ma non offre garanzia forte come un piano paid: GitHub Actions schedulato puo' accumulare ritardi o perdere run e Render puo' comunque riavviare l'istanza.
 
 Il workflow `.github/workflows/daily-maintenance.yml` usa `curl --fail-with-body`, cosi' eventuali errori HTTP mantengono il body nei log GitHub. L'endpoint `/ops/cron/daily-maintenance` resta best-effort: se un singolo step interno fallisce, la risposta segnala `status=partial_error` e il nome degli step falliti in `errors`, ma gli altri cleanup continuano.
 

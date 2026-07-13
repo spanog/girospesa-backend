@@ -3,13 +3,24 @@ name: Render Keepalive
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "2/5 * * * *"
 
 jobs:
   keepalive:
     runs-on: ubuntu-latest
     steps:
+      - name: Validate healthcheck secret
+        run: test -n "$BACKEND_HEALTHCHECK_URL"
+        env:
+          BACKEND_HEALTHCHECK_URL: ${{ secrets.BACKEND_HEALTHCHECK_URL }}
+
       - name: Ping backend healthcheck
-        run: curl --fail --silent --show-error "$BACKEND_HEALTHCHECK_URL"
+        run: |
+          curl --fail-with-body --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 90 \
+            --retry 2 \
+            --retry-delay 10 \
+            "$BACKEND_HEALTHCHECK_URL"
         env:
           BACKEND_HEALTHCHECK_URL: ${{ secrets.BACKEND_HEALTHCHECK_URL }}
