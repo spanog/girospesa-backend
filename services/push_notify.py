@@ -552,6 +552,7 @@ def _fcm_message(token: str, title: str, body: str, data: dict | None) -> dict:
         "token": token,
         "notification": {"title": title, "body": body},
         "data": _fcm_data(data),
+        "android": {"notification": {"icon": "ic_notification", "color": "#1E7A45"}},
         "apns": {"payload": {"aps": {"sound": "default"}}},
     }
 

@@ -242,6 +242,8 @@ class TestSendNativePushNotification:
         message = fcm_call.kwargs["json"]["message"]
         assert message["token"] == "fcm-token"
         assert message["data"]["count"] == "2"
+        assert message["android"]["notification"]["icon"] == "ic_notification"
+        assert message["android"]["notification"]["color"] == "#1E7A45"
         assert message["apns"]["payload"]["aps"]["sound"] == "default"
 
     def test_unregistered_fcm_token_raises(self):
