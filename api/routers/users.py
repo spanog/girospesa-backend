@@ -79,8 +79,6 @@ async def update_profile(
         )
 
     sb.table("user_profiles").update(update_data).eq("id", user_id).execute()
-    if update_data.get("notifications_enabled") is False:
-        sb.table("push_subscriptions").delete().eq("user_id", user_id).execute()
     profile = sb.table("user_profiles").select("*").eq("id", user_id).single().execute()
     if not profile.data:
         raise HTTPException(status_code=404, detail="Profile not found")

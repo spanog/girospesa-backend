@@ -750,16 +750,11 @@ def test_notify_invited_user_sends_push_for_each_subscription():
     assert push_kwargs["data"]["list_id"] == "list-1"
 
 
-def test_shared_list_event_skips_inbox_and_push_when_notifications_disabled():
-    maybe_single_chain = MagicMock()
-    maybe_single_chain.eq.return_value.maybe_single.return_value.execute.return_value.data = {
-        "notifications_enabled": False
-    }
+def test_shared_list_event_keeps_inbox_when_push_disabled():
     sb_mock = MagicMock()
-    sb_mock.table.return_value.select.return_value = maybe_single_chain
-
     with patch.object(_lists_module, "_create_app_notification") as create_notification_mock, \
          patch.object(_lists_module, "_notify_invited_user") as notify_mock:
+        create_notification_mock.return_value = {"id": "notif-1"}
         result = _lists_module._notify_shared_list_event(
             sb_mock,
             "user-1",
@@ -769,9 +764,9 @@ def test_shared_list_event_skips_inbox_and_push_when_notifications_disabled():
             data={"list_id": "list-1", "url": "/lista"},
         )
 
-    assert result is None
-    create_notification_mock.assert_not_called()
-    notify_mock.assert_not_called()
+    assert result == {"id": "notif-1"}
+    create_notification_mock.assert_called_once()
+    notify_mock.assert_called_once()
 
 
 @pytest.mark.asyncio

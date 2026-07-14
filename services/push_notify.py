@@ -115,29 +115,6 @@ def _delete_stale_native_tokens(sb: object, tokens: list[str]) -> None:
             logger.warning("Failed to delete stale FCM token %s: %s", token, exc)
 
 
-def notifications_enabled_for_user(sb: object, user_id: str) -> bool:
-    try:
-        profile_resp = (
-            sb.table("user_profiles")  # type: ignore[union-attr]
-            .select("notifications_enabled")
-            .eq("id", user_id)
-            .maybe_single()
-            .execute()
-        )
-    except Exception as exc:
-        logger.warning(
-            "Failed to fetch notifications_enabled for user %s: %s",
-            user_id,
-            exc,
-        )
-        return True
-
-    profile = profile_resp.data if profile_resp is not None else None
-    if profile is None:
-        return True
-    return profile.get("notifications_enabled", True)
-
-
 def _send_push_to_user(
     sb: object,
     *,
@@ -432,8 +409,6 @@ def notify_favorite_offer_published(sb: object, offer: dict) -> None:
     )
     for favorite in favorites_resp.data or []:
         user_id = favorite["user_id"]
-        if not notifications_enabled_for_user(sb, user_id):
-            continue
         aggregation_key = _favorite_offer_aggregation_key(str(flyer_id))
         existing = _find_existing_favorite_notification(
             sb,
@@ -608,9 +583,6 @@ def notify_extraction_complete(
     error_message: str = "",
 ) -> None:
     """Persist inbox notification and send Web Push to the flyer uploader when extraction finishes."""
-    if not notifications_enabled_for_user(sb, user_id):
-        return
-
     if success:
         title = "Estrazione completata"
         body = f"{products_count} prodotti estratti da {supermarket_name}"
@@ -667,10 +639,9 @@ def notify_public_flyer_published(
     profiles_resp = (
         sb.table("user_profiles")  # type: ignore[union-attr]
         .select(
-            "id, role, notifications_enabled, home_lat, home_lng, search_lat, search_lng, max_distance_km"
+            "id, role, home_lat, home_lng, search_lat, search_lng, max_distance_km"
         )
         .eq("role", "customer")
-        .eq("notifications_enabled", True)
         .execute()
     )
     profiles = profiles_resp.data or []
@@ -691,8 +662,6 @@ def notify_public_flyer_published(
     target_lng = float(supermarket["lng"])
 
     for profile in profiles:
-        if not profile.get("notifications_enabled", True):
-            continue
         user_lat, user_lng = _profile_reference_point(profile)
         if user_lat is None or user_lng is None:
             continue
