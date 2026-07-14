@@ -66,7 +66,7 @@ async def list_supermarkets(
     has_active_offers: bool = Query(False),
     lat: float | None = Query(None),
     lng: float | None = Query(None),
-    max_distance_km: float = Query(10.0, gt=0, le=100),
+    max_distance_km: float = Query(10.0, gt=0, le=20),
 ) -> list[dict]:
     """Return active supermarkets. Public endpoint — no auth required.
 

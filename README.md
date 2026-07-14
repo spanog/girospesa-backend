@@ -179,7 +179,7 @@ Il backend usa tre livelli di autenticazione:
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
 | `GET` | `/users/me` | ✅ | Profilo utente autenticato, incluse preferenze notifiche granulari effettivamente usate |
-| `PUT` | `/users/me` | ✅ | Aggiorna profilo e auto-geocode se cambia indirizzo |
+| `PUT` | `/users/me` | ✅ | Aggiorna profilo e auto-geocode se cambia indirizzo; `max_distance_km` accetta valori da 1 a 20 |
 | `POST` | `/users/geocode` | ✅ | Geocodifica indirizzo di casa → aggiorna `home_lat/lng` e `home_location` PostGIS |
 | `POST` | `/users/me/avatar` | ✅ | Upload avatar (JPEG/PNG/WebP, max 5 MB) → bucket `avatars` |
 | `DELETE` | `/users/me` | ✅ | Elimina account + dati collegati; risponde `204` |
@@ -309,7 +309,7 @@ Contratto di conferma:
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `GET` | `/supermarkets` | ❌ | Directory supermercati attivi, ordinati per nome; con `lat`, `lng`, `max_distance_km` restituisce solo quelli vicini con `distance_km` |
+| `GET` | `/supermarkets` | ❌ | Directory supermercati attivi, ordinati per nome; con `lat`, `lng`, `max_distance_km` (massimo 20) restituisce solo quelli vicini con `distance_km` |
 
 ### Inviti (`/invite`)
 

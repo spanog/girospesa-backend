@@ -27,7 +27,7 @@ class UpdateProfileBody(BaseModel):
     home_city: str | None = None
     home_province: str | None = None
     home_postal_code: str | None = None
-    max_distance_km: int | None = Field(default=None, ge=1, le=100)
+    max_distance_km: int | None = Field(default=None, ge=1, le=20)
     notifications_enabled: bool | None = None
     preferred_supermarkets: list[str] | None = None
     search_label: str | None = None
