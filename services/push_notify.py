@@ -547,6 +547,15 @@ def _fcm_data(data: dict | None) -> dict[str, str]:
     return payload
 
 
+def _fcm_message(token: str, title: str, body: str, data: dict | None) -> dict:
+    return {
+        "token": token,
+        "notification": {"title": title, "body": body},
+        "data": _fcm_data(data),
+        "apns": {"payload": {"aps": {"sound": "default"}}},
+    }
+
+
 def send_native_push_notification(
     token: str,
     title: str,
@@ -555,13 +564,7 @@ def send_native_push_notification(
 ) -> None:
     if not _fcm_is_configured():
         return
-    payload = {
-        "message": {
-            "token": token,
-            "notification": {"title": title, "body": body},
-            "data": _fcm_data(data),
-        }
-    }
+    payload = {"message": _fcm_message(token, title, body, data)}
     resp = httpx.post(
         _fcm_url(),
         headers={"Authorization": f"Bearer {_fcm_access_token()}"},
