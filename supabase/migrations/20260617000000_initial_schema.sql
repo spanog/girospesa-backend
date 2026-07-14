@@ -411,7 +411,7 @@ CREATE TABLE user_profiles (
   search_lng               NUMERIC(10,7),
 
   -- Raggio massimo supermercati (personalizzabile dall'utente)
-  max_distance_km          INTEGER DEFAULT 10 CHECK (max_distance_km BETWEEN 1 AND 100),
+  max_distance_km          INTEGER DEFAULT 10 CHECK (max_distance_km BETWEEN 1 AND 20),
 
   -- Preferenze notifiche
   notification_expiry      BOOLEAN DEFAULT true,  -- offerte in scadenza
@@ -3240,4 +3240,3 @@ CREATE POLICY "flyer_targets_deny_all"
   TO public
   USING (false)
   WITH CHECK (false);
-

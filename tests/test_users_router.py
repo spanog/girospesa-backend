@@ -87,8 +87,8 @@ class TestUpdateProfileBody:
         assert body.max_distance_km == 1
 
     def test_max_distance_km_upper_bound(self):
-        body = UpdateProfileBody(max_distance_km=100)
-        assert body.max_distance_km == 100
+        body = UpdateProfileBody(max_distance_km=20)
+        assert body.max_distance_km == 20
 
     def test_max_distance_km_below_min_rejected(self):
         with pytest.raises(ValidationError) as exc_info:
@@ -98,7 +98,7 @@ class TestUpdateProfileBody:
 
     def test_max_distance_km_above_max_rejected(self):
         with pytest.raises(ValidationError) as exc_info:
-            UpdateProfileBody(max_distance_km=101)
+            UpdateProfileBody(max_distance_km=21)
         errors = exc_info.value.errors()
         assert any(e["loc"] == ("max_distance_km",) for e in errors)
 

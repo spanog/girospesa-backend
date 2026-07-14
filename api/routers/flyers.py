@@ -605,7 +605,7 @@ def _nearby_supermarket_ids(sb, lat: float, lng: float, max_distance_km: float) 
 async def list_public_flyers(
     lat: float | None = Query(None),
     lng: float | None = Query(None),
-    max_distance_km: float | None = Query(None, gt=0, le=100),
+    max_distance_km: float | None = Query(None, gt=0, le=20),
 ) -> list[dict]:
     """Return done public flyers that already contain confirmed offers.
 

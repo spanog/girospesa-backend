@@ -413,7 +413,7 @@ async def list_products(
     ),
     lat: float | None = Query(None, description="User latitude for distance filtering"),
     lng: float | None = Query(None, description="User longitude for distance filtering"),
-    max_distance_km: float = Query(10.0, gt=0, le=100, description="Max supermarket distance in km"),
+    max_distance_km: float = Query(10.0, gt=0, le=20, description="Max supermarket distance in km"),
     sort: str | None = Query(None, description="Sort mode: expiry"),
     expiring_soon: bool = Query(False, description="Only offers expiring within 3 days"),
     limit: int = Query(50, le=200),
