@@ -242,6 +242,7 @@ class TestSendNativePushNotification:
         message = fcm_call.kwargs["json"]["message"]
         assert message["token"] == "fcm-token"
         assert message["data"]["count"] == "2"
+        assert message["apns"]["payload"]["aps"]["sound"] == "default"
 
     def test_unregistered_fcm_token_raises(self):
         token_resp = MagicMock(status_code=200, json=lambda: {"access_token": "token"})
