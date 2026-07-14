@@ -11,7 +11,6 @@ from core.config import settings
 from core.database import get_supabase
 from services.push_notify import (
     notify_favorite_offer_published,
-    notifications_enabled_for_user,
 )
 
 router = APIRouter()
@@ -54,11 +53,6 @@ async def subscribe(
 ) -> dict:
     """Register or update a Web Push subscription for the authenticated user."""
     sb = get_supabase()
-    if not notifications_enabled_for_user(sb, user_id):
-        raise HTTPException(
-            status_code=409,
-            detail="Riattiva le notifiche account prima di collegare un browser.",
-        )
     # Remove any stale subscription with the same endpoint belonging to a different user.
     # This prevents cross-user notification leaks when a device switches accounts.
     sb.table("push_subscriptions").delete().eq("endpoint", body.endpoint).neq("user_id", user_id).execute()
@@ -86,11 +80,6 @@ async def subscribe_native(
 ) -> dict:
     """Register or update a native FCM token for the authenticated user."""
     sb = get_supabase()
-    if not notifications_enabled_for_user(sb, user_id):
-        raise HTTPException(
-            status_code=409,
-            detail="Riattiva le notifiche account prima di collegare un dispositivo.",
-        )
     sb.table("push_subscriptions").delete().eq("token", body.token).neq("user_id", user_id).execute()
     resp = (
         sb.table("push_subscriptions")

@@ -179,7 +179,7 @@ Il backend usa tre livelli di autenticazione:
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
 | `GET` | `/users/me` | ✅ | Profilo utente autenticato, incluse preferenze notifiche granulari effettivamente usate |
-| `PUT` | `/users/me` | ✅ | Aggiorna profilo; auto-geocode se cambia indirizzo e salva preferenza unica notifiche (`notifications_enabled`) |
+| `PUT` | `/users/me` | ✅ | Aggiorna profilo e auto-geocode se cambia indirizzo |
 | `POST` | `/users/geocode` | ✅ | Geocodifica indirizzo di casa → aggiorna `home_lat/lng` e `home_location` PostGIS |
 | `POST` | `/users/me/avatar` | ✅ | Upload avatar (JPEG/PNG/WebP, max 5 MB) → bucket `avatars` |
 | `DELETE` | `/users/me` | ✅ | Elimina account + dati collegati; risponde `204` |
@@ -484,9 +484,8 @@ Frontend
     Backend: legge product_id + supermarket_name dalla nuova offerta
     Backend: cerca utenti che hanno quel prodotto tra i preferiti
     Per ogni utente:
-      check notifications_enabled flag
       → insert app_notifications.favorite_offer
-      → fetch push_subscriptions
+      → fetch push_subscriptions esistenti
       → per ogni subscription:
             send_push_notification (VAPID, pywebpush)
             se 410 Gone → cancella subscription stale

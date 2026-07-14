@@ -26,7 +26,7 @@ from services.list_offer_visibility import (
     visible_supermarket_ids_for_user,
 )
 from services.offer_visibility import apply_current_offer_window
-from services.push_notify import notifications_enabled_for_user, send_push_to_user
+from services.push_notify import send_push_to_user
 from services.list_sync import (
     LIST_SYNC_HEARTBEAT_SECONDS,
     connect_listener,
@@ -696,8 +696,6 @@ def _notify_shared_list_event(
     body: str,
     data: dict,
 ) -> dict | None:
-    if not notifications_enabled_for_user(sb, user_id):
-        return None
     notification = _create_app_notification(
         sb,
         user_id,

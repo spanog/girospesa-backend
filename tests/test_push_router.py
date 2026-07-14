@@ -336,18 +336,17 @@ class TestNotifyExtractionComplete:
 
 class TestNotifyFavoritesVisibility:
     @pytest.mark.asyncio
-    async def test_subscribe_rejected_when_account_notifications_disabled(self):
+    async def test_subscribe_upserts_without_account_preference_gate(self):
         app = FastAPI()
         app.include_router(_push_router, prefix="/push")
         app.dependency_overrides[_push_module.get_current_user_id] = lambda: "user-1"
         transport = httpx.ASGITransport(app=app)
 
-        profile_table = MagicMock()
-        profile_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
-            "notifications_enabled": False,
-        }
+        subscriptions_table = MagicMock()
+        subscriptions_table.delete.return_value.eq.return_value.neq.return_value.execute.return_value = MagicMock()
+        subscriptions_table.upsert.return_value.execute.return_value.data = [{"id": "sub-1"}]
         sb = MagicMock()
-        sb.table.return_value = profile_table
+        sb.table.return_value = subscriptions_table
 
         with patch.object(_push_module, "get_supabase", return_value=sb):
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -360,7 +359,11 @@ class TestNotifyFavoritesVisibility:
                     },
                 )
 
-        assert resp.status_code == 409
+        assert resp.status_code == 201
+        subscriptions_table.upsert.assert_called_once()
+        payload = subscriptions_table.upsert.call_args.args[0]
+        assert payload["user_id"] == "user-1"
+        assert payload["endpoint"] == "https://push.example.com/abc"
 
     @pytest.mark.asyncio
     async def test_native_subscribe_upserts_fcm_token(self):
@@ -369,19 +372,12 @@ class TestNotifyFavoritesVisibility:
         app.dependency_overrides[_push_module.get_current_user_id] = lambda: "user-1"
         transport = httpx.ASGITransport(app=app)
 
-        profile_table = MagicMock()
-        profile_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
-            "notifications_enabled": True,
-        }
         subscriptions_table = MagicMock()
         subscriptions_table.delete.return_value.eq.return_value.neq.return_value.execute.return_value = MagicMock()
         subscriptions_table.upsert.return_value.execute.return_value.data = [{"id": "sub-1"}]
 
-        def table(name: str) -> MagicMock:
-            return profile_table if name == "user_profiles" else subscriptions_table
-
         sb = MagicMock()
-        sb.table.side_effect = table
+        sb.table.return_value = subscriptions_table
 
         with patch.object(_push_module, "get_supabase", return_value=sb):
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -470,12 +466,6 @@ class TestNotifyFavoritesVisibility:
         ]
         tables["favorites"] = favorites_table
 
-        profiles_table = MagicMock()
-        profiles_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = (
-            {"notifications_enabled": True}
-        )
-        tables["user_profiles"] = profiles_table
-
         subscriptions_table = MagicMock()
         subscriptions_table.select.return_value.eq.return_value.execute.return_value.data = []
         tables["push_subscriptions"] = subscriptions_table
@@ -527,7 +517,7 @@ class TestNotifyFavoritesVisibility:
         )
 
     @pytest.mark.asyncio
-    async def test_confirmed_public_offer_skips_when_notifications_disabled(self):
+    async def test_confirmed_public_offer_keeps_inbox_when_push_disabled(self):
         app = FastAPI()
         app.include_router(_push_router, prefix="/push")
         transport = httpx.ASGITransport(app=app)
@@ -556,14 +546,13 @@ class TestNotifyFavoritesVisibility:
         ]
         tables["favorites"] = favorites_table
 
-        profiles_table = MagicMock()
-        profiles_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = (
-            {"notifications_enabled": False}
-        )
-        tables["user_profiles"] = profiles_table
-
         notifications_table = MagicMock()
+        notifications_table.insert.return_value.execute.return_value.data = [{"id": "notif-1"}]
         tables["app_notifications"] = notifications_table
+
+        subscriptions_table = MagicMock()
+        subscriptions_table.select.return_value.eq.return_value.execute.return_value.data = []
+        tables["push_subscriptions"] = subscriptions_table
 
         sb = MagicMock()
         sb.table.side_effect = table
@@ -585,7 +574,8 @@ class TestNotifyFavoritesVisibility:
                 )
 
         assert resp.status_code == 204
-        notifications_table.insert.assert_not_called()
+        notifications_table.insert.assert_called_once()
+        subscriptions_table.select.assert_called_once()
 
     def test_aggregates_multiple_favorite_matches_for_same_flyer_and_user(self):
         tables: dict[str, MagicMock] = {}
@@ -620,12 +610,6 @@ class TestNotifyFavoritesVisibility:
             {"user_id": "user-1"},
         ]
         tables["favorites"] = favorites_table
-
-        profiles_table = MagicMock()
-        profiles_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = (
-            {"notifications_enabled": True}
-        )
-        tables["user_profiles"] = profiles_table
 
         subscriptions_table = MagicMock()
         subscriptions_table.select.return_value.eq.return_value.execute.return_value.data = []
@@ -752,7 +736,7 @@ class TestNotifyFavoritesVisibility:
 
 
 class TestNotifyPublicFlyerPublished:
-    def test_notifies_only_nearby_customers_with_notifications_enabled(self):
+    def test_notifies_only_nearby_customers_with_push_subscription(self):
         tables: dict[str, MagicMock] = {}
 
         def table(name: str) -> MagicMock:
@@ -767,11 +751,10 @@ class TestNotifyPublicFlyerPublished:
         tables["supermarkets"] = supermarket_table
 
         profiles_table = MagicMock()
-        profiles_table.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        profiles_table.select.return_value.eq.return_value.execute.return_value.data = [
             {
                 "id": "nearby-customer",
                 "role": "customer",
-                "notifications_enabled": True,
                 "home_lat": 45.465,
                 "home_lng": 9.191,
                 "search_lat": None,
@@ -781,7 +764,6 @@ class TestNotifyPublicFlyerPublished:
             {
                 "id": "far-customer",
                 "role": "customer",
-                "notifications_enabled": True,
                 "home_lat": 41.9028,
                 "home_lng": 12.4964,
                 "search_lat": None,
@@ -859,7 +841,7 @@ class TestNotifyPublicFlyerPublished:
 
         mock_send.assert_not_called()
 
-    def test_skips_customers_with_notifications_disabled(self):
+    def test_keeps_inbox_when_customer_has_no_push_subscription(self):
         tables: dict[str, MagicMock] = {}
 
         def table(name: str) -> MagicMock:
@@ -874,11 +856,10 @@ class TestNotifyPublicFlyerPublished:
         tables["supermarkets"] = supermarket_table
 
         profiles_table = MagicMock()
-        profiles_table.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        profiles_table.select.return_value.eq.return_value.execute.return_value.data = [
             {
                 "id": "disabled-customer",
                 "role": "customer",
-                "notifications_enabled": False,
                 "home_lat": 45.465,
                 "home_lng": 9.191,
                 "search_lat": None,
@@ -889,7 +870,12 @@ class TestNotifyPublicFlyerPublished:
         tables["user_profiles"] = profiles_table
 
         notifications_table = MagicMock()
+        notifications_table.insert.return_value.execute.return_value.data = [{"id": "notif-1"}]
         tables["app_notifications"] = notifications_table
+
+        subscriptions_table = MagicMock()
+        subscriptions_table.select.return_value.eq.return_value.execute.return_value.data = []
+        tables["push_subscriptions"] = subscriptions_table
 
         sb = MagicMock()
         sb.table.side_effect = table
@@ -903,5 +889,6 @@ class TestNotifyPublicFlyerPublished:
                 products_count=12,
             )
 
-        notifications_table.insert.assert_not_called()
+        notifications_table.insert.assert_called_once()
+        subscriptions_table.select.assert_called_once()
         mock_send.assert_not_called()
