@@ -27,6 +27,7 @@ _config_mod.settings = types.SimpleNamespace(
 sys.modules["core.config"] = _config_mod
 
 from api.routers.flyers import router as flyers_router
+import api.routers.flyers as flyers_module
 from api.routers.products import router as products_router
 from core.auth import get_current_user_id, require_admin_or_manager
 
@@ -209,6 +210,18 @@ def admin_profile(supabase_client):
     supabase_client.auth.admin.delete_user(user_id)
 
 
+@pytest.fixture()
+def favorite_user_id(supabase_client):
+    email = f"favorite_{uuid.uuid4().hex[:8]}@test.local"
+    resp = supabase_client.auth.admin.create_user(
+        {"email": email, "password": "Test_password_123!", "email_confirm": True}
+    )
+    user_id = resp.user.id
+    wait_for_user_bootstrap(user_id)
+    yield user_id
+    supabase_client.auth.admin.delete_user(user_id)
+
+
 class TestOfferLifecycleIntegration:
     async def test_manager_offer_review_lifecycle(
         self,
@@ -336,7 +349,10 @@ class TestOfferLifecycleIntegration:
         supabase_client,
         clean_db,
         admin_profile,
+        favorite_user_id,
+        monkeypatch,
     ):
+        monkeypatch.setattr(flyers_module.settings, "webhook_secret", None, raising=False)
         primary_store = (
             supabase_client.table("supermarkets")
             .insert(
@@ -371,8 +387,8 @@ class TestOfferLifecycleIntegration:
                     "file_url": "https://storage.test/flyers/conad.pdf",
                     "file_type": "pdf",
                     "file_name": "conad.pdf",
-                    "valid_from": "2026-06-01",
-                    "valid_to": "2026-06-30",
+                    "valid_from": "2026-01-01",
+                    "valid_to": _FUTURE_DATE,
                     "status": "done",
                     "is_public": False,
                     "flyer_kind": "source",
@@ -396,6 +412,11 @@ class TestOfferLifecycleIntegration:
             .insert({"name": "Pasta Barilla", "brand": "Barilla", "category": "dispensa"})
             .execute()
         ).data[0]
+        (
+            supabase_client.table("favorites")
+            .insert({"user_id": favorite_user_id, "product_id": product["id"]})
+            .execute()
+        )
         source_offer = (
             supabase_client.table("offers")
             .insert(
@@ -411,8 +432,8 @@ class TestOfferLifecycleIntegration:
                     "supermarket_name": primary_store["name"],
                     "price_offer": 1.99,
                     "price_original": 2.99,
-                    "valid_from": "2026-06-01",
-                    "valid_to": "2026-06-30",
+                    "valid_from": "2026-01-01",
+                    "valid_to": _FUTURE_DATE,
                     "is_confirmed": False,
                     "format_key": "fmt-1",
                     "format_label": "500 g",
@@ -460,3 +481,16 @@ class TestOfferLifecycleIntegration:
             .execute()
         ).data
         assert len(visible_product_offers) == 2
+
+        notifications = (
+            supabase_client.table("app_notifications")
+            .select("kind, title, data")
+            .eq("user_id", favorite_user_id)
+            .eq("kind", "favorite_offer")
+            .execute()
+        ).data
+        assert len(notifications) == 2
+        assert {row["data"]["offer_id"] for row in notifications} == {
+            offer["id"] for offer in published_rows
+        }
+        assert all(row["title"] == "Nuova offerta: Pasta Barilla" for row in notifications)

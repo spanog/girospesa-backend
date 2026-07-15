@@ -129,7 +129,7 @@ class TestGeocodeEndpoint:
                 get_geocoder.return_value = MagicMock(geocode=MagicMock(return_value=_mock_location()))
                 with patch.object(users_module, "geocode_address", geocode_address):
                     with patch("api.routers.users.get_supabase", return_value=supabase_client):
-                        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+                        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
                             resp = await client.post(
                                 "/users/geocode",
                                 json={"address": "Via Roma 1, 20100 Milano MI"},
@@ -158,7 +158,7 @@ class TestGeocodeEndpoint:
             with patch.object(geocoding_service, "_get_geocoder") as get_geocoder:
                 get_geocoder.return_value = MagicMock(geocode=MagicMock(return_value=None))
                 with patch.object(users_module, "geocode_address", geocode_address):
-                    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+                    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
                         resp = await client.post(
                             "/users/geocode",
                             json={"address": "indirizzo inesistente xyz 999"},
@@ -178,7 +178,7 @@ class TestGeocodeEndpoint:
         app_no_auth.include_router(users_router, prefix="/users")
         # No dependency_overrides → auth dependency rejects missing token
 
-        async with httpx.AsyncClient(app=app_no_auth, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app_no_auth), base_url="http://test") as client:
             resp = await client.post(
                 "/users/geocode",
                 json={"address": "Via Roma 1, Milano"},

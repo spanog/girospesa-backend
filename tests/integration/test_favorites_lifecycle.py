@@ -178,7 +178,7 @@ class TestFavoritesLifecycle:
         assert fav_row["product_id"] == product["id"]
 
         # GET /favorites must show no active offer but the product is still there
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.favorites.get_supabase", return_value=supabase_client):
                 resp = await client.get("/favorites")
 
@@ -234,7 +234,7 @@ class TestFavoritesLifecycle:
             supabase_client, product, supermarket, _FUTURE_DATE, price=0.89
         )
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.favorites.get_supabase", return_value=supabase_client):
                 resp = await client.get("/favorites")
 
@@ -264,7 +264,7 @@ class TestFavoritesLifecycle:
         _insert_offer(supabase_client, product, supermarket, _PAST_DATE)
         _insert_favorite(supabase_client, auth_user, product["id"])
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.favorites.get_supabase", return_value=supabase_client):
                 resp = await client.get("/favorites")
 
@@ -275,7 +275,7 @@ class TestFavoritesLifecycle:
 
     async def test_post_favorites_requires_product_id(self, supabase_client, auth_user):
         """POST /favorites without product_id must return 422 (validation error)."""
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.favorites.get_supabase", return_value=supabase_client):
                 resp = await client.post("/favorites", json={})
 
@@ -285,7 +285,7 @@ class TestFavoritesLifecycle:
         self, supabase_client, auth_user
     ):
         """POST /favorites with product_id=None must return 422 (NOT NULL constraint)."""
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.favorites.get_supabase", return_value=supabase_client):
                 resp = await client.post("/favorites", json={"product_id": None})
 

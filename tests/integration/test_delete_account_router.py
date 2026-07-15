@@ -82,7 +82,7 @@ async def test_delete_me_removes_auth_user_and_related_rows(
 
         import httpx
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as async_client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as async_client:
             response = await async_client.delete(
                 "/users/me",
                 headers={"Origin": "http://127.0.0.1:3000"},
@@ -156,7 +156,7 @@ async def test_delete_me_cleans_invite_references_before_auth_delete(
 
         import httpx
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as async_client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as async_client:
             response = await async_client.delete(
                 "/users/me",
                 headers={"Origin": "http://127.0.0.1:3000"},

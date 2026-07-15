@@ -120,7 +120,7 @@ class TestUploadPerformance:
         pdf_bytes = _make_large_pdf(size_mb=10.0)
         sb = _make_supabase_real_db_mock_storage()
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
                 start = time.perf_counter()
                 resp = await client.post(
@@ -145,7 +145,7 @@ class TestUploadPerformance:
         pdf_bytes = _make_large_pdf(size_mb=10.0)
         sb = _make_supabase_real_db_mock_storage()
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
                 # First upload — must succeed
                 r1 = await client.post(
@@ -175,7 +175,7 @@ class TestUploadPerformance:
         """Files exceeding 50 MB are rejected before any DB access — should be < 500ms."""
         oversized = b"%PDF-1.4\n" + b"x" * (51 * 1024 * 1024)
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             start = time.perf_counter()
             resp = await client.post(
                 "/flyers/upload",

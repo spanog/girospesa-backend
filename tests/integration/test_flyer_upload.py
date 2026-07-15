@@ -126,7 +126,7 @@ class TestFlyerUploadIntegration:
         """Uploading a PDF creates a flyers row with status='pending' and file_type='pdf'."""
         sb = _make_supabase_real_db_mock_storage()
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
                 resp = await client.post(
                     "/flyers/upload",
@@ -160,7 +160,7 @@ class TestFlyerUploadIntegration:
         sb = _make_supabase_real_db_mock_storage()
         jpeg_bytes = b"\xff\xd8\xff" + uuid.uuid4().bytes  # unique JPEG header
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
                 resp = await client.post(
                     "/flyers/upload",
@@ -186,7 +186,7 @@ class TestFlyerUploadIntegration:
         """Omitting supermarket_name is valid when supermarket_ids are provided."""
         sb = _make_supabase_real_db_mock_storage()
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
                 resp = await client.post(
                     "/flyers/upload",
@@ -214,7 +214,7 @@ class TestFlyerUploadIntegration:
         sb1 = _make_supabase_real_db_mock_storage()
         sb2 = _make_supabase_real_db_mock_storage()
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             # First upload — must succeed
             with patch("api.routers.flyers.get_supabase", return_value=sb1):
                 r1 = await client.post(
@@ -239,7 +239,7 @@ class TestFlyerUploadIntegration:
         """Upload ignores any is_public field; flyers stay private until offer confirmation."""
         sb = _make_supabase_real_db_mock_storage()
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
                 resp = await client.post(
                     "/flyers/upload",

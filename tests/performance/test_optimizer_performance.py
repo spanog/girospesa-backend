@@ -111,7 +111,7 @@ class TestOptimizerPerformance:
         The greedy set-cover algorithm is O(items × offers × stores); at this
         scale it must stay within the 2-second budget.
         """
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=supabase_client):
                 start = time.perf_counter()
                 resp = await client.post(
@@ -136,7 +136,7 @@ class TestOptimizerPerformance:
         self, supabase_client, seeded_1k_optimizer_dataset, shopping_list_50_items
     ):
         """Legacy mode payload is ignored and still completes in < 2s."""
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=supabase_client):
                 start = time.perf_counter()
                 resp = await client.post(

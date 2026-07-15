@@ -120,7 +120,7 @@ class TestPatchItemSelectedOfferIntegration:
         item = _manual_item("Latte")
         shopping_list = _create_member_list(supabase_client, auth_user, [item])
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.lists.get_supabase", return_value=supabase_client):
                 resp = await client.patch(
                     f"/lists/{shopping_list['id']}/items/{item['id']}",
@@ -157,7 +157,7 @@ class TestPatchItemSelectedOfferIntegration:
         shopping_list = _create_member_list(supabase_client, auth_user, [item])
         missing_offer_id = str(uuid.uuid4())
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.lists.get_supabase", return_value=supabase_client):
                 resp = await client.patch(
                     f"/lists/{shopping_list['id']}/items/{item['id']}",
@@ -189,7 +189,7 @@ class TestPatchItemSelectedOfferIntegration:
             [offer_item, other_item],
         )
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.lists.get_supabase", return_value=supabase_client):
                 select_resp = await client.patch(
                     f"/lists/{shopping_list['id']}/items/{offer_item['id']}",

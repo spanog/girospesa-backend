@@ -242,7 +242,7 @@ class TestOptimizeIntegration:
         """Happy path: list has item matching an active offer → coverage_percent > 0."""
         sb = _supabase_with_real_db(supabase_client)
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=sb):
                 resp = await client.post(
                     "/optimize",
@@ -274,7 +274,7 @@ class TestOptimizeIntegration:
         """Empty list → coverage_percent=100, no store groups, no unmatched items."""
         sb = _supabase_with_real_db(supabase_client)
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=sb):
                 resp = await client.post(
                     "/optimize",
@@ -295,7 +295,7 @@ class TestOptimizeIntegration:
         """Manual items with no offer stay in the plan without alternatives."""
         sb = _supabase_with_real_db(supabase_client)
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=sb):
                 resp = await client.post(
                     "/optimize",
@@ -318,7 +318,7 @@ class TestOptimizeIntegration:
         """Pinned offer item stays covered while manual no-match item is unmatched."""
         sb = _supabase_with_real_db(supabase_client)
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=sb):
                 resp = await client.post(
                     "/optimize",
@@ -342,7 +342,7 @@ class TestOptimizeIntegration:
         """Pinned active offer with valid_to NULL remains optimizable."""
         sb = _supabase_with_real_db(supabase_client)
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=sb):
                 resp = await client.post(
                     "/optimize",
@@ -361,7 +361,7 @@ class TestOptimizeIntegration:
         """Legacy clients may send mode; optimizer ignores it and returns one plan."""
         sb = _supabase_with_real_db(supabase_client)
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=sb):
                 resp = await client.post(
                     "/optimize",
@@ -384,7 +384,7 @@ class TestOptimizeIntegration:
         row = _create_member_list(supabase_client, auth_user, "Fuzzy list", items)
         sb = _supabase_with_real_db(supabase_client)
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=sb):
                 resp = await client.post("/optimize", json={"list_id": row["id"]})
 
@@ -467,7 +467,7 @@ class TestOptimizeIntegration:
         row = _create_member_list(supabase_client, auth_user, "Visibility list", items)
         sb = _supabase_with_real_db(supabase_client)
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.optimize.get_supabase", return_value=sb):
                 resp = await client.post("/optimize", json={"list_id": row["id"]})
 

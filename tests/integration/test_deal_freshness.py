@@ -170,7 +170,7 @@ class TestDealFreshnessIntegration:
         item = _make_item("Latte intero", pinned_offer_id=offer["id"], pinned_product_id=product["id"], pinned_price=1.29)
         shopping_list = _create_list(supabase_client, auth_user, [item])
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.lists.get_supabase", return_value=supabase_client):
                 resp = await client.get(f"/lists/{shopping_list['id']}/deal-freshness")
 
@@ -189,7 +189,7 @@ class TestDealFreshnessIntegration:
         item = _make_item("Latte intero", pinned_offer_id=offer["id"], pinned_product_id=product["id"], pinned_price=0.99)
         shopping_list = _create_list(supabase_client, auth_user, [item])
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.lists.get_supabase", return_value=supabase_client):
                 resp = await client.get(f"/lists/{shopping_list['id']}/deal-freshness")
 
@@ -208,7 +208,7 @@ class TestDealFreshnessIntegration:
         item = _make_item("Latte intero", pinned_offer_id=offer["id"], pinned_product_id=product["id"], pinned_price=pinned_price)
         shopping_list = _create_list(supabase_client, auth_user, [item])
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.lists.get_supabase", return_value=supabase_client):
                 resp = await client.get(f"/lists/{shopping_list['id']}/deal-freshness")
 
@@ -227,7 +227,7 @@ class TestDealFreshnessIntegration:
         item = _make_item("Latte intero", pinned_offer_id=nonexistent_offer_id, pinned_product_id=product["id"])
         shopping_list = _create_list(supabase_client, auth_user, [item])
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.lists.get_supabase", return_value=supabase_client):
                 resp = await client.get(f"/lists/{shopping_list['id']}/deal-freshness")
 
@@ -244,7 +244,7 @@ class TestDealFreshnessIntegration:
         item = _make_item("Prodotto manuale")  # no pinned_offer_id
         shopping_list = _create_list(supabase_client, auth_user, [item])
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.lists.get_supabase", return_value=supabase_client):
                 resp = await client.get(f"/lists/{shopping_list['id']}/deal-freshness")
 
@@ -262,7 +262,7 @@ class TestDealFreshnessIntegration:
         other_user_id = str(uuid.uuid4())
         app.dependency_overrides[get_current_user_id] = lambda: other_user_id
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.lists.get_supabase", return_value=supabase_client):
                 resp = await client.get(f"/lists/{shopping_list['id']}/deal-freshness")
 
@@ -293,7 +293,7 @@ class TestDealFreshnessIntegration:
         )
         shopping_list = _create_list(supabase_client, auth_user, [item])
 
-        async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.lists.get_supabase", return_value=supabase_client):
                 resp = await client.get(f"/lists/{shopping_list['id']}/deal-freshness")
 

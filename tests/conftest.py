@@ -141,7 +141,7 @@ async def async_client(ensure_supabase_local):
     """AsyncClient HTTPX che punta a FastAPI in-process (no rete esterna)."""
     from main import app  # importa l'app FastAPI del backend
 
-    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         yield client
 
 

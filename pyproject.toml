@@ -3,7 +3,20 @@ requires-python = ">=3.14,<3.15"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore:cannot collect 'test_app' because it is not a function\\.:pytest.PytestCollectionWarning",
+    "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
+    "ignore:datetime\\.datetime\\.utcnow\\(\\) is deprecated.*:DeprecationWarning:jose.jwt",
+    "ignore:The `gotrue` package is deprecated.*:DeprecationWarning:supabase",
+    "ignore:'asyncio\\.iscoroutinefunction' is deprecated.*:DeprecationWarning:fastapi.routing",
+    "ignore:'asyncio\\.iscoroutinefunction' is deprecated.*:DeprecationWarning:starlette._utils",
+    "ignore:'asyncio\\.iscoroutinefunction' is deprecated.*:DeprecationWarning:pytest_asyncio.plugin",
+    "ignore:'asyncio\\.(get_event_loop_policy|set_event_loop_policy)' is deprecated.*:DeprecationWarning:pytest_asyncio.plugin",
+]
 
 [tool.taskipy.tasks]
 dev = ".venv/bin/python -m uvicorn main:app --reload --port 8000"
