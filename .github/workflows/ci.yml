@@ -53,3 +53,9 @@ jobs:
 
       - name: Run backend integration suite
         run: python -m pytest tests/integration -v --tb=short
+
+      - name: Dump integration Docker logs
+        if: failure()
+        run: |
+          docker compose -f docker-compose.integration.yml -p girospesa-itest ps -a || true
+          docker compose -f docker-compose.integration.yml -p girospesa-itest logs --no-color --tail=200 || true

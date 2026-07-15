@@ -18,6 +18,9 @@ def test_ci_workflow_runs_backend_tests_on_pull_requests():
     assert "integration-test:" in workflow
     assert "docker compose version" in workflow
     assert "python -m pytest tests/integration -v --tb=short" in workflow
+    assert "Dump integration Docker logs" in workflow
+    assert "docker compose -f docker-compose.integration.yml -p girospesa-itest ps -a" in workflow
+    assert "docker compose -f docker-compose.integration.yml -p girospesa-itest logs --no-color --tail=200" in workflow
 
 
 def test_daily_maintenance_workflow_calls_production_cleanup_endpoint():

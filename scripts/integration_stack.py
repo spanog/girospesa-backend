@@ -82,6 +82,18 @@ def compose_command(*args: str) -> list[str]:
     ]
 
 
+def _wait_timeout_seconds() -> str:
+    return os.environ.get("INTEGRATION_COMPOSE_WAIT_TIMEOUT_SECONDS", "180")
+
+
+def _with_wait_timeout(args: tuple[str, ...]) -> tuple[str, ...]:
+    if not args or args[0] != "up" or "--wait" not in args or "--wait-timeout" in args:
+        return args
+    if len(args) > 3 and not args[-1].startswith("-"):
+        return (*args[:-1], "--wait-timeout", _wait_timeout_seconds(), args[-1])
+    return (*args, "--wait-timeout", _wait_timeout_seconds())
+
+
 def _run_capture(*args: str, env: dict[str, str]) -> str:
     completed = subprocess.run(
         compose_command(*args),
@@ -92,6 +104,32 @@ def _run_capture(*args: str, env: dict[str, str]) -> str:
         text=True,
     )
     return completed.stdout.strip()
+
+
+def _print_diagnostic(label: str, *args: str, env: dict[str, str]) -> None:
+    print(f"\n--- docker compose {label} ---", flush=True)
+    subprocess.run(compose_command(*args), cwd=BACKEND_ROOT, env=env, check=False)
+
+
+def _dump_compose_diagnostics(env: dict[str, str]) -> None:
+    _print_diagnostic("ps -a", "ps", "-a", env=env)
+    _print_diagnostic(
+        "logs --no-color --tail=200",
+        "logs",
+        "--no-color",
+        "--tail=200",
+        env=env,
+    )
+
+
+def _run_compose_checked(*args: str, env: dict[str, str]) -> None:
+    final_args = _with_wait_timeout(args)
+    try:
+        subprocess.run(compose_command(*final_args), cwd=BACKEND_ROOT, env=env, check=True)
+    except subprocess.CalledProcessError:
+        if args and args[0] == "up":
+            _dump_compose_diagnostics(env)
+        raise
 
 
 def _wait_for_schema(env: dict[str, str], timeout_seconds: int = 60) -> None:
@@ -160,23 +198,13 @@ def run_compose(*args: str) -> None:
         _generate_kong_config()
     env = os.environ.copy()
     env.update(integration_env())
-    subprocess.run(compose_command(*args), cwd=BACKEND_ROOT, env=env, check=True)
+    _run_compose_checked(*args, env=env)
     if args and args[0] == "up":
         _wait_for_schema(env)
         # PostgREST may start before local bootstrap migrations finish. Restart it
         # only after schema objects exist so cache sees new columns/RPCs/tables.
-        subprocess.run(
-            compose_command("restart", "rest"),
-            cwd=BACKEND_ROOT,
-            env=env,
-            check=True,
-        )
-        subprocess.run(
-            compose_command("up", "-d", "--wait", "rest"),
-            cwd=BACKEND_ROOT,
-            env=env,
-            check=True,
-        )
+        _run_compose_checked("restart", "rest", env=env)
+        _run_compose_checked("up", "-d", "--wait", "rest", env=env)
 
 
 def print_env() -> None:
