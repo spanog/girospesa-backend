@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   test:
@@ -55,6 +56,40 @@ jobs:
         run: python -m pytest tests/integration -v --tb=short
 
       - name: Dump integration Docker logs
+        if: failure()
+        run: |
+          docker compose -f docker-compose.integration.yml -p girospesa-itest ps -a || true
+          docker compose -f docker-compose.integration.yml -p girospesa-itest logs --no-color --tail=200 || true
+
+  performance-test:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: .
+    env:
+      RUN_PERFORMANCE_TESTS: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Verify Docker Compose
+        run: docker compose version
+
+      - name: Run backend performance suite
+        run: python -m pytest tests/performance -v -s --tb=short
+
+      - name: Dump performance Docker logs
         if: failure()
         run: |
           docker compose -f docker-compose.integration.yml -p girospesa-itest ps -a || true

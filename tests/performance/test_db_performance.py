@@ -38,7 +38,7 @@ class TestDatabaseQueryPerformance:
         start = time.perf_counter()
         result = (
             supabase_client.table("products")
-            .select("id, name, brand, format")
+            .select("id, name, brand")
             .ilike("name", "%PERF_Prodotto_0%")
             .limit(50)
             .execute()

@@ -26,10 +26,12 @@
 - Run:
   - `.venv/bin/python -m pytest tests -v --ignore=tests/integration --ignore=tests/performance`
   - `.venv/bin/python -m pytest tests/integration -v`
+  - `RUN_PERFORMANCE_TESTS=1 .venv/bin/python -m pytest tests/performance -v -s` for opt-in benchmarks
 
 ## Deploy / CI conventions
 
 - Production/runtime baseline is Python `3.14.3`: keep `.python-version`, `pyproject.toml`, `render.yaml`, runtime guards, and CI aligned when changing interpreter support.
+- Backend CI exposes `performance-test` only through manual `workflow_dispatch`; keep performance benchmarks opt-in unless thresholds become stable enough for every PR.
 - Supabase schema source of truth for this repo is `girospesa-backend/supabase/migrations/`; keep one active baseline or forward-only migration chain there, and archive any retired history outside that directory.
 - Keep `render.yaml` aligned with runtime expectations and required env vars.
 - GitHub Actions under `.github/workflows/` are part of the production contract: update them when commands, Python version, or test entrypoints change.

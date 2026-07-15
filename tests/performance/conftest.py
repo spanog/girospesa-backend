@@ -6,6 +6,9 @@ import os
 import uuid
 import pytest
 
+import core.config as core_config
+from core.config import Settings
+from scripts.integration_stack import integration_env, run_compose
 
 
 # ---------------------------------------------------------------------------
@@ -20,8 +23,35 @@ def _skip_unless_enabled():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _require_supabase(_skip_unless_enabled, ensure_supabase_local):
-    """All performance tests require a running local Supabase stack."""
+def performance_test_env(_skip_unless_enabled):
+    """Apply isolated integration-stack env only for performance sessions."""
+    monkeypatch = pytest.MonkeyPatch()
+    for key, value in integration_env().items():
+        monkeypatch.setenv(key, value)
+    refreshed = Settings()  # type: ignore[call-arg]
+    for field, value in refreshed.model_dump().items():
+        setattr(core_config.settings, field, value)
+    yield
+    monkeypatch.undo()
+    restored = Settings()  # type: ignore[call-arg]
+    for field, value in restored.model_dump().items():
+        setattr(core_config.settings, field, value)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ensure_performance_stack(performance_test_env):
+    """Start and destroy the isolated Docker stack for performance tests."""
+    try:
+        run_compose("up", "-d", "--wait")
+    except Exception as exc:
+        pytest.exit(f"Stack performance Docker non avviato: {exc}", returncode=1)
+    yield
+    run_compose("down", "-v", "--remove-orphans")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _require_supabase(ensure_performance_stack, ensure_supabase_local):
+    """All performance tests require reachable Supabase test services."""
     pass
 
 
@@ -125,8 +155,14 @@ def seeded_10k_dataset(supabase_client, perf_supermarkets):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def seeded_1k_optimizer_dataset(supabase_client, perf_supermarkets):
+def seeded_1k_optimizer_dataset(supabase_client):
     """Seed 1,000 products and 1,000 offers for optimizer benchmarking."""
+    _delete_perf_data(supabase_client)
+    markets = [
+        {"name": f"{_PERF_PREFIX}OptMarket_{i}", "slug": f"perf-opt-market-{uuid.uuid4().hex[:6]}", "lat": 45.46 + i * 0.01, "lng": 9.18}
+        for i in range(5)
+    ]
+    supermarkets = _batch_insert(supabase_client, "supermarkets", markets)
     product_names = [
         "latte", "burro", "pane", "pasta", "riso", "olio", "pollo", "manzo",
         "pesce", "uova", "formaggio", "yogurt", "mozzarella", "prosciutto", "salame",
@@ -145,8 +181,8 @@ def seeded_1k_optimizer_dataset(supabase_client, perf_supermarkets):
     offers_payload = [
         {
             "product_id": p["id"],
-            "supermarket_id": perf_supermarkets[idx % 5]["id"],
-            "supermarket_name": perf_supermarkets[idx % 5]["name"],
+            "supermarket_id": supermarkets[idx % 5]["id"],
+            "supermarket_name": supermarkets[idx % 5]["name"],
             "price_offer": round(1.0 + (idx % 50) * 0.05, 2),
             "price_original": round(1.5 + (idx % 50) * 0.05, 2),
             "valid_to": _FUTURE_DATE,
@@ -155,4 +191,5 @@ def seeded_1k_optimizer_dataset(supabase_client, perf_supermarkets):
     ]
     offers = _batch_insert(supabase_client, "offers", offers_payload)
 
-    yield {"products": products, "offers": offers, "supermarkets": perf_supermarkets}
+    yield {"products": products, "offers": offers, "supermarkets": supermarkets}
+    _delete_perf_data(supabase_client)

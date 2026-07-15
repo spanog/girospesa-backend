@@ -91,6 +91,16 @@ def perf_upload_user(supabase_client):
     supabase_client.auth.admin.delete_user(user_id)
 
 
+@pytest.fixture()
+def perf_upload_supermarket(supabase_client, clean_db):
+    row = (
+        supabase_client.table("supermarkets")
+        .insert({"name": "PERF_Upload_Market", "slug": "perf-upload-market"})
+        .execute()
+    ).data[0]
+    return row
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -111,7 +121,9 @@ class TestUploadPerformance:
         yield
         app.dependency_overrides.clear()
 
-    async def test_large_pdf_upload_under_threshold(self, supabase_client, clean_db):
+    async def test_large_pdf_upload_under_threshold(
+        self, supabase_client, perf_upload_supermarket
+    ):
         """Uploading a ~10 MB PDF (40-page volantino equivalent) completes in < 5s.
 
         Measures: file read, SHA-256 hash, duplicate check query, DB insert.
@@ -126,7 +138,7 @@ class TestUploadPerformance:
                 resp = await client.post(
                     "/flyers/upload",
                     files={"file": ("volantino_grande.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
-                    data={"supermarket_name": "Esselunga"},
+                    data={"supermarket_ids": perf_upload_supermarket["id"]},
                 )
                 elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -136,7 +148,9 @@ class TestUploadPerformance:
             "SHA-256 computation or DB insert may be the bottleneck."
         )
 
-    async def test_duplicate_detection_is_fast(self, supabase_client, clean_db):
+    async def test_duplicate_detection_is_fast(
+        self, supabase_client, perf_upload_supermarket
+    ):
         """Duplicate hash detection for a 10 MB file adds negligible latency.
 
         The second upload of the same content should return 409 quickly —
@@ -151,7 +165,7 @@ class TestUploadPerformance:
                 r1 = await client.post(
                     "/flyers/upload",
                     files={"file": ("v.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
-                    data={"supermarket_name": "Coop"},
+                    data={"supermarket_ids": perf_upload_supermarket["id"]},
                 )
                 assert r1.status_code == 201
 
@@ -162,7 +176,7 @@ class TestUploadPerformance:
                     r2 = await client.post(
                         "/flyers/upload",
                         files={"file": ("v.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
-                        data={"supermarket_name": "Coop"},
+                        data={"supermarket_ids": perf_upload_supermarket["id"]},
                     )
                     elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -171,7 +185,9 @@ class TestUploadPerformance:
             f"Duplicate detection took {elapsed_ms:.0f}ms — should be faster than first upload."
         )
 
-    async def test_file_size_at_limit_is_rejected_quickly(self):
+    async def test_file_size_at_limit_is_rejected_quickly(
+        self, perf_upload_supermarket
+    ):
         """Files exceeding 50 MB are rejected before any DB access — should be < 500ms."""
         oversized = b"%PDF-1.4\n" + b"x" * (51 * 1024 * 1024)
 
@@ -180,6 +196,7 @@ class TestUploadPerformance:
             resp = await client.post(
                 "/flyers/upload",
                 files={"file": ("too_big.pdf", io.BytesIO(oversized), "application/pdf")},
+                data={"supermarket_ids": perf_upload_supermarket["id"]},
             )
             elapsed_ms = (time.perf_counter() - start) * 1000
 

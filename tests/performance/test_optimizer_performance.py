@@ -85,6 +85,9 @@ def shopping_list_50_items(supabase_client, seeded_1k_optimizer_dataset, perf_au
         .insert({"user_id": perf_auth_user, "name": "Perf list 50 items", "items": items})
         .execute()
     ).data[0]
+    supabase_client.table("list_members").insert(
+        {"list_id": row["id"], "user_id": perf_auth_user, "role": "owner"}
+    ).execute()
     yield row
     supabase_client.table("shopping_lists").delete().eq("id", row["id"]).execute()
 
