@@ -15,6 +15,9 @@ def test_ci_workflow_runs_backend_tests_on_pull_requests():
 
     assert "pull_request:" in workflow
     assert "python -m pytest tests -v --ignore=tests/integration --ignore=tests/performance" in workflow
+    assert "integration-test:" in workflow
+    assert "docker compose version" in workflow
+    assert "python -m pytest tests/integration -v --tb=short" in workflow
 
 
 def test_daily_maintenance_workflow_calls_production_cleanup_endpoint():
