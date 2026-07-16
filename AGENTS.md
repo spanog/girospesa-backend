@@ -2,7 +2,8 @@
 
 ## Scope
 
-- `README.md` = human-facing documentation only: architecture, setup, configuration, deploy, runbooks, and API behavior notes.
+- `README.md` = human-facing entry point only: overview, quick start, and links to detailed docs.
+- `docs/*.md` = human-facing documentation by responsibility: architecture, API, local development, testing, configuration, data model, jobs, flows, and deploy runbooks.
 - `AGENTS.md` = agent-facing operating rules only: commands, test expectations, deploy guardrails, and repo workflow conventions.
 - When a change affects both domains, update both files but keep each change inside its own scope.
 
@@ -13,20 +14,39 @@
 - Normalize unstable values before snapshot comparison: UUID, token, timestamp, variable URL host/query.
 - Supabase schema or RLS changes must keep `supabase db advisors --local` clean for touched areas; wrap `auth.uid()` / `auth.jwt()` as `select` expressions in policies when possible to avoid advisor performance warnings.
 - Snapshot tests support, not replace, explicit assertions on permissions, ordering, lifecycle transitions, and domain invariants.
-- Keep notification flows aligned across transports: `favorite_offer` logic must stay shared between the `/push/notify-favorites` webhook path and any local/development fallback executed during flyer publication.
-- Push delivery must stay transport-shared: inbox persistence, Web Push, and native FCM must receive the same notification payload and deep-link `data.url`.
-- Physical push delivery is controlled by existing `push_subscriptions` rows and browser/device permission. Valid notification events must still create `app_notifications` rows even when no physical push can be delivered.
-- `favorite_offer` should follow anti-spam semantics: aggregate multiple matches from the same flyer into one notification per `user + flyer`, updating the existing row/push payload instead of inserting one card per matched product.
-- Multi-page extraction resume is part of the backend contract: if at least one PDF chunk has already been persisted, generic transient runtime failures (for example `httpx` / Supabase read errors) must preserve `next_chunk_*`, `partial_products_count`, and a resumable retry path instead of forcing chunk 1 to rerun.
-- Gemini retry policy is part of that contract too: provider-side transient `500/502/504` and `503/UNAVAILABLE` failures must use exponential backoff with jitter so the backend does not burn all retries in a few seconds during temporary provider instability.
-- A `processing` flyer with persisted `last_completed_chunk` + `next_chunk_*` that stays stale after a web-service restart must be manually retriggerable through the same extract endpoint; stale in-flight state is not a permanent lock.
-- Startup recovery is part of the production contract: when the web service boots, it must scan orphaned `processing` flyers left by the previous instance, queue automatic resume for rows with a saved chunk checkpoint, and fail fast rows that died before the first checkpoint.
-- Completed extraction is also part of that contract: once all chunks have already been persisted, late runtime failures in final status updates or post-success side effects must keep the flyer terminally `done` instead of degrading it back to `error`.
-- Flyer confirmation is part of the publish contract: `POST /flyers/{flyer_id}/offers/confirm` must confirm every source offer first, then sync all derived `published_target` clones in an idempotent pass so rerunning confirm can finish missing public offers after an interrupted publish.
+
+## Commands
+
+- Setup local env files: `cp .env.example .env && cp .env.test.example .env.test`
+- Start Supabase local stack: `supabase start`
+- Run app locally: `.venv/bin/python -m uvicorn main:app --reload --port 8000`
+- Seed/check admin: `.venv/bin/python -m scripts.seed_admin` / `.venv/bin/python -m scripts.seed_admin --check`
 - Run:
   - `.venv/bin/python -m pytest tests -v --ignore=tests/integration --ignore=tests/performance`
   - `.venv/bin/python -m pytest tests/integration -v`
   - `RUN_PERFORMANCE_TESTS=1 .venv/bin/python -m pytest tests/performance -v -s` for opt-in benchmarks
+- Manage integration stack manually: `.venv/bin/python -m scripts.integration_stack up|down|status|env`
+
+## Data Access
+
+- FastAPI is the only application layer allowed to touch database persistence details.
+- Frontend-facing features must expose backend endpoints instead of coupling UI code to Supabase tables/RPCs directly.
+- Keep raw SQL, PostgREST, Supabase service-role access, and schema-specific branching inside backend repositories/services, never inside frontend code.
+- No endpoint may trust client-supplied `admin`, `manager`, `role`, or similar flags for privileges or data scope. Authorization must derive from validated server-side auth context.
+- Public contact flows (`/contact-requests`) are mail-first: do not reintroduce app tables or client-side inserts for bug reports, collaboration requests, or missing-flyer requests.
+
+## Integration Test Isolation
+
+- `tests/integration/` must boot a fresh Docker stack on project `girospesa-itest` and destroy only that stack with `down -v --remove-orphans`.
+- Integration env overrides (`SUPABASE_URL`, `DB_DSN`, keys, etc.) must stay scoped to the `pytest` session and be restored afterward. Never mutate process env at module import time.
+- Dev stack (`supabase start`, backend on `.env`, local ports `54321+`) must remain untouched by integration test setup/teardown.
+
+## Supabase Conventions
+
+- Match pinned client API exactly. Example: PostgREST `.order()` expects `nullsfirst`, not `nulls_first`.
+- Local Supabase API exposure stays limited to `public` schema. `pg_graphql` is disabled; do not build or document `/graphql/v1` flows.
+- RLS-only helper functions that need `SECURITY DEFINER` privileges must live in a non-exposed schema such as `private`; do not publish them from `public` or document them as client-callable RPCs.
+- Public Storage buckets (`avatars`, `logos`, `product-images`) rely on signed-less `/storage/v1/object/public/...` URLs only. Do not depend on anonymous bucket listing via `storage.objects` policies.
 
 ## Deploy / CI conventions
 
@@ -35,7 +55,11 @@
 - Supabase schema source of truth for this repo is `girospesa-backend/supabase/migrations/`; keep one active baseline or forward-only migration chain there, and archive any retired history outside that directory.
 - Keep `render.yaml` aligned with runtime expectations and required env vars.
 - GitHub Actions under `.github/workflows/` are part of the production contract: update them when commands, Python version, or test entrypoints change.
-- Production Supabase migrations are deployed by `.github/workflows/supabase-db-production.yml`; when schema deployment assumptions change, update workflow, README secrets list, and guard tests together.
-- Scheduled maintenance for free-tier production uses `POST /ops/cron/daily-maintenance` with `X-Ops-Secret`; if cleanup logic changes, keep the route and workflow in sync.
-- Keep `POST /ops/cron/daily-maintenance` best-effort: one failing cleanup step must not block the others, and workflow logs must preserve the response body for production debugging.
-- Free-tier Render anti-idle relies on `.github/workflows/render-keepalive.yml` pinging `BACKEND_HEALTHCHECK_URL` every 5 minutes on an offset cron; if hostnames or sleep strategy change, update workflow, secrets docs, and tests together.
+- Production Supabase migrations are deployed by `.github/workflows/supabase-db-production.yml`; when schema deployment assumptions change, update workflow, deploy/configuration docs, and guard tests together.
+
+## Git / Ignore Rules
+
+- Keep `main` clean for deploy-ready code.
+- Never commit local secrets or machine-specific env files.
+- Track `.env.example` and `.env.test.example`.
+- Ignore `.env`, `.env.local`, `.env.test`, Python caches, coverage artifacts, editor files, macOS files, and Supabase local state.
