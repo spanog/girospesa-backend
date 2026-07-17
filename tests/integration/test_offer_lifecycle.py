@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import os
 import sys
 import time
@@ -77,6 +76,7 @@ def _make_supabase_real_db_mock_storage() -> object:
     def _storage_bucket(name: str) -> MagicMock:
         bucket = MagicMock()
         bucket.upload.return_value = MagicMock()
+        bucket.download.return_value = _unique_pdf()
         bucket.get_public_url.side_effect = (
             lambda path: f"https://storage.test/{name}/{path}"
         )
@@ -241,13 +241,14 @@ class TestOfferLifecycleIntegration:
                 patch("services.extraction.service.ExtractionService", mock_service),
             ):
                 upload_resp = await client.post(
-                    "/flyers/upload",
-                    files={"file": ("lifecycle.pdf", io.BytesIO(_unique_pdf()), "application/pdf")},
-                    data={
-                        "supermarket_name": supermarket["name"],
+                    "/flyers/upload/complete",
+                    json={
+                        "storage_path": f"{manager_profile['id']}/lifecycle.pdf",
+                        "file_name": "lifecycle.pdf",
+                        "content_type": "application/pdf",
+                        "supermarket_ids": [supermarket["id"]],
                         "valid_from": "2099-01-01",
                         "valid_to": _FUTURE_DATE,
-                        "is_public": "false",
                     },
                 )
 

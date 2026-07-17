@@ -1,8 +1,8 @@
-"""Performance tests — flyer upload endpoint with a large (40-page equivalent) PDF.
+"""Performance tests — flyer signed-upload completion with large PDF.
 
-Verifies that POST /flyers/upload can handle a large file (≈ 10 MB, simulating
-a 40-page volantino) within acceptable latency. Storage is mocked so this
-measures only FastAPI processing: file read, SHA-256 computation, DB insert.
+Verifies that POST /flyers/upload/complete can process a large Storage object
+(≈ 10 MB, simulating a 40-page volantino) within acceptable latency. Storage
+is mocked so this measures FastAPI download, SHA-256 computation, DB insert.
 
 Does NOT require `supabase start` for the upload endpoint itself (DB insert
 is fast), but the Supabase guard in the session conftest will still require it.
@@ -14,7 +14,6 @@ Run:
 
 from __future__ import annotations
 
-import io
 import time
 from unittest.mock import MagicMock, patch
 
@@ -51,7 +50,7 @@ def _make_large_pdf(size_mb: float = 10.0) -> bytes:
     return header + padding
 
 
-def _make_supabase_real_db_mock_storage() -> object:
+def _make_supabase_real_db_mock_storage(content: bytes = b"%PDF-1.4") -> object:
     """Create a fresh Supabase client with storage layer mocked.
 
     A fresh client is required because the session-scoped supabase_client
@@ -65,12 +64,29 @@ def _make_supabase_real_db_mock_storage() -> object:
         os.environ["SUPABASE_SECRET_KEY"],
     )
     storage_mock = MagicMock()
-    storage_mock.from_.return_value.upload.return_value = MagicMock()
+    storage_mock.from_.return_value.download.return_value = content
+    storage_mock.from_.return_value.remove.return_value = MagicMock()
     storage_mock.from_.return_value.get_public_url.return_value = (
         "https://storage.test/flyers/large.pdf"
     )
     sb._storage = storage_mock  # type: ignore[attr-defined]
     return sb
+
+
+async def _complete_upload(
+    client: httpx.AsyncClient,
+    user_id: str,
+    supermarket_id: str,
+) -> httpx.Response:
+    return await client.post(
+        "/flyers/upload/complete",
+        json={
+            "storage_path": f"{user_id}/{time.perf_counter_ns()}.pdf",
+            "file_name": "volantino_grande.pdf",
+            "content_type": "application/pdf",
+            "supermarket_ids": [supermarket_id],
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -130,16 +146,13 @@ class TestUploadPerformance:
         Storage upload is mocked (network latency excluded by design).
         """
         pdf_bytes = _make_large_pdf(size_mb=10.0)
-        sb = _make_supabase_real_db_mock_storage()
+        sb = _make_supabase_real_db_mock_storage(pdf_bytes)
+        user_id = app.dependency_overrides[get_current_user_id]()
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
                 start = time.perf_counter()
-                resp = await client.post(
-                    "/flyers/upload",
-                    files={"file": ("volantino_grande.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
-                    data={"supermarket_ids": perf_upload_supermarket["id"]},
-                )
+                resp = await _complete_upload(client, user_id, perf_upload_supermarket["id"])
                 elapsed_ms = (time.perf_counter() - start) * 1000
 
         assert resp.status_code == 201, f"Unexpected status {resp.status_code}: {resp.text}"
@@ -157,27 +170,18 @@ class TestUploadPerformance:
         the duplicate check must not re-read the entire file from DB.
         """
         pdf_bytes = _make_large_pdf(size_mb=10.0)
-        sb = _make_supabase_real_db_mock_storage()
+        sb = _make_supabase_real_db_mock_storage(pdf_bytes)
+        user_id = app.dependency_overrides[get_current_user_id]()
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
-                # First upload — must succeed
-                r1 = await client.post(
-                    "/flyers/upload",
-                    files={"file": ("v.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
-                    data={"supermarket_ids": perf_upload_supermarket["id"]},
-                )
+                r1 = await _complete_upload(client, user_id, perf_upload_supermarket["id"])
                 assert r1.status_code == 201
 
-                # Second upload — duplicate detection (only hash comparison)
-                sb2 = _make_supabase_real_db_mock_storage()
+                sb2 = _make_supabase_real_db_mock_storage(pdf_bytes)
                 with patch("api.routers.flyers.get_supabase", return_value=sb2):
                     start = time.perf_counter()
-                    r2 = await client.post(
-                        "/flyers/upload",
-                        files={"file": ("v.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
-                        data={"supermarket_ids": perf_upload_supermarket["id"]},
-                    )
+                    r2 = await _complete_upload(client, user_id, perf_upload_supermarket["id"])
                     elapsed_ms = (time.perf_counter() - start) * 1000
 
         assert r2.status_code == 409
@@ -191,14 +195,13 @@ class TestUploadPerformance:
         """Files exceeding 50 MB are rejected before any DB access — should be < 500ms."""
         oversized = b"%PDF-1.4\n" + b"x" * (51 * 1024 * 1024)
 
+        sb = _make_supabase_real_db_mock_storage(oversized)
+        user_id = app.dependency_overrides[get_current_user_id]()
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            start = time.perf_counter()
-            resp = await client.post(
-                "/flyers/upload",
-                files={"file": ("too_big.pdf", io.BytesIO(oversized), "application/pdf")},
-                data={"supermarket_ids": perf_upload_supermarket["id"]},
-            )
-            elapsed_ms = (time.perf_counter() - start) * 1000
+            with patch("api.routers.flyers.get_supabase", return_value=sb):
+                start = time.perf_counter()
+                resp = await _complete_upload(client, user_id, perf_upload_supermarket["id"])
+                elapsed_ms = (time.perf_counter() - start) * 1000
 
         assert resp.status_code == 413
         assert elapsed_ms < 500, (

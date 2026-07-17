@@ -1,4 +1,4 @@
-"""Integration tests — POST /flyers/upload.
+"""Integration tests — signed flyer upload completion.
 
 Verifies that the endpoint correctly inserts a `flyers` row with status='pending'
 in the real local Supabase DB started via `supabase start`.
@@ -13,7 +13,6 @@ Run:
 
 from __future__ import annotations
 
-import io
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -51,7 +50,13 @@ def _make_supabase_real_db_mock_storage() -> object:
         os.environ["SUPABASE_SECRET_KEY"],
     )
     storage_mock = MagicMock()
-    storage_mock.from_.return_value.upload.return_value = MagicMock()
+    storage_mock.from_.return_value.create_signed_upload_url.return_value = {
+        "path": "user-id/test.pdf",
+        "token": "signed-token",
+        "signed_url": "https://storage.test/upload",
+    }
+    storage_mock.from_.return_value.download.return_value = b"%PDF-1.4 test"
+    storage_mock.from_.return_value.remove.return_value = MagicMock()
     storage_mock.from_.return_value.get_public_url.return_value = (
         "https://storage.test/flyers/test.pdf"
     )
@@ -73,7 +78,7 @@ def _make_supabase_real_db_mock_storage() -> object:
 
 
 class TestFlyerUploadIntegration:
-    """Integration tests for POST /flyers/upload.
+    """Integration tests for signed flyer upload flow.
 
     Auth dependencies are overridden; storage is mocked; DB operations are real.
     """
@@ -122,16 +127,60 @@ class TestFlyerUploadIntegration:
             .execute()
         ).data[0]
 
-    async def test_pdf_upload_creates_pending_row(self, supabase_client, clean_db, supermarket):
-        """Uploading a PDF creates a flyers row with status='pending' and file_type='pdf'."""
+    async def _complete_upload(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        supermarket_id: str,
+        storage_path: str = "user-id/test.pdf",
+        file_name: str = "volantino.pdf",
+        content_type: str = "application/pdf",
+    ) -> httpx.Response:
+        return await client.post(
+            "/flyers/upload/complete",
+            json={
+                "storage_path": storage_path,
+                "file_name": file_name,
+                "content_type": content_type,
+                "supermarket_ids": [supermarket_id],
+            },
+        )
+
+    async def test_signed_url_uses_private_flyer_bucket(self, supermarket):
         sb = _make_supabase_real_db_mock_storage()
+        user_id = app.dependency_overrides[get_current_user_id]()
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
                 resp = await client.post(
-                    "/flyers/upload",
-                    files={"file": ("volantino.pdf", io.BytesIO(_unique_pdf()), "application/pdf")},
-                    data={"supermarket_ids": supermarket["id"]},
+                    "/flyers/upload-url",
+                    json={
+                        "file_name": "volantino.pdf",
+                        "content_type": "application/pdf",
+                        "size_bytes": 1234,
+                        "supermarket_ids": [supermarket["id"]],
+                    },
+                )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["bucket"] == "flyers"
+        assert body["token"] == "signed-token"
+        assert body["path"].startswith(f"{user_id}/")
+        sb.storage.from_.return_value.create_signed_upload_url.assert_called_once()
+
+    async def test_pdf_upload_creates_pending_row(self, supabase_client, clean_db, supermarket):
+        """Uploading a PDF creates a flyers row with status='pending' and file_type='pdf'."""
+        sb = _make_supabase_real_db_mock_storage()
+        user_id = app.dependency_overrides[get_current_user_id]()
+        storage_path = f"{user_id}/test.pdf"
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            with patch("api.routers.flyers.get_supabase", return_value=sb):
+                resp = await self._complete_upload(
+                    client,
+                    supermarket_id=supermarket["id"],
+                    storage_path=storage_path,
                 )
 
         assert resp.status_code == 201
@@ -159,13 +208,17 @@ class TestFlyerUploadIntegration:
         """Uploading a JPEG image creates a row with file_type='image'."""
         sb = _make_supabase_real_db_mock_storage()
         jpeg_bytes = b"\xff\xd8\xff" + uuid.uuid4().bytes  # unique JPEG header
+        sb.storage.from_.return_value.download.return_value = jpeg_bytes
+        user_id = app.dependency_overrides[get_current_user_id]()
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
-                resp = await client.post(
-                    "/flyers/upload",
-                    files={"file": ("volantino.jpg", io.BytesIO(jpeg_bytes), "image/jpeg")},
-                    data={"supermarket_ids": supermarket["id"]},
+                resp = await self._complete_upload(
+                    client,
+                    supermarket_id=supermarket["id"],
+                    storage_path=f"{user_id}/test.jpg",
+                    file_name="volantino.jpg",
+                    content_type="image/jpeg",
                 )
 
         assert resp.status_code == 201
@@ -185,13 +238,14 @@ class TestFlyerUploadIntegration:
     async def test_upload_without_supermarket_name_uses_target_name(self, supabase_client, clean_db, supermarket):
         """Omitting supermarket_name is valid when supermarket_ids are provided."""
         sb = _make_supabase_real_db_mock_storage()
+        user_id = app.dependency_overrides[get_current_user_id]()
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
-                resp = await client.post(
-                    "/flyers/upload",
-                    files={"file": ("v.pdf", io.BytesIO(_unique_pdf()), "application/pdf")},
-                    data={"supermarket_ids": supermarket["id"]},
+                resp = await self._complete_upload(
+                    client,
+                    supermarket_id=supermarket["id"],
+                    storage_path=f"{user_id}/target-name.pdf",
                 )
 
         assert resp.status_code == 201
@@ -213,23 +267,24 @@ class TestFlyerUploadIntegration:
         pdf_content = _unique_pdf()
         sb1 = _make_supabase_real_db_mock_storage()
         sb2 = _make_supabase_real_db_mock_storage()
+        sb1.storage.from_.return_value.download.return_value = pdf_content
+        sb2.storage.from_.return_value.download.return_value = pdf_content
+        user_id = app.dependency_overrides[get_current_user_id]()
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            # First upload — must succeed
             with patch("api.routers.flyers.get_supabase", return_value=sb1):
-                r1 = await client.post(
-                    "/flyers/upload",
-                    files={"file": ("v.pdf", io.BytesIO(pdf_content), "application/pdf")},
-                    data={"supermarket_ids": supermarket["id"]},
+                r1 = await self._complete_upload(
+                    client,
+                    supermarket_id=supermarket["id"],
+                    storage_path=f"{user_id}/first.pdf",
                 )
             assert r1.status_code == 201
 
-            # Second upload — same bytes + same supermarket → duplicate → 409
             with patch("api.routers.flyers.get_supabase", return_value=sb2):
-                r2 = await client.post(
-                    "/flyers/upload",
-                    files={"file": ("v.pdf", io.BytesIO(pdf_content), "application/pdf")},
-                    data={"supermarket_ids": supermarket["id"]},
+                r2 = await self._complete_upload(
+                    client,
+                    supermarket_id=supermarket["id"],
+                    storage_path=f"{user_id}/second.pdf",
                 )
 
         assert r2.status_code == 409
@@ -238,13 +293,19 @@ class TestFlyerUploadIntegration:
     async def test_upload_always_creates_private_flyer(self, supabase_client, clean_db, supermarket):
         """Upload ignores any is_public field; flyers stay private until offer confirmation."""
         sb = _make_supabase_real_db_mock_storage()
+        user_id = app.dependency_overrides[get_current_user_id]()
 
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             with patch("api.routers.flyers.get_supabase", return_value=sb):
                 resp = await client.post(
-                    "/flyers/upload",
-                    files={"file": ("v.pdf", io.BytesIO(_unique_pdf()), "application/pdf")},
-                    data={"is_public": "true", "supermarket_ids": supermarket["id"]},
+                    "/flyers/upload/complete",
+                    json={
+                        "storage_path": f"{user_id}/private.pdf",
+                        "file_name": "v.pdf",
+                        "content_type": "application/pdf",
+                        "supermarket_ids": [supermarket["id"]],
+                        "is_public": True,
+                    },
                 )
 
         assert resp.status_code == 201

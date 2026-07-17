@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import sys
 import os
-import io
 import types
 from typing import Optional
 from unittest.mock import MagicMock, patch
@@ -119,18 +118,11 @@ MANAGER_PROFILE = {
 _SMALL_PDF = b"%PDF-1.4 fake pdf content"
 
 
-def _make_upload_file(
-    content: bytes = _SMALL_PDF,
-    content_type: str = "application/pdf",
-    filename: str = "test.pdf",
-) -> tuple:
-    return ("file", (filename, content, content_type))
-
-
 def _mock_supabase_for_upload(insert_return: Optional[dict] = None) -> MagicMock:
-    """Return a mock Supabase client that simulates Storage upload + table insert."""
+    """Return mock Supabase that simulates Storage download + table insert."""
     sb = MagicMock()
-    sb.storage.from_.return_value.upload.return_value = MagicMock()
+    sb.storage.from_.return_value.download.return_value = _SMALL_PDF
+    sb.storage.from_.return_value.remove.return_value = MagicMock()
     sb.storage.from_.return_value.get_public_url.return_value = "https://storage.example.com/flyers/test.pdf"
     row_data = insert_return or {
         "id": "flyer-uuid",
@@ -142,11 +134,19 @@ def _mock_supabase_for_upload(insert_return: Optional[dict] = None) -> MagicMock
     return sb
 
 
-async def _post_upload(dep_overrides: dict, files: list, data: dict | None = None) -> httpx.Response:
+async def _post_upload(dep_overrides: dict, data: dict | None = None) -> httpx.Response:
     test_app.dependency_overrides = dep_overrides
+    user_id = dep_overrides[_DEP_GET_USER_ID]()
+    body = {
+        "storage_path": f"{user_id}/test.pdf",
+        "file_name": "test.pdf",
+        "content_type": "application/pdf",
+        "supermarket_ids": ["sup-1"],
+    }
+    body.update(data or {})
     transport = httpx.ASGITransport(app=test_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.post("/flyers/upload", files=files, data=data or {})
+        return await client.post("/flyers/upload/complete", json=body)
 
 
 async def _get(url: str, dep_overrides: dict | None = None) -> httpx.Response:
@@ -177,8 +177,6 @@ class TestUploadFlyerPrivacy:
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
-                [_make_upload_file()],
-                data={"supermarket_ids": "sup-1"},
             )
 
         assert resp.status_code == 201
@@ -193,8 +191,7 @@ class TestUploadFlyerPrivacy:
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
-                [_make_upload_file()],
-                data={"is_public": "true", "supermarket_ids": "sup-1"},
+                data={"is_public": "true", "supermarket_ids": ["sup-1"]},
             )
 
         assert resp.status_code == 201
@@ -212,7 +209,7 @@ class TestUploadFlyerPrivacy:
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "mgr-123", _DEP_PROFILE: lambda: MANAGER_PROFILE},
-                [_make_upload_file()],
+                data={"storage_path": "mgr-123/test.pdf", "supermarket_ids": []},
             )
 
         assert resp.status_code == 201
@@ -227,8 +224,7 @@ class TestUploadFlyerPrivacy:
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "mgr-123", _DEP_PROFILE: lambda: MANAGER_PROFILE},
-                [_make_upload_file()],
-                data={"supermarket_ids": "sup-other"},
+                data={"storage_path": "mgr-123/test.pdf", "supermarket_ids": ["sup-other"]},
             )
 
         assert resp.status_code == 403
@@ -240,20 +236,17 @@ class TestUploadFlyerValidation:
         """Files with unsupported MIME types return 422."""
         resp = await _post_upload(
             {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
-            [_make_upload_file(content=b"data", content_type="text/plain", filename="test.txt")],
-            data={"supermarket_ids": "sup-1"},
+            data={"content_type": "text/plain", "file_name": "test.txt"},
         )
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
     async def test_oversized_file_rejected(self):
         """Files exceeding 50 MB return 413."""
-        large_content = b"x" * (50 * 1024 * 1024 + 1)
-        resp = await _post_upload(
-            {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
-            [_make_upload_file(content=large_content)],
-            data={"supermarket_ids": "sup-1"},
-        )
+        sb = _mock_supabase_for_upload()
+        sb.storage.from_.return_value.download.return_value = b"x" * (50 * 1024 * 1024 + 1)
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _post_upload({_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE})
         assert resp.status_code == 413
 
 
@@ -262,7 +255,8 @@ class TestUploadFlyerDuplicate:
     async def test_duplicate_hash_and_supermarket_returns_409(self):
         """Uploading the same file+supermarket twice returns 409 Conflict."""
         sb = MagicMock()
-        sb.storage.from_.return_value.upload.return_value = MagicMock()
+        sb.storage.from_.return_value.download.return_value = _SMALL_PDF
+        sb.storage.from_.return_value.remove.return_value = MagicMock()
         sb.storage.from_.return_value.get_public_url.return_value = "https://storage.example.com/flyers/dup.pdf"
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
@@ -270,8 +264,6 @@ class TestUploadFlyerDuplicate:
         ):
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
-                [_make_upload_file()],
-                data={"supermarket_ids": "sup-1"},
             )
 
         assert resp.status_code == 409
@@ -285,8 +277,6 @@ class TestUploadFlyerDuplicate:
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post_upload(
                 {_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE},
-                [_make_upload_file()],
-                data={"supermarket_ids": "sup-1"},
             )
 
         assert resp.status_code == 201
