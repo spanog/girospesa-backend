@@ -87,7 +87,8 @@ Contratto di conferma:
 - `POST /flyers/{flyer_id}/offers/confirm` conferma sempre le offerte del flyer sorgente come `source_master`.
 - La visibilita' pubblica su `/products` e `/flyers/public` dipende invece dai cloni `published_target`.
 - La conferma deve quindi essere idempotente: se una pubblicazione si interrompe dopo aver confermato il source ma prima di aver clonato tutto, rilanciare `confirm` deve completare i `published_target` mancanti e riallineare `products_count` del flyer pubblico al numero reale di offerte pubblicate.
-| `POST` | `/flyers/upload` | ✅ admin/manager | Upload volantino sorgente (PDF/JPG/PNG/WebP, max 50 MB) con uno o piu `supermarket_ids`; crea un solo flyer `status='pending'` + righe `flyer_targets` |
+| `POST` | `/flyers/upload-url` | ✅ admin/manager | Crea URL/token firmato per caricare direttamente nel bucket privato `flyers` senza passare il file dalla Function frontend; valida tipo, dimensione dichiarata e target manager/admin |
+| `POST` | `/flyers/upload/complete` | ✅ admin/manager | Valida oggetto Storage caricato (PDF/JPG/PNG/WebP, max 50 MB), calcola hash server-side, controlla duplicati e crea un solo flyer `status='pending'` + righe `flyer_targets` |
 | `POST` | `/flyers/{flyer_id}/extract` | ✅ admin/manager | Avvia estrazione AI per un volantino `pending` oppure riprende dal prossimo chunk non ancora completato quando esiste progresso PDF persistito (`status='error'` o retry manuale dopo failure transiente) |
 | `GET` | `/flyers/{flyer_id}/draft-offers` | ✅ admin/manager | Lista offerte estratte ma non confermate |
 | `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline di una draft offer; `detach_product=true` rimuove il binding catalogo senza creare prodotti |

@@ -32,12 +32,17 @@ Frontend
 ### 2. Upload volantino e estrazione AI
 
 ```
-  Utente carica PDF → POST /flyers/upload
+  Utente sceglie PDF → POST /flyers/upload-url
                          │
                          ▼
-  Backend: valida file (tipo + dimensione)
-  Backend: calcola SHA-256 → controlla duplicati (409 se già esiste)
-  Backend: carica su Supabase Storage (bucket flyers)
+  Frontend: upload diretto a Supabase Storage (bucket flyers privato)
+                         │
+                         ▼
+  Frontend: POST /flyers/upload/complete
+                         │
+                         ▼
+  Backend: scarica oggetto Storage, valida tipo + dimensione
+  Backend: calcola SHA-256 server-side → controlla duplicati (409 se già esiste)
   Backend: crea riga flyers con status='pending'
                          ▼
   Admin / manager: POST /flyers/{id}/extract

@@ -5,7 +5,7 @@ import uuid
 import hashlib
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 
 from pydantic import BaseModel, Field
 
@@ -82,6 +82,29 @@ class FlyerValidityUpdate(BaseModel):
 
 class FlyerTargetsUpdate(BaseModel):
     supermarket_ids: list[str] = Field(default_factory=list, min_length=1)
+
+
+class FlyerSignedUploadRequest(BaseModel):
+    file_name: str = Field(..., min_length=1)
+    content_type: str = Field(..., min_length=1)
+    size_bytes: int = Field(..., gt=0, le=MAX_FILE_SIZE)
+    supermarket_ids: list[str] = Field(default_factory=list)
+
+
+class FlyerSignedUploadResponse(BaseModel):
+    bucket: str
+    path: str
+    token: str
+    signed_url: str
+
+
+class FlyerUploadCompleteRequest(BaseModel):
+    storage_path: str = Field(..., min_length=1)
+    file_name: str = Field(..., min_length=1)
+    content_type: str = Field(..., min_length=1)
+    supermarket_ids: list[str] = Field(default_factory=list)
+    valid_from: str | None = None
+    valid_to: str | None = None
 
 
 def _parse_timestamp(value: object) -> datetime | None:
@@ -489,6 +512,135 @@ def _replace_flyer_targets(
         ).execute()
 
 
+def _file_ext(content_type: str) -> str:
+    if content_type == "application/pdf":
+        return "pdf"
+    if content_type == "image/png":
+        return "png"
+    if content_type == "image/webp":
+        return "webp"
+    return "jpg"
+
+
+def _file_type(content_type: str) -> str:
+    return "pdf" if content_type == "application/pdf" else "image"
+
+
+def _public_flyer_url(sb, storage_path: str) -> str:
+    return sb.storage.from_("flyers").get_public_url(storage_path)
+
+
+def _remove_flyer_object(sb, storage_path: str) -> None:
+    try:
+        sb.storage.from_("flyers").remove([storage_path])
+    except Exception:
+        pass
+
+
+def _normalize_requested_supermarkets(
+    profile: dict,
+    supermarket_ids: list[str],
+    supermarket_id: str | None = None,
+) -> list[str]:
+    requested = list(supermarket_ids)
+    if supermarket_id:
+        requested.append(supermarket_id)
+    return _resolve_upload_supermarket_ids(profile, list(dict.fromkeys(requested)))
+
+
+def _assert_upload_file_type(content_type: str) -> None:
+    if content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Unsupported file type: {content_type}",
+        )
+
+
+def _signed_upload_value(signed: object, key: str) -> str:
+    if isinstance(signed, dict):
+        return str(signed[key])
+    return str(getattr(signed, key))
+
+
+def _insert_source_flyer(sb, payload: dict) -> dict:
+    row = sb.table("flyers").insert(payload).execute()
+    return row.data[0]
+
+
+def _insert_flyer_targets(sb, flyer_id: str, supermarket_ids: list[str]) -> None:
+    sb.table("flyer_targets").insert(
+        [
+            {"flyer_id": flyer_id, "supermarket_id": supermarket_id}
+            for supermarket_id in supermarket_ids
+        ]
+    ).execute()
+
+
+def _build_rejected_targets(sb, requested_ids: list[str], conflicts: set[str]) -> list[dict]:
+    names = _supermarket_name_map(sb, list(conflicts))
+    return [
+        {
+            "supermarket_id": supermarket_id,
+            "supermarket_name": names.get(supermarket_id, supermarket_id),
+        }
+        for supermarket_id in requested_ids
+        if supermarket_id in conflicts
+    ]
+
+
+def _create_uploaded_flyer(
+    sb,
+    *,
+    user_id: str,
+    requested_ids: list[str],
+    file_hash: str,
+    file_url: str,
+    file_type: str,
+    file_name: str | None,
+    valid_from: str | None,
+    valid_to: str | None,
+) -> dict:
+    conflicts = _duplicate_target_conflicts(
+        sb,
+        file_hash=file_hash,
+        supermarket_ids=requested_ids,
+    )
+    accepted_ids = [value for value in requested_ids if value not in conflicts]
+    if not accepted_ids:
+        names = _supermarket_name_map(sb, requested_ids)
+        blocked = [
+            names.get(supermarket_id, supermarket_id)
+            for supermarket_id in requested_ids
+        ]
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Flyer already exists for: {', '.join(blocked)}",
+        )
+
+    names = _supermarket_name_map(sb, accepted_ids)
+    source_flyer = _insert_source_flyer(
+        sb,
+        {
+            "user_id": user_id,
+            "supermarket_name": names.get(accepted_ids[0]),
+            "supermarket_id": accepted_ids[0],
+            "file_url": file_url,
+            "file_type": file_type,
+            "file_name": file_name,
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+            "status": "pending",
+            "is_public": False,
+            "file_hash": file_hash,
+            "flyer_kind": "source",
+        },
+    )
+    _insert_flyer_targets(sb, source_flyer["id"], accepted_ids)
+    enriched = _enrich_flyer(sb, source_flyer)
+    enriched["rejected_targets"] = _build_rejected_targets(sb, requested_ids, conflicts)
+    return enriched
+
+
 def _sync_flyer_validity(
     sb,
     *,
@@ -713,114 +865,76 @@ async def download_flyer(
     return {"download_url": signed["signedURL"]}
 
 
-@router.post("/upload", status_code=status.HTTP_201_CREATED)
-async def upload_flyer(
-    file: Annotated[UploadFile, File()],
-    supermarket_ids: Annotated[list[str] | None, Form()] = None,
-    supermarket_name: str | None = Form(None),
-    supermarket_id: str | None = Form(None),
-    valid_from: str | None = Form(None),
-    valid_to: str | None = Form(None),
+@router.post("/upload-url")
+async def create_flyer_upload_url(
+    payload: FlyerSignedUploadRequest,
+    user_id: str = Depends(get_current_user_id),
+    profile: dict = Depends(require_admin_or_manager),
+) -> FlyerSignedUploadResponse:
+    """Return a signed Storage upload target for a flyer source file."""
+    _assert_upload_file_type(payload.content_type)
+    requested_ids = _normalize_requested_supermarkets(profile, payload.supermarket_ids)
+    if not requested_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Select at least one supermarket",
+        )
+    storage_path = f"{user_id}/{uuid.uuid4()}.{_file_ext(payload.content_type)}"
+    signed = get_supabase().storage.from_("flyers").create_signed_upload_url(storage_path)
+    return FlyerSignedUploadResponse(
+        bucket="flyers",
+        path=storage_path,
+        token=_signed_upload_value(signed, "token"),
+        signed_url=_signed_upload_value(signed, "signed_url"),
+    )
+
+
+@router.post("/upload/complete", status_code=status.HTTP_201_CREATED)
+async def complete_flyer_upload(
+    payload: FlyerUploadCompleteRequest,
     user_id: str = Depends(get_current_user_id),
     profile: dict = Depends(require_admin_or_manager),
 ) -> dict:
-    """Upload a flyer source and attach one or more target supermarkets."""
-    requested_ids = list(supermarket_ids or [])
-    if supermarket_id:
-        requested_ids.append(supermarket_id)
-    requested_ids = list(dict.fromkeys(requested_ids))
-    requested_ids = _resolve_upload_supermarket_ids(profile, requested_ids)
+    """Validate uploaded Storage object and create pending flyer source."""
+    _assert_upload_file_type(payload.content_type)
+    if not payload.storage_path.startswith(f"{user_id}/"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid flyer storage path",
+        )
+
+    requested_ids = _normalize_requested_supermarkets(profile, payload.supermarket_ids)
     if not requested_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Select at least one supermarket",
         )
 
-    if file.content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unsupported file type: {file.content_type}",
-        )
-
-    content = await file.read()
+    sb = get_supabase()
+    content = bytes(sb.storage.from_("flyers").download(payload.storage_path))
     if len(content) > MAX_FILE_SIZE:
+        _remove_flyer_object(sb, payload.storage_path)
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="File exceeds 50 MB limit",
         )
 
     file_hash = hashlib.sha256(content).hexdigest()
-    sb = get_supabase()
-    conflicts = _duplicate_target_conflicts(
-        sb,
-        file_hash=file_hash,
-        supermarket_ids=requested_ids,
-    )
-    accepted_ids = [value for value in requested_ids if value not in conflicts]
-    if not accepted_ids:
-        supermarket_names = _supermarket_name_map(sb, requested_ids)
-        blocked_names = [
-            supermarket_names.get(supermarket_id, supermarket_id)
-            for supermarket_id in requested_ids
-        ]
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Flyer already exists for: {', '.join(blocked_names)}",
+    try:
+        return _create_uploaded_flyer(
+            sb,
+            user_id=user_id,
+            requested_ids=requested_ids,
+            file_hash=file_hash,
+            file_url=_public_flyer_url(sb, payload.storage_path),
+            file_type=_file_type(payload.content_type),
+            file_name=payload.file_name,
+            valid_from=payload.valid_from,
+            valid_to=payload.valid_to,
         )
-    supermarket_names = _supermarket_name_map(sb, accepted_ids)
-    first_target_id = accepted_ids[0]
-    supermarket_name = supermarket_names.get(first_target_id, supermarket_name)
-    ext = "pdf" if file.content_type == "application/pdf" else "jpg"
-    storage_path = f"{user_id}/{uuid.uuid4()}.{ext}"
-    sb.storage.from_("flyers").upload(
-        path=storage_path,
-        file=content,
-        file_options={"content-type": file.content_type},
-    )
-
-    file_type = "pdf" if file.content_type == "application/pdf" else "image"
-    file_url = sb.storage.from_("flyers").get_public_url(storage_path)
-
-    row = (
-        sb.table("flyers")
-        .insert(
-            {
-                "user_id": user_id,
-                "supermarket_name": supermarket_name,
-                "supermarket_id": first_target_id,
-                "file_url": file_url,
-                "file_type": file_type,
-                "file_name": file.filename,
-                "valid_from": valid_from,
-                "valid_to": valid_to,
-                "status": "pending",
-                "is_public": False,
-                "file_hash": file_hash,
-                "flyer_kind": "source",
-            }
-        )
-        .execute()
-    )
-    source_flyer = row.data[0]
-    sb.table("flyer_targets").insert(
-        [
-            {"flyer_id": source_flyer["id"], "supermarket_id": supermarket_target_id}
-            for supermarket_target_id in accepted_ids
-        ]
-    ).execute()
-    enriched = _enrich_flyer(sb, source_flyer)
-    enriched["rejected_targets"] = [
-        {
-            "supermarket_id": supermarket_target_id,
-            "supermarket_name": _supermarket_name_map(sb, [supermarket_target_id]).get(
-                supermarket_target_id,
-                supermarket_target_id,
-            ),
-        }
-        for supermarket_target_id in requested_ids
-        if supermarket_target_id in conflicts
-    ]
-    return enriched
+    except HTTPException:
+        _remove_flyer_object(sb, payload.storage_path)
+        raise
 
 
 @router.get("/{flyer_id}")
