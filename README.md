@@ -47,6 +47,7 @@ Guida completa: [docs/local-development.md](docs/local-development.md).
 | Schema, RLS, Storage e Analytics B2B | [docs/data-model.md](docs/data-model.md) |
 | Scheduled jobs e cleanup | [docs/jobs.md](docs/jobs.md) |
 | Deploy produzione backend | [docs/deploy-production.md](docs/deploy-production.md) |
+| Deploy Render locale senza GitHub Actions | [docs/deploy-render-local.md](docs/deploy-render-local.md) |
 
 Use the workspace guide [../docs/deploy-production-guide.md](../docs/deploy-production-guide.md) only when coordinating multiple systems together: backend, frontend, DNS, Supabase, mobile apps, stores, and UAT.
 

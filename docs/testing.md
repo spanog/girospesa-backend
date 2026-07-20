@@ -46,4 +46,4 @@ RUN_PERFORMANCE_TESTS=1 .venv/bin/python -m pytest tests/performance -v -s
 ```
 
 Performance benchmarks use the same isolated integration stack as integration tests. Normal `pytest tests` runs skip them to avoid machine-dependent timing failures.
-GitHub Actions also exposes the performance suite as a manual `workflow_dispatch` job in backend CI.
+GitHub Actions exposes backend CI only as a manual `workflow_dispatch` workflow. The same workflow includes the performance suite as a manual job.

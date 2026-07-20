@@ -7,7 +7,7 @@ This file contains the backend-only production deployment runbook. Use the root 
 The backend deploys to Render from GitHub.
 
 - `render.yaml` describes the FastAPI web service.
-- `.github/workflows/ci.yml` runs backend CI.
+- `.github/workflows/ci.yml` runs backend CI only when started manually with `workflow_dispatch`, so pushes to `main` do not consume GitHub Actions minutes.
 - `.github/workflows/render-keepalive.yml` pings `/health` every 5 minutes.
 - `.github/workflows/daily-maintenance.yml` calls daily maintenance remotely.
 - `.github/workflows/supabase-db-production.yml` applies Supabase migrations when `supabase/**` changes on `main`.
@@ -43,9 +43,9 @@ The backend deploys to Render from GitHub.
 Code:
 
 1. Open PR.
-2. Wait for CI green.
+2. Run local backend tests, or start GitHub Actions `Backend CI` manually only when PR-grade remote validation is needed.
 3. Merge to `main`.
-4. Render auto-deploys.
+4. Render auto-deploys from the pushed `main` commit.
 5. Check `/health` and startup logs.
 
 Environment:

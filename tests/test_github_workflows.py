@@ -10,10 +10,12 @@ def _read(relative_path: str) -> str:
     return (BACKEND_ROOT / relative_path).read_text()
 
 
-def test_ci_workflow_runs_backend_tests_on_pull_requests():
+def test_ci_workflow_runs_backend_tests_manually_only():
     workflow = _read(".github/workflows/ci.yml")
 
-    assert "pull_request:" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "pull_request:" not in workflow
+    assert "push:" not in workflow
     assert "python -m pytest tests -v --ignore=tests/integration --ignore=tests/performance" in workflow
     assert "integration-test:" in workflow
     assert "docker compose version" in workflow
