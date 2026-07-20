@@ -11,6 +11,7 @@ The backend deploys to Render from GitHub.
 - `.github/workflows/render-keepalive.yml` pings `/health` every 5 minutes.
 - `.github/workflows/daily-maintenance.yml` calls daily maintenance remotely.
 - `.github/workflows/supabase-db-production.yml` applies Supabase migrations when `supabase/**` changes on `main`.
+- Render service auto-deploy is set to `On Commit` (`autoDeployTrigger: commit`) so it does not wait for GitHub checks.
 
 ## Quick Rules
 

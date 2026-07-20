@@ -14,6 +14,7 @@ Current service contract:
 - build command: `pip install -r requirements.txt`;
 - start command: `uvicorn main:app --host 0.0.0.0 --port $PORT --no-access-log`;
 - health check: `/health`;
+- auto-deploy trigger: `commit` / `On Commit`;
 - production API: `https://api.girospesa.it`.
 
 ## Local Prerequisites
