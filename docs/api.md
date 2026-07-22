@@ -80,13 +80,14 @@ Nota implementativa: `/products` restituisce sempre `{ items, nextPage, total?, 
 | `GET` | `/flyers/{flyer_id}` | ✅ admin/manager | Dettaglio singolo volantino |
 | `PATCH` | `/flyers/{flyer_id}` | ✅ admin/manager | Aggiorna `valid_from`/`valid_to` del flyer sorgente e propaga le stesse date a tutte le offerte collegate |
 | `GET` | `/flyers/{flyer_id}/targets` | ✅ admin/manager | Legge i supermercati target di un flyer sorgente |
-| `PUT/PATCH` | `/flyers/{flyer_id}/targets` | ✅ admin/manager | Aggiorna i supermercati target prima della conferma finale |
+| `PUT/PATCH` | `/flyers/{flyer_id}/targets` | ✅ admin/manager | Aggiorna i supermercati target; prima della conferma salva lo staging, dopo la conferma riconcilia flyer e offerte pubbliche `published_target` |
 
 Contratto di conferma:
 
 - `POST /flyers/{flyer_id}/offers/confirm` conferma sempre le offerte del flyer sorgente come `source_master`.
 - La visibilita' pubblica su `/products` e `/flyers/public` dipende invece dai cloni `published_target`.
 - La conferma deve quindi essere idempotente: se una pubblicazione si interrompe dopo aver confermato il source ma prima di aver clonato tutto, rilanciare `confirm` deve completare i `published_target` mancanti e riallineare `products_count` del flyer pubblico al numero reale di offerte pubblicate.
+- Dopo la conferma, `PUT/PATCH /flyers/{flyer_id}/targets` mantiene lo stesso contratto materiale: target aggiunti creano/upsertano flyer pubblici e offerte `published_target`, target rimossi eliminano le offerte pubbliche e il flyer clone di quel supermercato.
 | `POST` | `/flyers/upload-url` | ✅ admin/manager | Crea URL/token firmato per caricare direttamente nel bucket privato `flyers` senza passare il file dalla Function frontend; valida tipo, dimensione dichiarata e target manager/admin |
 | `POST` | `/flyers/upload/complete` | ✅ admin/manager | Valida oggetto Storage caricato (PDF/JPG/PNG/WebP, max 50 MB), calcola hash server-side, controlla duplicati e crea un solo flyer `status='pending'` + righe `flyer_targets` |
 | `POST` | `/flyers/{flyer_id}/extract` | ✅ admin/manager | Avvia estrazione AI per un volantino `pending` oppure riprende dal prossimo chunk non ancora completato quando esiste progresso PDF persistito (`status='error'` o retry manuale dopo failure transiente) |

@@ -163,6 +163,13 @@ async def _patch(url: str, dep_overrides: dict, json: dict) -> httpx.Response:
         return await client.patch(url, json=json)
 
 
+async def _put(url: str, dep_overrides: dict, json: dict) -> httpx.Response:
+    test_app.dependency_overrides = dep_overrides
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.put(url, json=json)
+
+
 # ---------------------------------------------------------------------------
 # Tests — upload privacy
 # ---------------------------------------------------------------------------
@@ -755,3 +762,182 @@ class TestUpdateFlyerValidity:
             call.args[0] == {"valid_from": "2026-05-01", "valid_to": "2026-05-10"}
             for call in flyers_table.update.call_args_list + offers_table.update.call_args_list
         )
+
+
+class TestUpdateFlyerTargets:
+    def test_duplicate_check_ignores_same_source_published_targets(self):
+        sb = MagicMock()
+        flyers = [
+            {
+                "flyer_kind": "published_target",
+                "supermarket_id": "sup-1",
+                "source_flyer_id": "flyer-source",
+            },
+            {
+                "flyer_kind": "published_target",
+                "supermarket_id": "sup-2",
+                "source_flyer_id": "flyer-other",
+            },
+        ]
+        sb.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=flyers
+        )
+
+        conflicts = _flyers_module._duplicate_target_conflicts(
+            sb,
+            file_hash="hash-1",
+            supermarket_ids=["sup-1", "sup-2"],
+            exclude_source_flyer_id="flyer-source",
+        )
+
+        assert conflicts == {"sup-2"}
+
+    @pytest.mark.asyncio
+    async def test_put_targets_syncs_published_offers_after_confirmation(self):
+        sb = MagicMock()
+        source_flyer = {
+            "id": "flyer-source",
+            "user_id": "admin-456",
+            "supermarket_id": "sup-1",
+            "supermarket_name": "Coop",
+            "status": "done",
+            "is_public": False,
+            "flyer_kind": "source",
+            "file_hash": "hash-1",
+        }
+        updated_flyer = {**source_flyer, "supermarket_id": "sup-2"}
+        flyers_table = MagicMock()
+        select_chain = flyers_table.select.return_value.eq.return_value
+        select_chain.maybe_single.return_value.execute.return_value = MagicMock(
+            data=source_flyer
+        )
+        select_chain.single.return_value.execute.return_value = MagicMock(
+            data=updated_flyer
+        )
+        flyers_table.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[]
+        )
+        sb.table.return_value = flyers_table
+        targets = [
+            {"supermarket_id": "sup-1", "supermarket_name": "Coop"},
+            {"supermarket_id": "sup-2", "supermarket_name": "Esselunga"},
+        ]
+
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._duplicate_target_conflicts", return_value=set()),
+            patch("api.routers.flyers._replace_flyer_targets") as replace_mock,
+            patch(
+                "api.routers.flyers._supermarket_name_map",
+                return_value={"sup-1": "Coop", "sup-2": "Esselunga"},
+            ),
+            patch("api.routers.flyers._flyer_targets", return_value=targets),
+            patch(
+                "api.routers.flyers._source_master_offers",
+                return_value=[{"id": "offer-1"}],
+            ),
+            patch(
+                "api.routers.flyers._sync_published_targets_for_source_flyer"
+            ) as sync_mock,
+        ):
+            resp = await _put(
+                "/flyers/flyer-source/targets",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+                {"supermarket_ids": ["sup-1", "sup-2"]},
+            )
+
+        assert resp.status_code == 200
+        replace_mock.assert_called_once_with(
+            sb,
+            flyer_id="flyer-source",
+            supermarket_ids=["sup-1", "sup-2"],
+        )
+        sync_mock.assert_called_once_with(
+            sb,
+            source_flyer=updated_flyer,
+            targets=targets,
+            notify_new=True,
+            source_offers=[{"id": "offer-1"}],
+        )
+
+    def test_sync_published_targets_adds_and_removes_public_materialization(self):
+        sb = MagicMock()
+        offers_table = MagicMock()
+        flyers_table = MagicMock()
+        flyers_table.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "flyer-pub-2"}]
+        )
+
+        def _dispatch(table_name: str) -> MagicMock:
+            if table_name == "offers":
+                return offers_table
+            if table_name == "flyers":
+                return flyers_table
+            raise AssertionError(f"unexpected table {table_name}")
+
+        sb.table.side_effect = _dispatch
+        source_flyer = {
+            "id": "flyer-source",
+            "user_id": "admin-456",
+            "file_url": "https://example.com/flyer.pdf",
+            "file_type": "pdf",
+            "file_name": "volantino.pdf",
+            "valid_from": "2026-05-01",
+            "valid_to": "2026-05-10",
+            "pages_count": 2,
+            "extraction_metadata": None,
+            "file_hash": "hash-1",
+        }
+        targets = [
+            {"supermarket_id": "sup-1", "supermarket_name": "Coop"},
+            {"supermarket_id": "sup-2", "supermarket_name": "Esselunga"},
+        ]
+        target_flyers_after = {
+            "sup-1": {"flyer_id": "flyer-pub-1", "supermarket_name": "Coop"},
+            "sup-2": {"flyer_id": "flyer-pub-2", "supermarket_name": "Esselunga"},
+        }
+
+        with (
+            patch(
+                "api.routers.flyers._published_target_flyers",
+                side_effect=[
+                    {
+                        "sup-1": {"flyer_id": "flyer-pub-1", "supermarket_name": "Coop"},
+                        "sup-old": {
+                            "flyer_id": "flyer-pub-old",
+                            "supermarket_name": "Old",
+                        },
+                    },
+                    target_flyers_after,
+                ],
+            ),
+            patch(
+                "api.routers.flyers._sync_published_clones_for_source_offers",
+                return_value={"flyer-pub-1": 1, "flyer-pub-2": 1},
+            ) as clone_sync,
+            patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
+        ):
+            counts = _flyers_module._sync_published_targets_for_source_flyer(
+                sb,
+                source_flyer=source_flyer,
+                targets=targets,
+                notify_new=True,
+                source_offers=[{"id": "offer-1"}],
+            )
+
+        offers_table.delete.return_value.in_.assert_called_once_with(
+            "flyer_id",
+            ["flyer-pub-old"],
+        )
+        flyers_table.delete.return_value.in_.assert_called_once_with(
+            "id",
+            ["flyer-pub-old"],
+        )
+        assert flyers_table.insert.call_args.args[0]["supermarket_id"] == "sup-2"
+        clone_sync.assert_called_once_with(
+            sb,
+            source_offers=[{"id": "offer-1"}],
+            target_flyers=target_flyers_after,
+        )
+        notify_mock.assert_called_once()
+        assert counts == {"flyer-pub-1": 1, "flyer-pub-2": 1}
