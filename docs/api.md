@@ -92,7 +92,7 @@ Contratto di conferma:
 | `POST` | `/flyers/upload/complete` | ✅ admin/manager | Valida oggetto Storage caricato (PDF/JPG/PNG/WebP, max 50 MB), calcola hash server-side, controlla duplicati e crea un solo flyer `status='pending'` + righe `flyer_targets` |
 | `POST` | `/flyers/{flyer_id}/extract` | ✅ admin/manager | Avvia estrazione AI per un volantino `pending` oppure riprende dal prossimo chunk non ancora completato quando esiste progresso PDF persistito (`status='error'` o retry manuale dopo failure transiente) |
 | `GET` | `/flyers/{flyer_id}/draft-offers` | ✅ admin/manager | Lista offerte estratte ma non confermate |
-| `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline di una draft offer; `detach_product=true` rimuove il binding catalogo senza creare prodotti |
+| `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline di una draft offer; `product_id` aggancia la bozza a un prodotto catalogo esistente, `detach_product=true` rimuove il binding catalogo senza creare prodotti |
 | `POST` | `/flyers/{flyer_id}/draft-offers/{offer_id}/image` | ✅ admin/manager | Upload immagine prodotto staged per una bozza non agganciata; salva `draft_image_url` fino alla conferma |
 | `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma le draft del flyer sorgente, crea/upserta i prodotti canonici mancanti, marca le righe sorgente come `source_master`, poi materializza/upserta un volantino pubblico distinto e un set di offerte `published_target` distinto per ogni supermercato target |
 | `POST` | `/flyers/admin/cleanup` | 👑 admin | Trigger manuale pulizia volantini scaduti (eseguita automaticamente ogni mezzanotte) |
