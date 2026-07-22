@@ -44,9 +44,25 @@ class TestNormalizeFormat:
         with pytest.raises(ValueError, match="Plain text product format"):
             normalize_format("500g")
 
-    def test_missing_required_fields_raise(self):
+    def test_single_pack_accepts_unknown_measure(self):
+        result = normalize_format({"tipo": "confezione_singola"})
+
+        assert result["tipo"] == "confezione_singola"
+
+    def test_single_pack_accepts_optional_piece_count(self):
+        result = normalize_format({
+            "tipo": "confezione_singola",
+            "num_pezzi": 24,
+            "unita_misura": "pezzo",
+        })
+
+        assert result["tipo"] == "confezione_singola"
+        assert result["num_pezzi"] == 24
+        assert result["unita_misura"] is None
+
+    def test_single_pack_rejects_incomplete_weight_measure(self):
         with pytest.raises(ValueError, match="Missing required format fields"):
-            normalize_format({"tipo": "confezione_singola"})
+            normalize_format({"tipo": "confezione_singola", "peso_volume": 500})
 
 
 class TestFormatKey:
@@ -74,6 +90,15 @@ class TestFormatLabel:
             "peso_volume": 500,
             "unita_misura": "g",
         }) == "500 g"
+
+    def test_renders_single_pack_piece_label(self):
+        assert format_to_label({
+            "tipo": "confezione_singola",
+            "num_pezzi": 24,
+        }) == "24 pezzi"
+
+    def test_renders_unknown_single_pack_label_as_empty(self):
+        assert format_to_label({"tipo": "confezione_singola"}) == ""
 
     def test_bundle_reuses_canonical_label(self):
         bundle = build_format_bundle({"tipo": "sfuso", "unita_sfuso": "kg"})
@@ -134,6 +159,21 @@ class TestBuildFormatBundle:
             "unita_misura": "g",
         }
         assert "peso_approssimativo" not in bundle.format_compact
+
+    def test_single_pack_piece_count_compacts_without_piece_unit(self):
+        bundle = build_format_bundle({
+            "tipo": "confezione_singola",
+            "peso_volume": None,
+            "unita_misura": "pezzo",
+            "num_pezzi": 24,
+        })
+
+        assert bundle.format_compact == {
+            "tipo": "confezione_singola",
+            "num_pezzi": 24,
+        }
+        assert bundle.format_key == 'v1:{"num_pezzi":24,"tipo":"confezione_singola"}'
+        assert bundle.format_label == "24 pezzi"
 
 
 class TestExplodeVariants:

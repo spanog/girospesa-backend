@@ -126,6 +126,7 @@ Contratto di conferma:
 - `format_label` è solo display/search aid. Non definisce unicità.
 - Le API pubbliche e admin restituiscono sempre sia `format` sia `format_label`.
 - Le API admin e draft-offer accettano solo `format` strutturato. Il backend rifiuta `format` testuale legacy.
+- `format.tipo="confezione_singola"` può rappresentare confezioni senza peso o volume noto. Quando disponibile, usare `peso_volume` + `unita_misura`; per confezioni contabili usare `num_pezzi`; se il dato non è presente, mantenere solo `tipo`.
 - Il provider LLM deve emettere un `format` strutturato sparso: solo `tipo` e campi pertinenti, senza `null` superflui. Il backend resta source of truth per canonicalizzazione e compattazione.
 - `format.varianti` è consentito solo in input estrazione LLM: il backend lo espande in prodotti/offerte distinti prima dell'upsert. Nessun prodotto persistito rappresenta un parent con varianti miste.
 - Matching fuzzy/optimizer usa `name`, `brand`, `format_label`; mai JSON raw.

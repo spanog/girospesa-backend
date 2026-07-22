@@ -208,7 +208,7 @@ class ProductFormat(BaseModel):
     def _validate_required_fields(self) -> "ProductFormat":
         required_by_type: dict[FormatType, tuple[str, ...]] = {
             FormatType.SFUSO: ("unita_sfuso",),
-            FormatType.CONFEZIONE_SINGOLA: ("peso_volume", "unita_misura"),
+            FormatType.CONFEZIONE_SINGOLA: tuple(),
             FormatType.MULTIPACK_OMOGENEO: ("quantita", "peso_volume", "unita_misura"),
             FormatType.N_PEZZI_PESO_TOTALE: ("num_pezzi", "peso_volume_totale", "unita_misura"),
             FormatType.MULTIPACK_PEZZI: ("quantita", "num_pezzi", "peso_volume_totale", "unita_misura"),
@@ -219,6 +219,8 @@ class ProductFormat(BaseModel):
         }
         if self.tipo is None:
             return self
+        if self.tipo == FormatType.CONFEZIONE_SINGOLA:
+            self._validate_single_pack_measure()
         missing = [
             field_name
             for field_name in required_by_type[self.tipo]
@@ -227,6 +229,14 @@ class ProductFormat(BaseModel):
         if missing:
             raise ValueError(f"Missing required format fields for {self.tipo}: {', '.join(missing)}")
         return self
+
+    def _validate_single_pack_measure(self) -> None:
+        has_weight = self.peso_volume is not None
+        has_unit = self.unita_misura is not None
+        if has_weight == has_unit:
+            return
+        missing = "unita_misura" if has_weight else "peso_volume"
+        raise ValueError(f"Missing required format fields for {self.tipo}: {missing}")
 
 
 ProductFormatVariant.model_rebuild()
@@ -278,7 +288,9 @@ def _format_label_from_normalized(data: dict[str, Any]) -> str:
         }
         return mapping.get(bulk, "")
     if tipo == FormatType.CONFEZIONE_SINGOLA:
-        label = f"{_number_to_label(data.get('peso_volume'))} {_unit_label(data.get('unita_misura'))}".strip()
+        label = _single_pack_label(data)
+        if not label:
+            return ""
         if data.get("peso_approssimativo"):
             label = f"ca. {label}"
         if data.get("peso_sgocciolato") is not None:
@@ -338,6 +350,14 @@ def _format_label_from_normalized(data: dict[str, Any]) -> str:
         if data.get("num_fogli_totali") is not None:
             pieces.append(f"{_number_to_label(data.get('num_fogli_totali'))} fogli")
         return ", ".join(pieces)
+    return ""
+
+
+def _single_pack_label(data: dict[str, Any]) -> str:
+    if data.get("peso_volume") is not None and data.get("unita_misura"):
+        return f"{_number_to_label(data.get('peso_volume'))} {_unit_label(data.get('unita_misura'))}"
+    if data.get("num_pezzi") is not None:
+        return f"{_number_to_label(data.get('num_pezzi'))} pezzi"
     return ""
 
 

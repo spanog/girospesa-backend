@@ -107,9 +107,13 @@ Usa `unita_sfuso` (`kg`, `etto`, `litro`, `pezzo`).
 Ometti tutti gli altri campi del formato.
 
 ### `confezione_singola`
-Usa:
+Usa, se indicati:
 - `peso_volume`
 - `unita_misura`
+- `num_pezzi` per confezioni contabili senza peso/volume (es. pannolini, salviette, assorbenti)
+
+Se peso/volume e numero pezzi non sono indicati, emetti solo:
+- `tipo: "confezione_singola"`
 
 Se il peso è indicato come "circa", imposta:
 - `peso_approssimativo: true`

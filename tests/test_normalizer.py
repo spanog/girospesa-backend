@@ -296,7 +296,7 @@ class TestNormalizeProduct:
                 "price_offer": 1.0,
             })
 
-    def test_incomplete_extraction_format_falls_back_to_partial_bundle(self):
+    def test_single_pack_with_unknown_measure_keeps_compact_format(self):
         result = normalize_product({
             "name": "Pasta",
             "format": {"tipo": "confezione_singola"},

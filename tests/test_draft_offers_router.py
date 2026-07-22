@@ -48,6 +48,22 @@ _DEP_USER_ID = _flyers_module.get_current_user_id
 test_app = FastAPI()
 test_app.include_router(router, prefix="/flyers")
 
+
+def test_draft_offer_update_accepts_countable_single_pack_format():
+    payload = _flyers_module.DraftOfferUpdate.model_validate({
+        "format": {
+            "tipo": "confezione_singola",
+            "peso_volume": None,
+            "unita_misura": "pezzo",
+            "num_pezzi": 24,
+        }
+    })
+
+    assert payload.format is not None
+    assert payload.format.tipo == "confezione_singola"
+    assert payload.format.num_pezzi == 24
+    assert payload.format.unita_misura is None
+
 # ---------------------------------------------------------------------------
 # Profiles
 # ---------------------------------------------------------------------------
