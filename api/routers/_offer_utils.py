@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import HTTPException, status
+from pydantic import ValidationError
 
 from core.database import get_supabase  # noqa: F401 — re-exported for callers
 from services.extraction.normalizer import format_unit_price_label
@@ -18,6 +19,16 @@ def draft_product_key(name: str | None, brand: str | None) -> str:
     normalized_name = " ".join((name or "").split()).strip().lower()
     normalized_brand = " ".join((brand or "").split()).strip().lower()
     return f"{normalized_name}|{normalized_brand}"
+
+
+def _resolved_format_label(offer: dict) -> str:
+    label = offer.get("format_label") or ""
+    if label or not offer.get("format"):
+        return label
+    try:
+        return build_format_bundle(offer["format"]).format_label
+    except (ValueError, ValidationError):
+        return label
 
 
 def _flatten_draft_offer(offer: dict) -> dict:
@@ -40,6 +51,7 @@ def _flatten_draft_offer(offer: dict) -> dict:
     subcategory = offer.get("draft_subcategory") if "draft_subcategory" in offer else product.get("subcategory")
     return {
         **offer,  # includes format, format_key, format_label from offers table
+        "format_label": _resolved_format_label(offer),
         "name": name,
         "brand": brand,
         "category": category,

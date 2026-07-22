@@ -437,6 +437,46 @@ class TestListDraftOffers:
         assert data[0]["unit_price_label"] == "1,29 €/kg"
         assert data[0]["image_url"] == "https://storage.test/drafts/offer-1.png"
 
+    @pytest.mark.asyncio
+    async def test_rebuilds_missing_format_label_from_structured_format(self):
+        sb = MagicMock()
+        flyer_result = MagicMock()
+        flyer_result.data = {"id": "flyer-1", "supermarket_id": "sup-1"}
+        sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+
+        draft_result = MagicMock()
+        draft_result.data = [
+            {
+                "id": "offer-1",
+                "flyer_id": "flyer-1",
+                "is_confirmed": False,
+                "draft_name": "Foglietti assorbicolori profumati",
+                "draft_brand": "Dexal",
+                "draft_category": "casa",
+                "draft_subcategory": "Detergenti Bucato e Stoviglie",
+                "format": {
+                    "tipo": "confezione_singola",
+                    "num_pezzi": 36,
+                },
+                "format_label": "",
+                "draft_image_url": None,
+                "unit_price": None,
+                "unit_price_value": None,
+                "unit_price_unit": None,
+                "products": None,
+            }
+        ]
+        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value = draft_result
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            resp = await _get(
+                "/flyers/flyer-1/draft-offers",
+                {_DEP_PROFILE: lambda: ADMIN_PROFILE, _DEP_USER_ID: lambda: "admin-1"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()[0]["format_label"] == "36 pezzi"
+
 
 # ---------------------------------------------------------------------------
 # update_draft_offer

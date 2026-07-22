@@ -58,6 +58,7 @@ Frontend
                          ▼
   Admin / manager:
     GET /flyers/{id}/draft-offers
+    → response ricostruisce format_label da format se manca
     PATCH draft offers
     POST /flyers/{id}/offers/confirm (crea prodotti nuovi se necessari)
                          │

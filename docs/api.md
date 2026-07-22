@@ -125,6 +125,7 @@ Contratto di conferma:
 - Identità prodotto canonico: `name + brand`.
 - `format_label` è solo display/search aid. Non definisce unicità.
 - Le API pubbliche e admin restituiscono sempre sia `format` sia `format_label`.
+- Le response admin ricostruiscono `format_label` da `format` quando il valore salvato è vuoto, così bozze già strutturate ma con label stale restano leggibili in review.
 - Le API admin e draft-offer accettano solo `format` strutturato. Il backend rifiuta `format` testuale legacy.
 - `format.tipo="confezione_singola"` può rappresentare confezioni senza peso o volume noto. Quando disponibile, usare `peso_volume` + `unita_misura`; per confezioni contabili usare `num_pezzi`; se il dato non è presente, mantenere solo `tipo`.
 - Il provider LLM deve emettere un `format` strutturato sparso: solo `tipo` e campi pertinenti, senza `null` superflui. Il backend resta source of truth per canonicalizzazione e compattazione.
