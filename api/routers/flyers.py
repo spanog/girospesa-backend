@@ -48,6 +48,7 @@ PROCESSING_RESUME_STALE_AFTER = timedelta(minutes=5)
 
 
 class DraftOfferUpdate(BaseModel):
+    product_id: str | None = None
     name: str | None = None
     brand: str | None = None
     category: str | None = None
@@ -1374,6 +1375,24 @@ async def update_draft_offer(
             status_code=status.HTTP_409_CONFLICT,
             detail="Confirmed offers must stay linked to a product",
         )
+    if payload.product_id and offer.get("is_confirmed"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Confirmed offers must stay linked to their original product",
+        )
+    if payload.product_id:
+        product = (
+            sb.table("products")
+            .select("id")
+            .eq("id", payload.product_id)
+            .maybe_single()
+            .execute()
+        )
+        if not product or not product.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found",
+            )
 
     offer_fields = {
         k: (normalize_unit_price_measure(v) if k == "unit_price_unit" else v)
@@ -1384,7 +1403,7 @@ async def update_draft_offer(
             "unit_price_unit": payload.unit_price_unit,
             "offer_notes": payload.offer_notes,
             "is_reviewed": payload.is_reviewed,
-            "product_id": None if payload.detach_product else None,
+            "product_id": None if payload.detach_product else payload.product_id,
         }.items()
         if k in sent or (k == "product_id" and payload.detach_product)
     }

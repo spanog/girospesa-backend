@@ -1378,6 +1378,84 @@ async def test_patch_draft_offer_sets_is_reviewed():
 
 
 @pytest.mark.anyio
+async def test_patch_draft_offer_links_existing_product():
+    """PATCH product_id attaches draft offer to existing catalog product."""
+    sb = MagicMock()
+    flyer_result = MagicMock(data={"id": "flyer-1", "supermarket_id": "sup-1"})
+    offer_result = MagicMock(data={
+        "id": "offer-1",
+        "product_id": None,
+        "flyer_id": "flyer-1",
+        "is_confirmed": False,
+    })
+    product_result = MagicMock(data={"id": "prod-1"})
+    updated_result = MagicMock(data={
+        "id": "offer-1",
+        "flyer_id": "flyer-1",
+        "product_id": "prod-1",
+        "draft_name": "Olio Extra Vergine",
+        "draft_brand": "Farchioni",
+        "draft_category": "dispensa",
+        "draft_subcategory": "Condimenti e Conserve",
+        "supermarket_id": "sup-1",
+        "supermarket_name": "Test",
+        "price_offer": 8.49,
+        "price_original": None,
+        "discount_pct": None,
+        "unit_price": None,
+        "unit_price_value": None,
+        "unit_price_unit": None,
+        "offer_notes": None,
+        "valid_from": None,
+        "valid_to": None,
+        "is_confirmed": False,
+        "is_reviewed": False,
+        "format": None,
+        "format_key": "",
+        "format_label": "",
+        "created_at": "2026-05-14T00:00:00Z",
+        "products": {
+            "id": "prod-1",
+            "name": "Olio Extra Vergine",
+            "brand": "Farchioni",
+            "category": "dispensa",
+            "subcategory": "Condimenti e Conserve",
+            "image_url": None,
+        },
+    })
+
+    table = sb.table.return_value
+    table.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+
+    flyer_query = MagicMock()
+    flyer_query.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+    offer_query = MagicMock()
+    offer_query.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = offer_result
+    product_query = MagicMock()
+    product_query.eq.return_value.maybe_single.return_value.execute.return_value = product_result
+    updated_query = MagicMock()
+    updated_query.eq.return_value.single.return_value.execute.return_value = updated_result
+    table.select.side_effect = [flyer_query, offer_query, product_query, updated_query]
+
+    with patch("api.routers.flyers.get_supabase", return_value=sb):
+        resp = await _patch_req(
+            "/flyers/flyer-1/draft-offers/offer-1",
+            {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+            json={"product_id": "prod-1"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["product_id"] == "prod-1"
+    assert body["binding_status"] == "existing"
+    assert body["linked_product"]["id"] == "prod-1"
+    assert any(
+        call.args[0].get("product_id") == "prod-1"
+        for call in table.update.call_args_list
+    )
+
+
+@pytest.mark.anyio
 async def test_patch_draft_offer_detaches_existing_product_without_creating_one():
     """Detaching removes product_id only; product creation is deferred to confirmation."""
     sb = MagicMock()
