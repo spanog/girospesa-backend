@@ -35,7 +35,6 @@ _config_mod = types.ModuleType("core.config")
 _settings_stub = MagicMock()
 _settings_stub.vapid_private_key = "test-private-key"
 _settings_stub.vapid_mailto = "mailto:test@example.com"
-_settings_stub.webhook_secret = "super-secret"
 _settings_stub.fcm_enabled = True
 _settings_stub.fcm_project_id = "test-project"
 _settings_stub.fcm_client_email = "fcm@example.com"
@@ -64,6 +63,7 @@ from services.push_notify import (
     PushEndpointGoneError,
     PushSubscription,
     notify_extraction_complete,
+    notify_favorite_offer_published,
     notify_public_flyer_published,
     send_native_push_notification,
     send_push_notification,
@@ -415,30 +415,17 @@ class TestNotifyFavoritesVisibility:
 
         assert resp.status_code == 204
 
-    @pytest.mark.asyncio
-    async def test_draft_offer_insert_does_not_notify(self):
-        app = FastAPI()
-        app.include_router(_push_router, prefix="/push")
-        transport = httpx.ASGITransport(app=app)
-
+    def test_draft_offer_insert_does_not_notify(self):
         sb = MagicMock()
-        with patch.object(_push_module, "get_supabase", return_value=sb):
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.post(
-                    "/push/notify-favorites",
-                    headers={"x-webhook-secret": "super-secret"},
-                    json={"record": {"product_id": "prod-1", "is_confirmed": False}},
-                )
 
-        assert resp.status_code == 204
+        notify_favorite_offer_published(
+            sb,
+            {"product_id": "prod-1", "is_confirmed": False},
+        )
+
         assert not sb.table.called
 
-    @pytest.mark.asyncio
-    async def test_confirmed_public_offer_creates_app_notification_without_subscription(self):
-        app = FastAPI()
-        app.include_router(_push_router, prefix="/push")
-        transport = httpx.ASGITransport(app=app)
-
+    def test_confirmed_public_offer_creates_app_notification_without_subscription(self):
         tables: dict[str, MagicMock] = {}
 
         def table(name: str) -> MagicMock:
@@ -481,24 +468,18 @@ class TestNotifyFavoritesVisibility:
         sb = MagicMock()
         sb.table.side_effect = table
 
-        with patch.object(_push_module, "get_supabase", return_value=sb):
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.post(
-                    "/push/notify-favorites",
-                    headers={"x-webhook-secret": "super-secret"},
-                    json={
-                        "record": {
-                            "product_id": "prod-1",
-                            "flyer_id": "flyer-1",
-                            "supermarket_id": "super-1",
-                            "discounted_price": 4.99,
-                            "valid_to": "2026-12-31",
-                            "is_confirmed": True,
-                        },
-                    },
-                )
+        notify_favorite_offer_published(
+            sb,
+            {
+                "product_id": "prod-1",
+                "flyer_id": "flyer-1",
+                "supermarket_id": "super-1",
+                "discounted_price": 4.99,
+                "valid_to": "2026-12-31",
+                "is_confirmed": True,
+            },
+        )
 
-        assert resp.status_code == 204
         notifications_table.insert.assert_called_once_with(
             {
                 "user_id": "user-1",
@@ -519,12 +500,7 @@ class TestNotifyFavoritesVisibility:
             }
         )
 
-    @pytest.mark.asyncio
-    async def test_confirmed_public_offer_keeps_inbox_when_push_disabled(self):
-        app = FastAPI()
-        app.include_router(_push_router, prefix="/push")
-        transport = httpx.ASGITransport(app=app)
-
+    def test_confirmed_public_offer_keeps_inbox_when_push_disabled(self):
         tables: dict[str, MagicMock] = {}
 
         def table(name: str) -> MagicMock:
@@ -560,23 +536,17 @@ class TestNotifyFavoritesVisibility:
         sb = MagicMock()
         sb.table.side_effect = table
 
-        with patch.object(_push_module, "get_supabase", return_value=sb):
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.post(
-                    "/push/notify-favorites",
-                    headers={"x-webhook-secret": "super-secret"},
-                    json={
-                        "record": {
-                            "product_id": "prod-1",
-                            "flyer_id": "flyer-1",
-                            "discounted_price": 4.99,
-                            "valid_to": "2026-12-31",
-                            "is_confirmed": True,
-                        },
-                    },
-                )
+        notify_favorite_offer_published(
+            sb,
+            {
+                "product_id": "prod-1",
+                "flyer_id": "flyer-1",
+                "discounted_price": 4.99,
+                "valid_to": "2026-12-31",
+                "is_confirmed": True,
+            },
+        )
 
-        assert resp.status_code == 204
         notifications_table.insert.assert_called_once()
         subscriptions_table.select.assert_called_once()
 
@@ -748,13 +718,14 @@ class TestNotifyPublicFlyerPublished:
         supermarket_table = MagicMock()
         supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
             "id": "super-1",
+            "slug": "coop",
             "lat": 45.4642,
             "lng": 9.19,
         }
         tables["supermarkets"] = supermarket_table
 
         profiles_table = MagicMock()
-        profiles_table.select.return_value.eq.return_value.execute.return_value.data = [
+        profiles_table.select.return_value.execute.return_value.data = [
             {
                 "id": "nearby-customer",
                 "role": "customer",
@@ -763,6 +734,7 @@ class TestNotifyPublicFlyerPublished:
                 "search_lat": None,
                 "search_lng": None,
                 "max_distance_km": 10,
+                "preferred_supermarkets": [],
             },
             {
                 "id": "far-customer",
@@ -772,6 +744,7 @@ class TestNotifyPublicFlyerPublished:
                 "search_lat": None,
                 "search_lng": None,
                 "max_distance_km": 10,
+                "preferred_supermarkets": [],
             },
         ]
         tables["user_profiles"] = profiles_table
@@ -804,11 +777,12 @@ class TestNotifyPublicFlyerPublished:
                 "user_id": "nearby-customer",
                 "kind": "flyer_published",
                 "title": "Nuovo volantino vicino a te",
-                "body": "Coop: 12 offerte nuove disponibili vicino a te",
+                "body": "Coop: 12 offerte nuove disponibili",
                 "data": {
                     "kind": "flyer_published",
                     "flyer_id": "flyer-1",
                     "supermarket_id": "super-1",
+                    "aggregation_key": "flyer-published:flyer-1",
                     "products_count": 12,
                     "url": "/volantini",
                 },
@@ -825,6 +799,7 @@ class TestNotifyPublicFlyerPublished:
         supermarket_table = MagicMock()
         supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
             "id": "super-1",
+            "slug": "coop",
             "lat": None,
             "lng": None,
         }
@@ -853,13 +828,14 @@ class TestNotifyPublicFlyerPublished:
         supermarket_table = MagicMock()
         supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
             "id": "super-1",
+            "slug": "coop",
             "lat": 45.4642,
             "lng": 9.19,
         }
         tables["supermarkets"] = supermarket_table
 
         profiles_table = MagicMock()
-        profiles_table.select.return_value.eq.return_value.execute.return_value.data = [
+        profiles_table.select.return_value.execute.return_value.data = [
             {
                 "id": "disabled-customer",
                 "role": "customer",
@@ -868,6 +844,7 @@ class TestNotifyPublicFlyerPublished:
                 "search_lat": None,
                 "search_lng": None,
                 "max_distance_km": 10,
+                "preferred_supermarkets": [],
             },
         ]
         tables["user_profiles"] = profiles_table
@@ -895,3 +872,115 @@ class TestNotifyPublicFlyerPublished:
         notifications_table.insert.assert_called_once()
         subscriptions_table.select.assert_called_once()
         mock_send.assert_not_called()
+
+    def test_notifies_admin_when_supermarket_is_preferred(self):
+        tables: dict[str, MagicMock] = {}
+
+        def table(name: str) -> MagicMock:
+            return tables[name]
+
+        supermarket_table = MagicMock()
+        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "id": "super-1",
+            "slug": "coop",
+            "lat": 45.4642,
+            "lng": 9.19,
+        }
+        tables["supermarkets"] = supermarket_table
+
+        profiles_table = MagicMock()
+        profiles_table.select.return_value.execute.return_value.data = [
+            {
+                "id": "admin-user",
+                "role": "admin",
+                "home_lat": 45.465,
+                "home_lng": 9.191,
+                "search_lat": None,
+                "search_lng": None,
+                "max_distance_km": 10,
+                "preferred_supermarkets": ["coop"],
+            },
+        ]
+        tables["user_profiles"] = profiles_table
+
+        notifications_table = MagicMock()
+        notifications_table.insert.return_value.execute.return_value.data = [{"id": "notif-1"}]
+        tables["app_notifications"] = notifications_table
+
+        subscriptions_table = MagicMock()
+        subscriptions_table.select.return_value.eq.return_value.execute.return_value.data = []
+        tables["push_subscriptions"] = subscriptions_table
+
+        sb = MagicMock()
+        sb.table.side_effect = table
+
+        notify_public_flyer_published(
+            sb,
+            flyer_id="flyer-1",
+            supermarket_id="super-1",
+            supermarket_name="Coop",
+            products_count=12,
+        )
+
+        notifications_table.insert.assert_called_once_with(
+            {
+                "user_id": "admin-user",
+                "kind": "flyer_published",
+                "title": "Nuovo volantino da Coop",
+                "body": "Coop: 12 offerte nuove disponibili",
+                "data": {
+                    "kind": "flyer_published",
+                    "flyer_id": "flyer-1",
+                    "supermarket_id": "super-1",
+                    "aggregation_key": "flyer-published:flyer-1",
+                    "products_count": 12,
+                    "url": "/volantini",
+                },
+            }
+        )
+
+    def test_skips_preferred_supermarket_outside_visible_radius(self):
+        tables: dict[str, MagicMock] = {}
+
+        def table(name: str) -> MagicMock:
+            return tables[name]
+
+        supermarket_table = MagicMock()
+        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
+            "id": "super-1",
+            "slug": "coop",
+            "lat": 45.4642,
+            "lng": 9.19,
+        }
+        tables["supermarkets"] = supermarket_table
+
+        profiles_table = MagicMock()
+        profiles_table.select.return_value.execute.return_value.data = [
+            {
+                "id": "admin-user",
+                "role": "admin",
+                "home_lat": 41.9028,
+                "home_lng": 12.4964,
+                "search_lat": None,
+                "search_lng": None,
+                "max_distance_km": 10,
+                "preferred_supermarkets": ["coop"],
+            },
+        ]
+        tables["user_profiles"] = profiles_table
+
+        notifications_table = MagicMock()
+        tables["app_notifications"] = notifications_table
+
+        sb = MagicMock()
+        sb.table.side_effect = table
+
+        notify_public_flyer_published(
+            sb,
+            flyer_id="flyer-1",
+            supermarket_id="super-1",
+            supermarket_name="Coop",
+            products_count=12,
+        )
+
+        notifications_table.insert.assert_not_called()

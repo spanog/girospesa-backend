@@ -80,6 +80,13 @@ def _import_main(monkeypatch):
     )
     monkeypatch.setitem(
         sys.modules,
+        "services.notification_jobs",
+        types.SimpleNamespace(
+            NotificationJobWorker=lambda: types.SimpleNamespace(run_pending=lambda: None),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
         "apscheduler.schedulers.asyncio",
         types.SimpleNamespace(
             AsyncIOScheduler=lambda: types.SimpleNamespace(
@@ -93,6 +100,11 @@ def _import_main(monkeypatch):
         sys.modules,
         "apscheduler.triggers.cron",
         types.SimpleNamespace(CronTrigger=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "apscheduler.triggers.interval",
+        types.SimpleNamespace(IntervalTrigger=lambda *args, **kwargs: None),
     )
     sys.modules.pop("main", None)
     return importlib.import_module("main")

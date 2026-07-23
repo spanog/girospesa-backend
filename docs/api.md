@@ -11,7 +11,6 @@ Il backend usa tre livelli di autenticazione:
 | **Utente autenticato** | JWT Supabase in header `Authorization: Bearer <token>` | Quasi tutti gli endpoint |
 | **Admin** | JWT valido + ruolo `admin` risolto server-side dal profilo utente | `/admin/*` |
 | **API key B2B** | Header `X-API-Key: <key>` | `GET /analytics/b2b` |
-| **Webhook secret** | Header `X-Webhook-Secret: <secret>` | `POST /push/notify-favorites` |
 
 ### Utenti (`/users`)
 
@@ -170,16 +169,16 @@ Contratto di conferma:
 | `POST` | `/push/native/subscribe` | ✅ | Registra token FCM app mobile |
 | `POST` | `/push/native/unsubscribe` | ✅ | Cancella token FCM app mobile |
 | `DELETE` | `/push/subscriptions` | ✅ | Cancella tutte le subscription web/native dell'utente |
-| `POST` | `/push/notify-favorites` | Webhook secret | Webhook Supabase: nuova offerta pubblica, confermata e attiva → aggiorna una singola `app_notifications.favorite_offer` per `utente + flyer` e invia Web Push agli utenti che hanno quel prodotto tra i preferiti |
 
 Le notifiche Web Push e native FCM condividono lo stesso payload `data`, incluso `kind`, `flyer_id`, `status`, `products_count` e `url`. Il frontend usa questi campi per aggiornare subito la cache e aprire il deep link corretto. Le notifiche native FCM includono `android.notification.icon = "ic_notification"` e `android.notification.color = "#1E7A45"` per forzare la preview Android brandizzata, oltre a `apns.payload.aps.sound = "default"` per attivare il suono standard di iOS quando le impostazioni del dispositivo lo consentono.
-Le notifiche `favorite_offer` restano guidate dal prodotto preferito, non da `preferred_supermarkets`: il supermercato preferito serve ai filtri customer, non al routing notifiche. In locale o in ambienti senza `WEBHOOK_SECRET`, la conferma volantino pubblica le stesse `favorite_offer` direttamente durante la creazione dei cloni `published_target`, così l'inbox non dipende dal solo webhook esterno. Quando più prodotti preferiti dello stesso utente compaiono nello stesso flyer, il backend aggiorna una sola notifica aggregata per quel `user_id + flyer_id` invece di generarne una per ogni offerta.
+La conferma di un volantino accoda job `notification_jobs` idempotenti e non invia in modo sincrono a tutti gli utenti. Il worker drenato da APScheduler o da `/ops/cron/notifications` crea le notifiche `favorite_offer` e `flyer_published`, persistendo sempre lo storico in `app_notifications` prima di inviare Web Push/FCM. Quando più prodotti preferiti dello stesso utente compaiono nello stesso flyer, il backend aggiorna una sola notifica aggregata per quel `user_id + flyer_id`. Le notifiche `flyer_published` raggiungono utenti che vedono il punto vendita nel raggio configurato; se il supermercato è anche tra i preferiti, il titolo usa il nome del supermercato.
 
 ### Ops (`/ops`)
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
 | `POST` | `/ops/cron/daily-maintenance` | Header `X-Ops-Secret` | Esegue cleanup offerte di flyer scaduti e rimozione item acquistati scaduti; se uno step fallisce risponde `status=partial_error` con array `errors` e continua gli altri cleanup; usato dal workflow GitHub schedulato |
+| `POST` | `/ops/cron/notifications` | Header `X-Ops-Secret` | Drena i job `notification_jobs` pendenti con retry e risposta `{claimed, processed, failed}`; usabile da cron esterno oltre allo scheduler interno |
 
 ### Acquisti (`/purchases`)
 

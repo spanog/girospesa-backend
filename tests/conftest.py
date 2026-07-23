@@ -154,6 +154,7 @@ TRUNCATE_TABLES = [
     "list_invites",
     "shopping_lists",
     "favorites",
+    "notification_jobs",
     "offers",
     "products",
     "flyers",

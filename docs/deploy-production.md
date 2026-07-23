@@ -86,7 +86,6 @@ Set these in Render Dashboard: service `girospesa-backend` → `Environment`.
 | `VAPID_PRIVATE_KEY` | Web Push | Private VAPID key used to sign browser push notifications. | Generate VAPID keypair with `pywebpush`/`web-push`; keep private key only in Render. |
 | `VAPID_PUBLIC_KEY` | Web Push | Public VAPID key used by frontend/browser subscription. | Same generated VAPID keypair; also copy to frontend/mobile config where subscription is created. |
 | `VAPID_MAILTO` | Web Push | Contact claim sent with VAPID requests. | `mailto:info@girospesa.it`, fixed in `render.yaml`. |
-| `WEBHOOK_SECRET` | Push webhook | Shared secret for Supabase Database Webhook → `POST /push/notify-favorites`. | Generate once with `openssl rand -hex 32`; copy same value into Supabase webhook header `X-Webhook-Secret`. |
 | `OPS_CRON_SECRET` | Scheduled maintenance | Shared secret for GitHub Actions daily maintenance → `POST /ops/cron/daily-maintenance`. | Generate once with `openssl rand -hex 32`; copy same value to GitHub Secret `OPS_CRON_SECRET`. |
 
 Optional production integrations:
@@ -154,7 +153,7 @@ If Gemini changed, run extraction on a test flyer.
 
 ## Render Free Notes
 
-Render Free is not designed for stable production. It can spin down after inactivity and restart unexpectedly. The backend keeps local APScheduler, but production cleanup is also called by GitHub Actions through `POST /ops/cron/daily-maintenance`.
+Render Free is not designed for stable production. It can spin down after inactivity and restart unexpectedly. The backend keeps local APScheduler, but production cleanup is also called by GitHub Actions through `POST /ops/cron/daily-maintenance`. Publication notifications are queued in `notification_jobs`; APScheduler drains them every minute, and external cron can call `POST /ops/cron/notifications` with the same `OPS_CRON_SECRET` if an additional production heartbeat is needed.
 
 `render-keepalive.yml` pings `BACKEND_HEALTHCHECK_URL` every 5 minutes with retries and timeout. This mitigates cold starts, but it is not equivalent to a paid plan.
 

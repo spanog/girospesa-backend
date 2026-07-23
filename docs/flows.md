@@ -75,12 +75,13 @@ Frontend
   Backend: salva in push_subscriptions (upsert per user_id + endpoint)
                          │
   Admin o manager conferma nuove offerte
-  INSERT into offers ──▶ Supabase trigger
+  Backend crea cloni published_target
                          │
                          ▼
-  Webhook: POST /push/notify-favorites  (X-Webhook-Secret)
-    Backend: legge product_id + supermarket_name dalla nuova offerta
-    Backend: cerca utenti che hanno quel prodotto tra i preferiti
+  Backend accoda notification_jobs idempotenti
+                         │
+                         ▼
+  Worker notifiche legge offerte e utenti interessati
     Per ogni utente:
       → insert app_notifications.favorite_offer
       → fetch push_subscriptions esistenti

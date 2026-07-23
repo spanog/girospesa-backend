@@ -6,6 +6,7 @@ The backend runs scheduled background jobs via APScheduler (`AsyncIOScheduler`),
 
 - `flyer_cleanup` runs daily at 00:00 Europe/Rome and deletes offers linked to expired flyers, while keeping flyer rows/files for admin history.
 - `purchased_items_cleanup` runs daily at 00:00 Europe/Rome and removes purchased list items from previous Rome days, resetting the "Acquistati oggi" section automatically without touching purchase history.
+- `notification_jobs` runs every minute and drains queued publication notifications created by offer confirmation or target-publication sync. Jobs are idempotent and retried before moving to `dead`.
 
 ### Note storico acquisti
 
@@ -18,6 +19,7 @@ The backend runs scheduled background jobs via APScheduler (`AsyncIOScheduler`),
 |-----|----------|---------|-------------|
 | `flyer_cleanup` | Daily at 00:00 Europe/Rome | `services/flyer_cleanup.py` | Deletes offers linked to flyers where `valid_to < today`, but keeps the flyer row and uploaded file for historical/admin consultation. Flyers with `valid_to = NULL` are never auto-cleaned. |
 | `purchased_items_cleanup` | Daily at 00:00 Europe/Rome | `services/purchased_items_cleanup.py` | Removes from each shopping list all items already purchased on previous Rome days. Items still purchased today stay visible in "Acquistati oggi" until midnight. Purchase history is not deleted. |
+| `notification_jobs` | Every minute | `services/notification_jobs.py` | Claims pending/failed publication notification jobs, persists inbox rows in `app_notifications`, sends Web Push/native FCM, and retries failures without blocking flyer publication. |
 
 To trigger cleanup manually (ops or testing):
 
@@ -25,6 +27,14 @@ To trigger cleanup manually (ops or testing):
 curl -X POST http://localhost:8000/flyers/admin/cleanup \
   -H "Authorization: Bearer <admin-jwt>"
 # {"deleted": N}
+```
+
+To drain notification jobs manually:
+
+```bash
+curl -X POST http://localhost:8000/ops/cron/notifications \
+  -H "X-Ops-Secret: <ops-secret>"
+# {"status":"ok","claimed":N,"processed":N,"failed":0}
 ```
 
 ---

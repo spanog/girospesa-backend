@@ -351,9 +351,7 @@ class TestOfferLifecycleIntegration:
         clean_db,
         admin_profile,
         favorite_user_id,
-        monkeypatch,
     ):
-        monkeypatch.setattr(flyers_module.settings, "webhook_secret", None, raising=False)
         primary_store = (
             supabase_client.table("supermarkets")
             .insert(

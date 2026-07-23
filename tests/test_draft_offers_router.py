@@ -22,7 +22,6 @@ _settings_obj = MagicMock()
 _settings_obj.llm_provider = "gemini"
 _settings_obj.google_api_key = ""
 _settings_obj.gemini_model = "gemma-4-31b-it"
-_settings_obj.webhook_secret = "super-secret"
 _config_mod.settings = _settings_obj  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
@@ -781,7 +780,9 @@ class TestConfirmOffers:
                 "api.routers.flyers._sync_published_clones_for_source_offers",
                 return_value={"published-1": 3, "published-2": 3},
             ) as sync_mock,
-            patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
+            patch("api.routers.flyers.enqueue_flyer_published") as flyer_job_mock,
+            patch("api.routers.flyers.enqueue_favorite_offers_published") as favorite_job_mock,
+            patch("api.routers.flyers.NotificationJobWorker") as worker_cls,
         ):
             resp = await _post(
                 "/flyers/flyer-1/offers/confirm",
@@ -792,20 +793,23 @@ class TestConfirmOffers:
         assert data["confirmed"] == 3
         assert data["flyer_id"] == "flyer-1"
         assert len(data["published_flyers"]) == 2
-        notify_mock.assert_any_call(
+        flyer_job_mock.assert_any_call(
             sb,
             flyer_id=ANY,
             supermarket_id="sup-1",
             supermarket_name="Coop",
             products_count=3,
         )
-        notify_mock.assert_any_call(
+        flyer_job_mock.assert_any_call(
             sb,
             flyer_id=ANY,
             supermarket_id="sup-2",
             supermarket_name="Conad",
             products_count=3,
         )
+        assert favorite_job_mock.call_count == 2
+        favorite_job_mock.assert_any_call(sb, flyer_id=ANY)
+        worker_cls.return_value.run_pending.assert_called_once_with()
         sync_mock.assert_called()
         assert any(
             call.args[0] == {"is_confirmed": True, "offer_kind": "source_master"}
@@ -818,7 +822,8 @@ class TestConfirmOffers:
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
             patch("api.routers.flyers._flyer_targets", return_value=[{"supermarket_id": "sup-1", "supermarket_name": "Coop"}]),
-            patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
+            patch("api.routers.flyers.enqueue_flyer_published") as flyer_job_mock,
+            patch("api.routers.flyers.enqueue_favorite_offers_published") as favorite_job_mock,
         ):
             resp = await _post(
                 "/flyers/flyer-1/offers/confirm",
@@ -826,7 +831,8 @@ class TestConfirmOffers:
             )
         assert resp.status_code == 200
         assert resp.json()["confirmed"] == 0
-        notify_mock.assert_not_called()
+        flyer_job_mock.assert_not_called()
+        favorite_job_mock.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_confirm_reuses_all_source_offers_when_no_new_drafts_exist(self):
@@ -845,7 +851,8 @@ class TestConfirmOffers:
                 "api.routers.flyers._sync_published_clones_for_source_offers",
                 return_value={"published-1": 3},
             ) as sync_mock,
-            patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
+            patch("api.routers.flyers.enqueue_flyer_published") as flyer_job_mock,
+            patch("api.routers.flyers.enqueue_favorite_offers_published") as favorite_job_mock,
         ):
             resp = await _post(
                 "/flyers/flyer-1/offers/confirm",
@@ -857,7 +864,8 @@ class TestConfirmOffers:
         sync_mock.assert_called_once()
         synced_source_offers = sync_mock.call_args.kwargs["source_offers"]
         assert len(synced_source_offers) == 3
-        notify_mock.assert_not_called()
+        flyer_job_mock.assert_not_called()
+        favorite_job_mock.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_confirm_does_not_notify_when_flyer_already_public(self):
@@ -895,7 +903,9 @@ class TestConfirmOffers:
                 "api.routers.flyers._sync_published_clones_for_source_offers",
                 return_value={"published-1": 2},
             ),
-            patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
+            patch("api.routers.flyers.enqueue_flyer_published") as flyer_job_mock,
+            patch("api.routers.flyers.enqueue_favorite_offers_published") as favorite_job_mock,
+            patch("api.routers.flyers.NotificationJobWorker") as worker_cls,
         ):
             resp = await _post(
                 "/flyers/flyer-1/offers/confirm",
@@ -903,10 +913,12 @@ class TestConfirmOffers:
             )
 
         assert resp.status_code == 200
-        notify_mock.assert_not_called()
+        flyer_job_mock.assert_not_called()
+        favorite_job_mock.assert_called_once_with(sb, flyer_id=ANY)
+        worker_cls.return_value.run_pending.assert_called_once_with()
 
     @pytest.mark.asyncio
-    async def test_confirm_dispatches_favorite_notifications_without_webhook_secret(self):
+    async def test_confirm_enqueues_favorite_notifications_from_backend(self):
         sb = self._make_sb("done", 1)
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
@@ -920,9 +932,9 @@ class TestConfirmOffers:
                     {"sup-1": {"flyer_id": "published-1", "supermarket_name": "Coop"}},
                 ],
             ),
-            patch("api.routers.flyers.notify_public_flyer_published"),
-            patch("api.routers.flyers.notify_favorite_offer_published") as favorite_mock,
-            patch.object(_flyers_module.settings, "webhook_secret", ""),
+            patch("api.routers.flyers.enqueue_flyer_published"),
+            patch("api.routers.flyers.enqueue_favorite_offers_published") as favorite_job_mock,
+            patch("api.routers.flyers.NotificationJobWorker") as worker_cls,
         ):
             resp = await _post(
                 "/flyers/flyer-1/offers/confirm",
@@ -930,12 +942,8 @@ class TestConfirmOffers:
             )
 
         assert resp.status_code == 200
-        favorite_mock.assert_called_once()
-        clone = favorite_mock.call_args.args[1]
-        assert clone["product_id"] == "prod-0"
-        assert clone["flyer_id"] == "published-1"
-        assert clone["supermarket_id"] == "sup-1"
-        assert clone["offer_kind"] == "published_target"
+        favorite_job_mock.assert_called_once_with(sb, flyer_id=ANY)
+        worker_cls.return_value.run_pending.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_confirm_passes_draft_image_to_new_product(self):
@@ -1001,6 +1009,9 @@ class TestConfirmOffers:
                 return_value={"published-1": 1},
             ),
             patch("api.routers.flyers.upsert_product", return_value="prod-new") as mock_upsert,
+            patch("api.routers.flyers.enqueue_flyer_published"),
+            patch("api.routers.flyers.enqueue_favorite_offers_published"),
+            patch("api.routers.flyers.NotificationJobWorker"),
         ):
             resp = await _post(
                 "/flyers/flyer-1/offers/confirm",

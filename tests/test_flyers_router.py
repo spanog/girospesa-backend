@@ -915,7 +915,8 @@ class TestUpdateFlyerTargets:
                 "api.routers.flyers._sync_published_clones_for_source_offers",
                 return_value={"flyer-pub-1": 1, "flyer-pub-2": 1},
             ) as clone_sync,
-            patch("api.routers.flyers.notify_public_flyer_published") as notify_mock,
+            patch("api.routers.flyers.enqueue_flyer_published") as flyer_job_mock,
+            patch("api.routers.flyers.enqueue_favorite_offers_published") as favorite_job_mock,
         ):
             counts = _flyers_module._sync_published_targets_for_source_flyer(
                 sb,
@@ -939,5 +940,7 @@ class TestUpdateFlyerTargets:
             source_offers=[{"id": "offer-1"}],
             target_flyers=target_flyers_after,
         )
-        notify_mock.assert_called_once()
+        flyer_job_mock.assert_called_once()
+        favorite_job_mock.assert_any_call(sb, flyer_id="flyer-pub-1")
+        favorite_job_mock.assert_any_call(sb, flyer_id="flyer-pub-2")
         assert counts == {"flyer-pub-1": 1, "flyer-pub-2": 1}

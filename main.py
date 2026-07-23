@@ -10,6 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -36,6 +37,7 @@ from core.config import settings
 from core.logging_setup import configure_logging
 from services.flyer_cleanup import FlyerCleanupService
 from services.extraction_startup_recovery import ExtractionStartupRecoveryService
+from services.notification_jobs import NotificationJobWorker
 from services.purchased_items_cleanup import PurchasedItemsCleanupService
 
 configure_logging()
@@ -129,8 +131,16 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
         misfire_grace_time=None,
     )
+    scheduler.add_job(
+        NotificationJobWorker().run_pending,
+        IntervalTrigger(minutes=1),
+        id="notification_jobs",
+        replace_existing=True,
+        misfire_grace_time=30,
+        max_instances=1,
+    )
     scheduler.start()
-    logger.info("Nightly schedulers started (fire daily at midnight Europe/Rome)")
+    logger.info("Schedulers started: daily maintenance and notification jobs")
     yield
     scheduler.shutdown(wait=False)
 

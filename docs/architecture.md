@@ -54,7 +54,7 @@ girospesa-backend/
 │   ├── optimize.py           # Algoritmo greedy set-cover per ottimizzazione lista
 │   ├── supermarkets.py       # Directory supermercati (pubblica)
 │   ├── lists.py              # Lista singola + condivisione via inviti email
-│   ├── push.py               # Iscrizioni Web Push + webhook notifiche preferiti
+│   ├── push.py               # Iscrizioni Web Push/native
 │   ├── purchases.py          # Storico acquisti, tracking risparmio
 │   ├── analytics.py          # Analytics B2B anonimizzata (API key auth)
 │   ├── contact_requests.py   # Contatti pubblici, bug report, collaborazione, volantini mancanti

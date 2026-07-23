@@ -3,19 +3,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 
 from core.auth import get_current_user_id
-from core.config import settings
 from core.database import get_supabase
-from services.push_notify import (
-    notify_favorite_offer_published,
-)
 
 router = APIRouter()
-
-_WEBHOOK_SECRET_HEADER = "x-webhook-secret"
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -138,23 +132,4 @@ async def delete_all_subscriptions(
     """Remove all Web Push subscriptions for the authenticated user. Called on explicit logout."""
     sb = get_supabase()
     sb.table("push_subscriptions").delete().eq("user_id", user_id).execute()
-    return Response(status_code=204)
-
-
-@router.post("/notify-favorites", status_code=204)
-async def notify_favorites(request: Request) -> Response:
-    """
-    Webhook called by a Supabase Database Webhook on INSERT in the offers table.
-    Secured with the shared secret in the X-Webhook-Secret header.
-
-    Payload format (Supabase webhook):
-      { "type": "INSERT", "table": "offers", "record": { ...offer fields... } }
-    """
-    secret = request.headers.get(_WEBHOOK_SECRET_HEADER, "")
-    if not settings.webhook_secret or secret != settings.webhook_secret:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    payload = await request.json()
-    record: dict = payload.get("record", {})
-    notify_favorite_offer_published(get_supabase(), record)
     return Response(status_code=204)
