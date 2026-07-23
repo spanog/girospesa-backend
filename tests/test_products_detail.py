@@ -49,11 +49,13 @@ from fastapi import FastAPI
 import httpx
 import pytest
 
+import api.routers.products as products_module
 from api.routers.products import router
 from tests.snapshot_utils import assert_matches_json_snapshot
 
 test_app = FastAPI()
 test_app.include_router(router, prefix="/products")
+_DEP_OPTIONAL_USER_ID = products_module.get_optional_user_id
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -441,6 +443,47 @@ class TestListProducts:
 
         assert resp.status_code == 200
         order_mock.eq.assert_called_once_with("product_id", "prod-1")
+
+    @pytest.mark.asyncio
+    async def test_favorites_only_filters_offers_by_user_favorite_products(self):
+        favorites_table = MagicMock()
+        offers_table = MagicMock()
+        sb = MagicMock()
+        sb.table.side_effect = lambda name: (
+            favorites_table if name == "favorites" else offers_table
+        )
+        favorites_table.select.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"product_id": "prod-1"}, {"product_id": "prod-2"}]
+        )
+        execute_result = MagicMock(data=[_LIST_ROW], count=1)
+        select_mock = offers_table.select.return_value
+        eq_kind_mock = select_mock.eq.return_value.eq.return_value
+        order_mock = eq_kind_mock.order.return_value
+        order_mock.in_.return_value.range.return_value.execute.return_value = execute_result
+        eq_kind_mock.in_.return_value.execute.return_value = MagicMock(
+            data=[{"supermarket_id": "sm-1"}]
+        )
+        eq_kind_mock.gte.return_value.lte.return_value.in_.return_value.execute.return_value = MagicMock(
+            data=[],
+            count=0,
+        )
+
+        test_app.dependency_overrides = {_DEP_OPTIONAL_USER_ID: lambda: "user-1"}
+        try:
+            with patch("api.routers.products.get_supabase", return_value=sb):
+                resp = await _get("/products?favorites_only=true")
+        finally:
+            test_app.dependency_overrides = {}
+
+        assert resp.status_code == 200
+        favorites_table.select.return_value.eq.assert_called_once_with(
+            "user_id",
+            "user-1",
+        )
+        order_mock.in_.assert_called_once_with(
+            "product_id",
+            ["prod-1", "prod-2"],
+        )
 
 
 # ---------------------------------------------------------------------------
