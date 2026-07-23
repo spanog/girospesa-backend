@@ -1740,7 +1740,7 @@ async def confirm_offers(
             enqueue_favorite_offers_published(sb, flyer_id=published_flyer_id)
 
     if confirmed_count > 0:
-        background_tasks.add_task(NotificationJobWorker().run_pending)
+        background_tasks.add_task(NotificationJobWorker(sb).run_pending)
 
     return {
         "confirmed": confirmed_count,

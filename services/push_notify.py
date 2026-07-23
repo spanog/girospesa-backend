@@ -219,10 +219,11 @@ def _offer_is_currently_active(record: dict) -> bool:
     return True
 
 
-def _favorite_offer_url(*, product_id: str, match_count: int) -> str:
-    if match_count > 1:
-        return "/offerte?favorites=1&sort=published_at"
-    return f"/offerte?product_id={product_id}"
+def _favorite_offer_url(*, supermarket_id: str | None) -> str:
+    params = "favorites=1&sort=published_at"
+    if supermarket_id:
+        params = f"{params}&supermarket_id={supermarket_id}"
+    return f"/offerte?{params}"
 
 
 def _favorite_offer_aggregation_key(flyer_id: str) -> str:
@@ -235,17 +236,21 @@ def _favorite_offer_data(
     match_count: int,
     matched_product_ids: list[str] | None = None,
     matched_product_names: list[str] | None = None,
+    matched_offer_labels: list[str] | None = None,
 ) -> dict[str, object]:
     product_id = str(offer["product_id"])
     flyer_id = str(offer["flyer_id"])
     data: dict[str, object] = {
         "kind": "favorite_offer",
-        "url": _favorite_offer_url(product_id=product_id, match_count=match_count),
+        "url": _favorite_offer_url(
+            supermarket_id=str(offer.get("supermarket_id") or ""),
+        ),
         "product_id": product_id,
         "aggregation_key": _favorite_offer_aggregation_key(flyer_id),
         "match_count": match_count,
         "matched_product_ids": matched_product_ids or [product_id],
         "matched_product_names": matched_product_names or [],
+        "matched_offer_labels": matched_offer_labels or [],
     }
     if offer.get("id"):
         data["offer_id"] = str(offer["id"])
@@ -256,17 +261,26 @@ def _favorite_offer_data(
     return data
 
 
-def _favorite_offer_title(sb: object, product_id: str) -> str:
+def _favorite_product_details(sb: object, product_id: str) -> dict[str, str]:
     product_resp = (
         sb.table("products")  # type: ignore[union-attr]
-        .select("name")
+        .select("name, brand")
         .eq("id", product_id)
         .maybe_single()
         .execute()
     )
     product = product_resp.data if product_resp is not None else None
-    name = product.get("name") if product else None
-    return f"Nuova offerta: {name or 'prodotto'}"
+    if not product:
+        return {"name": "prodotto", "brand": ""}
+    return {
+        "name": str(product.get("name") or "prodotto"),
+        "brand": str(product.get("brand") or ""),
+    }
+
+
+def _favorite_offer_title(match_count: int, supermarket_name: str) -> str:
+    count_label = "1 offerta" if match_count == 1 else f"{match_count} offerte"
+    return f"{count_label} da {supermarket_name or 'supermercato'}"
 
 
 def _favorite_offer_supermarket_name(sb: object, offer: dict) -> str:
@@ -285,29 +299,21 @@ def _favorite_offer_supermarket_name(sb: object, offer: dict) -> str:
     return supermarket_name
 
 
-def _favorite_offer_body(sb: object, offer: dict) -> str:
-    supermarket_name = _favorite_offer_supermarket_name(sb, offer)
-
+def _favorite_offer_label(product: dict[str, str], offer: dict) -> str:
     price = offer.get("discounted_price") or offer.get("original_price")
-    valid_to = offer.get("valid_to", "")
-    parts = [
-        f"€{price:.2f}" if price else "",
-        f"da {supermarket_name}" if supermarket_name else "",
-        f"Valida fino al {valid_to}" if valid_to else "",
-    ]
-    return " — ".join(part for part in parts if part)
+    price_label = f"€{price:.2f}" if price else "prezzo disponibile"
+    product_name = product.get("name") or "prodotto"
+    brand = product.get("brand") or ""
+    product_label = f"{brand} - {product_name}" if brand else product_name
+    return f"{product_label} a {price_label}"
+
+
+def _favorite_offer_body(product: dict[str, str], offer: dict) -> str:
+    return _favorite_offer_label(product, offer)
 
 
 def _favorite_product_name(sb: object, product_id: str) -> str:
-    product_resp = (
-        sb.table("products")  # type: ignore[union-attr]
-        .select("name")
-        .eq("id", product_id)
-        .maybe_single()
-        .execute()
-    )
-    product = product_resp.data if product_resp is not None else None
-    return product.get("name") if product else "prodotto"
+    return _favorite_product_details(sb, product_id)["name"]
 
 
 def _merge_unique_strings(existing: list[object], incoming: list[str]) -> list[str]:
@@ -324,26 +330,19 @@ def _merge_unique_strings(existing: list[object], incoming: list[str]) -> list[s
     return merged
 
 
-def _favorite_offer_aggregate_title(match_count: int) -> str:
-    if match_count == 1:
-        return "Nuova offerta preferita"
-    if match_count == 2:
-        return "2 preferiti nel nuovo volantino"
-    return f"{match_count} preferiti nel nuovo volantino"
+def _favorite_offer_aggregate_title(match_count: int, supermarket_name: str) -> str:
+    return _favorite_offer_title(match_count, supermarket_name)
 
 
-def _favorite_offer_aggregate_body(
-    supermarket_name: str,
-    matched_product_names: list[str],
-) -> str:
-    preview = matched_product_names[:3]
-    suffix_count = max(len(matched_product_names) - len(preview), 0)
-    names_chunk = ", ".join(preview)
+def _favorite_offer_aggregate_body(matched_offer_labels: list[str]) -> str:
+    preview = matched_offer_labels[:2]
+    suffix_count = max(len(matched_offer_labels) - len(preview), 0)
+    names_chunk = "; ".join(preview)
     if suffix_count > 0:
         names_chunk = f"{names_chunk} e altri {suffix_count}"
     if names_chunk:
-        return f"{supermarket_name}: {names_chunk}"
-    return f"{supermarket_name}: nuovi preferiti in offerta"
+        return names_chunk
+    return "Prodotti preferiti in offerta"
 
 
 def _find_existing_notification(
@@ -435,9 +434,10 @@ def notify_favorite_offer_published(sb: object, offer: dict) -> None:
         return
 
     supermarket_name = _favorite_offer_supermarket_name(sb, offer)
-    single_title = _favorite_offer_title(sb, str(product_id))
-    single_body = _favorite_offer_body(sb, offer)
-    product_name = _favorite_product_name(sb, str(product_id))
+    product_details = _favorite_product_details(sb, str(product_id))
+    single_title = _favorite_offer_title(1, supermarket_name)
+    single_body = _favorite_offer_body(product_details, offer)
+    product_name = product_details["name"]
     favorites_resp = (
         sb.table("favorites")  # type: ignore[union-attr]
         .select("user_id")
@@ -470,18 +470,25 @@ def notify_favorite_offer_published(sb: object, offer: dict) -> None:
             else [],
             [product_name],
         )
+        matched_offer_labels = _merge_unique_strings(
+            existing_data.get("matched_offer_labels", [])
+            if isinstance(existing_data, dict)
+            else [],
+            [single_body],
+        )
         match_count = len(matched_product_ids)
         if match_count == 1:
             title = single_title
             body = single_body
         else:
-            title = _favorite_offer_aggregate_title(match_count)
-            body = _favorite_offer_aggregate_body(supermarket_name, matched_product_names)
+            title = _favorite_offer_aggregate_title(match_count, supermarket_name)
+            body = _favorite_offer_aggregate_body(matched_offer_labels)
         data = _favorite_offer_data(
             offer,
             match_count=match_count,
             matched_product_ids=matched_product_ids,
             matched_product_names=matched_product_names,
+            matched_offer_labels=matched_offer_labels,
         )
         _persist_favorite_offer_notification(
             sb,
@@ -515,6 +522,12 @@ def _persist_idempotent_notification(
         {"title": title, "body": body, "data": data, "read_at": None}
     ).eq("id", existing["id"]).execute()
     return False
+
+
+def _flyer_published_body(products_count: int) -> str:
+    if products_count == 1:
+        return "1 nuova offerta disponibile"
+    return f"{products_count} nuove offerte disponibili"
 
 
 def send_push_notification(
@@ -733,12 +746,8 @@ def notify_public_flyer_published(
         is_nearby_customer = profile.get("role") == "customer" and is_visible
         if not (is_preferred and is_visible) and not is_nearby_customer:
             continue
-        title = (
-            f"Nuovo volantino da {supermarket_name}"
-            if is_preferred
-            else "Nuovo volantino vicino a te"
-        )
-        body = f"{supermarket_name}: {products_count} offerte nuove disponibili"
+        title = f"Nuovo volantino da {supermarket_name}"
+        body = _flyer_published_body(products_count)
         should_push = _persist_idempotent_notification(
             sb,
             user_id=profile["id"],
