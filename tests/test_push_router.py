@@ -508,7 +508,7 @@ class TestNotifyFavoritesVisibility:
                     "kind": "favorite_offer",
                     "url": (
                         "/offerte?favorites=1&sort=published_at"
-                        "&supermarket_id=super-1"
+                        "&context_supermarket_id=super-1"
                     ),
                     "aggregation_key": "favorite-flyer:flyer-1",
                     "match_count": 1,
@@ -681,7 +681,7 @@ class TestNotifyFavoritesVisibility:
                     "kind": "favorite_offer",
                     "url": (
                         "/offerte?favorites=1&sort=published_at"
-                        "&supermarket_id=super-1"
+                        "&context_supermarket_id=super-1"
                     ),
                     "product_id": "prod-2",
                     "aggregation_key": "favorite-flyer:flyer-1",
