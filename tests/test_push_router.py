@@ -507,7 +507,7 @@ class TestNotifyFavoritesVisibility:
                 "data": {
                     "kind": "favorite_offer",
                     "url": (
-                        "/offerte?favorites=1&sort=published_at"
+                        "/offerte?favorites=1&sort=published_at&scroll=offers"
                         "&context_supermarket_id=super-1"
                     ),
                     "aggregation_key": "favorite-flyer:flyer-1",
@@ -680,7 +680,7 @@ class TestNotifyFavoritesVisibility:
                 "data": {
                     "kind": "favorite_offer",
                     "url": (
-                        "/offerte?favorites=1&sort=published_at"
+                        "/offerte?favorites=1&sort=published_at&scroll=offers"
                         "&context_supermarket_id=super-1"
                     ),
                     "product_id": "prod-2",
@@ -820,7 +820,7 @@ class TestNotifyPublicFlyerPublished:
                     "supermarket_id": "super-1",
                     "aggregation_key": "flyer-published:flyer-1",
                     "products_count": 12,
-                    "url": "/volantini",
+                    "url": "/offerte?sort=published_at&scroll=offers&context_supermarket_id=super-1",
                 },
             }
         )
@@ -970,7 +970,7 @@ class TestNotifyPublicFlyerPublished:
                     "supermarket_id": "super-1",
                     "aggregation_key": "flyer-published:flyer-1",
                     "products_count": 12,
-                    "url": "/volantini",
+                    "url": "/offerte?sort=published_at&scroll=offers&context_supermarket_id=super-1",
                 },
             }
         )
