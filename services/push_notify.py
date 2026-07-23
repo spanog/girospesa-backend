@@ -219,11 +219,21 @@ def _offer_is_currently_active(record: dict) -> bool:
     return True
 
 
-def _favorite_offer_url(*, supermarket_id: str | None) -> str:
-    params = "favorites=1&sort=published_at"
+def _offers_url(*, supermarket_id: str | None, favorites_only: bool) -> str:
+    params = ["sort=published_at", "scroll=offers"]
+    if favorites_only:
+        params.insert(0, "favorites=1")
     if supermarket_id:
-        params = f"{params}&context_supermarket_id={supermarket_id}"
-    return f"/offerte?{params}"
+        params.append(f"context_supermarket_id={supermarket_id}")
+    return f"/offerte?{'&'.join(params)}"
+
+
+def _favorite_offer_url(*, supermarket_id: str | None) -> str:
+    return _offers_url(supermarket_id=supermarket_id, favorites_only=True)
+
+
+def _flyer_published_url(*, supermarket_id: str | None) -> str:
+    return _offers_url(supermarket_id=supermarket_id, favorites_only=False)
 
 
 def _favorite_offer_aggregation_key(flyer_id: str) -> str:
@@ -737,7 +747,7 @@ def notify_public_flyer_published(
         "supermarket_id": supermarket_id,
         "aggregation_key": f"flyer-published:{flyer_id}",
         "products_count": products_count,
-        "url": "/volantini",
+        "url": _flyer_published_url(supermarket_id=supermarket_id),
     }
 
     for profile in profiles:
