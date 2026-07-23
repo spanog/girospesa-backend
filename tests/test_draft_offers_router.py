@@ -809,6 +809,7 @@ class TestConfirmOffers:
         )
         assert favorite_job_mock.call_count == 2
         favorite_job_mock.assert_any_call(sb, flyer_id=ANY)
+        worker_cls.assert_called_once_with(sb)
         worker_cls.return_value.run_pending.assert_called_once_with()
         sync_mock.assert_called()
         assert any(
@@ -915,6 +916,7 @@ class TestConfirmOffers:
         assert resp.status_code == 200
         flyer_job_mock.assert_not_called()
         favorite_job_mock.assert_called_once_with(sb, flyer_id=ANY)
+        worker_cls.assert_called_once_with(sb)
         worker_cls.return_value.run_pending.assert_called_once_with()
 
     @pytest.mark.asyncio
@@ -943,6 +945,7 @@ class TestConfirmOffers:
 
         assert resp.status_code == 200
         favorite_job_mock.assert_called_once_with(sb, flyer_id=ANY)
+        worker_cls.assert_called_once_with(sb)
         worker_cls.return_value.run_pending.assert_called_once_with()
 
     @pytest.mark.asyncio

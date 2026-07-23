@@ -62,12 +62,29 @@ from services.push_notify import (
     NativePushTokenGoneError,
     PushEndpointGoneError,
     PushSubscription,
+    _favorite_offer_aggregate_body,
     notify_extraction_complete,
     notify_favorite_offer_published,
     notify_public_flyer_published,
     send_native_push_notification,
     send_push_notification,
 )
+
+
+def test_favorite_offer_aggregate_body_details_up_to_two_products():
+    body = _favorite_offer_aggregate_body(
+        [
+            "Ferrero - Nutella a €2.99",
+            "Barilla - Pasta a €0.89",
+            "Mulino Bianco - Biscotti a €1.49",
+            "Parmareggio - Parmigiano a €4.99",
+        ]
+    )
+
+    assert (
+        body
+        == "Ferrero - Nutella a €2.99; Barilla - Pasta a €0.89 e altri 2"
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -441,6 +458,7 @@ class TestNotifyFavoritesVisibility:
         product_table = MagicMock()
         product_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
             "name": "Parmigiano Reggiano",
+            "brand": "Parmareggio",
         }
         tables["products"] = product_table
 
@@ -484,15 +502,21 @@ class TestNotifyFavoritesVisibility:
             {
                 "user_id": "user-1",
                 "kind": "favorite_offer",
-                "title": "Nuova offerta: Parmigiano Reggiano",
-                "body": "€4.99 — da Coop — Valida fino al 2026-12-31",
+                "title": "1 offerta da Coop",
+                "body": "Parmareggio - Parmigiano Reggiano a €4.99",
                 "data": {
                     "kind": "favorite_offer",
-                    "url": "/offerte?product_id=prod-1",
+                    "url": (
+                        "/offerte?favorites=1&sort=published_at"
+                        "&supermarket_id=super-1"
+                    ),
                     "aggregation_key": "favorite-flyer:flyer-1",
                     "match_count": 1,
                     "matched_product_ids": ["prod-1"],
                     "matched_product_names": ["Parmigiano Reggiano"],
+                    "matched_offer_labels": [
+                        "Parmareggio - Parmigiano Reggiano a €4.99"
+                    ],
                     "product_id": "prod-1",
                     "flyer_id": "flyer-1",
                     "supermarket_id": "super-1",
@@ -516,6 +540,7 @@ class TestNotifyFavoritesVisibility:
         product_table = MagicMock()
         product_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
             "name": "Parmigiano Reggiano",
+            "brand": "Parmareggio",
         }
         tables["products"] = product_table
 
@@ -565,10 +590,8 @@ class TestNotifyFavoritesVisibility:
 
         product_table = MagicMock()
         product_table.select.return_value.eq.return_value.maybe_single.return_value.execute.side_effect = [
-            MagicMock(data={"name": "Parmigiano Reggiano"}),
-            MagicMock(data={"name": "Parmigiano Reggiano"}),
-            MagicMock(data={"name": "Mozzarella"}),
-            MagicMock(data={"name": "Mozzarella"}),
+            MagicMock(data={"name": "Parmigiano Reggiano", "brand": "Parmareggio"}),
+            MagicMock(data={"name": "Mozzarella", "brand": "Santa Lucia"}),
         ]
         tables["products"] = product_table
 
@@ -598,6 +621,9 @@ class TestNotifyFavoritesVisibility:
                         "aggregation_key": "favorite-flyer:flyer-1",
                         "matched_product_ids": ["prod-1"],
                         "matched_product_names": ["Parmigiano Reggiano"],
+                        "matched_offer_labels": [
+                            "Parmareggio - Parmigiano Reggiano a €4.99"
+                        ],
                     },
                 }
             ]
@@ -646,16 +672,26 @@ class TestNotifyFavoritesVisibility:
         notifications_table.insert.assert_called_once()
         notifications_table.update.assert_called_once_with(
             {
-                "title": "2 preferiti nel nuovo volantino",
-                "body": "Coop: Parmigiano Reggiano, Mozzarella",
+                "title": "2 offerte da Coop",
+                "body": (
+                    "Parmareggio - Parmigiano Reggiano a €4.99; "
+                    "Santa Lucia - Mozzarella a €2.49"
+                ),
                 "data": {
                     "kind": "favorite_offer",
-                    "url": "/offerte?favorites=1&sort=published_at",
+                    "url": (
+                        "/offerte?favorites=1&sort=published_at"
+                        "&supermarket_id=super-1"
+                    ),
                     "product_id": "prod-2",
                     "aggregation_key": "favorite-flyer:flyer-1",
                     "match_count": 2,
                     "matched_product_ids": ["prod-1", "prod-2"],
                     "matched_product_names": ["Parmigiano Reggiano", "Mozzarella"],
+                    "matched_offer_labels": [
+                        "Parmareggio - Parmigiano Reggiano a €4.99",
+                        "Santa Lucia - Mozzarella a €2.49",
+                    ],
                     "offer_id": "offer-2",
                     "flyer_id": "flyer-1",
                     "supermarket_id": "super-1",
@@ -776,8 +812,8 @@ class TestNotifyPublicFlyerPublished:
             {
                 "user_id": "nearby-customer",
                 "kind": "flyer_published",
-                "title": "Nuovo volantino vicino a te",
-                "body": "Coop: 12 offerte nuove disponibili",
+                "title": "Nuovo volantino da Coop",
+                "body": "12 nuove offerte disponibili",
                 "data": {
                     "kind": "flyer_published",
                     "flyer_id": "flyer-1",
@@ -927,7 +963,7 @@ class TestNotifyPublicFlyerPublished:
                 "user_id": "admin-user",
                 "kind": "flyer_published",
                 "title": "Nuovo volantino da Coop",
-                "body": "Coop: 12 offerte nuove disponibili",
+                "body": "12 nuove offerte disponibili",
                 "data": {
                     "kind": "flyer_published",
                     "flyer_id": "flyer-1",

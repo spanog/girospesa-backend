@@ -492,4 +492,7 @@ class TestOfferLifecycleIntegration:
         assert {row["data"]["offer_id"] for row in notifications} == {
             offer["id"] for offer in published_rows
         }
-        assert all(row["title"] == "Nuova offerta: Pasta Barilla" for row in notifications)
+        assert {row["title"] for row in notifications} == {
+            f"1 offerta da {primary_store['name']}",
+            f"1 offerta da {secondary_store['name']}",
+        }
