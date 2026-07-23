@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from core.auth import get_optional_user_id
 from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
 from services.extraction.normalizer import format_unit_price_label
 from services.offer_visibility import apply_current_offer_window
@@ -125,6 +128,29 @@ def _apply_offer_filters(
     return query
 
 
+def _favorite_product_ids(
+    sb, user_id: str | None, favorites_only: bool
+) -> list[str] | None:
+    if not favorites_only:
+        return None
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    resp = sb.table("favorites").select("product_id").eq("user_id", user_id).execute()
+    return [row["product_id"] for row in (resp.data or []) if row.get("product_id")]
+
+
+def _combine_product_ids(
+    score_map: dict[str, float] | None,
+    favorite_product_ids: list[str] | None,
+) -> list[str] | None:
+    if score_map is None:
+        return favorite_product_ids
+    if favorite_product_ids is None:
+        return list(score_map.keys())
+    search_ids = set(score_map.keys())
+    return [product_id for product_id in favorite_product_ids if product_id in search_ids]
+
+
 def _apply_expiring_soon_filter(query, *, today: date) -> object:
     cutoff = today + timedelta(days=3)
     return query.gte("valid_to", today.isoformat()).lte("valid_to", cutoff.isoformat())
@@ -196,6 +222,7 @@ def _list_products_direct_postgres(
     *,
     q: str | None,
     product_id: str | None,
+    product_ids_filter: list[str] | None,
     category: str | None,
     subcategory: str | None,
     supermarket_ids: list[str] | None,
@@ -205,11 +232,10 @@ def _list_products_direct_postgres(
     offset: int,
     score_map: dict[str, float] | None,
 ) -> dict:
-    product_ids = list(score_map.keys()) if score_map is not None else []
     score_case_sql = "0::double precision"
     score_case_params: list[object] = []
-    if product_ids:
-        score_case_sql, score_case_params = _search_score_case(product_ids, score_map)
+    if score_map:
+        score_case_sql, score_case_params = _search_score_case(list(score_map.keys()), score_map)
 
     filters = [
         "o.is_confirmed = true",
@@ -222,6 +248,11 @@ def _list_products_direct_postgres(
     if product_id:
         filters.append("o.product_id = %s::uuid")
         params.append(product_id)
+    if product_ids_filter is not None:
+        if not product_ids_filter:
+            return _empty_page()
+        filters.append("o.product_id = ANY(%s::uuid[])")
+        params.append(product_ids_filter)
     if category:
         filters.append("p.category = %s")
         params.append(category)
@@ -231,11 +262,6 @@ def _list_products_direct_postgres(
     if supermarket_ids is not None:
         filters.append("o.supermarket_id = ANY(%s::uuid[])")
         params.append(supermarket_ids)
-    if q:
-        if not product_ids:
-            return _empty_page()
-        filters.append("o.product_id = ANY(%s::uuid[])")
-        params.append(product_ids)
     if expiring_soon:
         filters.append("o.valid_to >= CURRENT_DATE")
         filters.append("o.valid_to <= CURRENT_DATE + INTERVAL '3 day'")
@@ -401,6 +427,7 @@ def _list_products_direct_postgres(
 
 @router.get("")
 async def list_products(
+    user_id: Annotated[str | None, Depends(get_optional_user_id)],
     q: str | None = Query(None, description="Full-text search query"),
     product_id: str | None = Query(None, description="Exact canonical product id"),
     category: str | None = Query(None),
@@ -416,6 +443,7 @@ async def list_products(
     max_distance_km: float = Query(10.0, gt=0, le=20, description="Max supermarket distance in km"),
     sort: str | None = Query(None, description="Sort mode: expiry"),
     expiring_soon: bool = Query(False, description="Only offers expiring within 3 days"),
+    favorites_only: bool = Query(False, description="Only offers for current user's favourite products"),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
 ) -> dict:
@@ -448,11 +476,16 @@ async def list_products(
     score_map = _search_product_scores(sb, q)
     if score_map == {}:
         return _empty_page()
+    favorite_product_ids = _favorite_product_ids(sb, user_id, favorites_only)
+    product_ids_filter = _combine_product_ids(score_map, favorite_product_ids)
+    if product_ids_filter == []:
+        return _empty_page()
 
     if _use_direct_postgres():
         return _list_products_direct_postgres(
             q=q,
             product_id=product_id,
+            product_ids_filter=product_ids_filter,
             category=category,
             subcategory=subcategory,
             supermarket_ids=filtered_supermarket_ids,
@@ -463,10 +496,8 @@ async def list_products(
             score_map=score_map,
         )
 
-    product_ids = list(score_map.keys()) if score_map is not None else None
-
     filter_kwargs = dict(
-        product_ids=product_ids,
+        product_ids=product_ids_filter,
         exact_product_id=product_id,
         category=category,
         subcategory=subcategory,
