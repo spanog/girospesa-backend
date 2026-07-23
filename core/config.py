@@ -41,8 +41,6 @@ class Settings(BaseSettings):
     fcm_client_email: str = ""
     fcm_private_key: str = ""
 
-    # Shared secret for the Supabase Database Webhook → /push/notify-favorites
-    webhook_secret: str = ""
     ops_cron_secret: str = ""
 
     environment: str = "development"

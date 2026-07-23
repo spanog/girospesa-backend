@@ -37,7 +37,5 @@ services:
         sync: false
       - key: VAPID_MAILTO
         value: mailto:info@girospesa.it
-      - key: WEBHOOK_SECRET
-        sync: false
       - key: OPS_CRON_SECRET
         sync: false

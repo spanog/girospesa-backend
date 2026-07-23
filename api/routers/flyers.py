@@ -19,11 +19,12 @@ from core.auth import (
 from core.config import settings
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
-from services.offer_visibility import apply_current_offer_window
-from services.push_notify import (
-    notify_favorite_offer_published,
-    notify_public_flyer_published,
+from services.notification_jobs import (
+    NotificationJobWorker,
+    enqueue_favorite_offers_published,
+    enqueue_flyer_published,
 )
+from services.offer_visibility import apply_current_offer_window
 from services.product_format import ProductFormat, build_format_bundle
 from api.routers._offer_utils import (
     _OFFER_PRODUCT_SELECT,
@@ -394,7 +395,6 @@ def _sync_published_clones_for_source_offers(
     desired_keys: set[tuple[str, str]] = set()
     existing_payloads: list[dict] = []
     missing_payloads: list[dict] = []
-    inserted_notifications: list[dict] = []
     counts_by_flyer: dict[str, int] = {}
 
     for source_offer in source_offers:
@@ -413,15 +413,11 @@ def _sync_published_clones_for_source_offers(
             else:
                 clone = {"id": str(uuid.uuid4()), **payload}
                 missing_payloads.append(clone)
-                inserted_notifications.append(clone)
 
     if existing_payloads:
         sb.table("offers").upsert(existing_payloads, on_conflict="id").execute()
     if missing_payloads:
         sb.table("offers").insert(missing_payloads).execute()
-        if not getattr(settings, "webhook_secret", None):
-            for clone in inserted_notifications:
-                notify_favorite_offer_published(sb, clone)
 
     stale_clone_ids = [
         row["id"]
@@ -488,7 +484,7 @@ def _upsert_published_target_flyer(
     )
     flyer_id = inserted.data[0]["id"]
     if notify_new:
-        notify_public_flyer_published(
+        enqueue_flyer_published(
             sb,
             flyer_id=flyer_id,
             supermarket_id=target_supermarket_id,
@@ -540,6 +536,8 @@ def _sync_published_targets_for_source_flyer(
             "id",
             published_flyer_id,
         ).execute()
+        if notify_new:
+            enqueue_favorite_offers_published(sb, flyer_id=published_flyer_id)
     return counts
 
 
@@ -1588,6 +1586,7 @@ async def delete_draft_offer(
 @router.post("/{flyer_id}/offers/confirm")
 async def confirm_offers(
     flyer_id: str,
+    background_tasks: BackgroundTasks,
     profile: dict = Depends(require_admin_or_manager),
 ) -> dict:
     """Confirm source flyer offers and publish one derived flyer per target."""
@@ -1700,7 +1699,7 @@ async def confirm_offers(
             )
             published_flyer_id = inserted.data[0]["id"]
             if draft_rows and not flyer.get("is_public"):
-                notify_public_flyer_published(
+                enqueue_flyer_published(
                     sb,
                     flyer_id=published_flyer_id,
                     supermarket_id=target_supermarket_id,
@@ -1737,6 +1736,11 @@ async def confirm_offers(
         sb.table("flyers").update(
             {"products_count": published_counts.get(published_flyer_id, 0)}
         ).eq("id", published_flyer_id).execute()
+        if confirmed_count > 0:
+            enqueue_favorite_offers_published(sb, flyer_id=published_flyer_id)
+
+    if confirmed_count > 0:
+        background_tasks.add_task(NotificationJobWorker().run_pending)
 
     return {
         "confirmed": confirmed_count,

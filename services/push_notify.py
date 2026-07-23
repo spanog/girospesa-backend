@@ -186,6 +186,28 @@ def _profile_reference_point(profile: dict) -> tuple[float | None, float | None]
     return float(home_lat), float(home_lng)
 
 
+def _profile_prefers_supermarket(profile: dict, supermarket: dict) -> bool:
+    preferred = profile.get("preferred_supermarkets") or []
+    if not isinstance(preferred, list):
+        return False
+    keys = {str(supermarket.get("id") or ""), str(supermarket.get("slug") or "")}
+    return any(str(value) in keys for value in preferred)
+
+
+def _profile_is_within_radius(profile: dict, supermarket: dict) -> bool:
+    user_lat, user_lng = _profile_reference_point(profile)
+    if user_lat is None or user_lng is None:
+        return False
+    max_distance_km = float(profile.get("max_distance_km") or 10)
+    distance = _haversine_km(
+        user_lat,
+        user_lng,
+        float(supermarket["lat"]),
+        float(supermarket["lng"]),
+    )
+    return distance <= max_distance_km
+
+
 def _offer_is_currently_active(record: dict) -> bool:
     today = date.today().isoformat()
     valid_from = record.get("valid_from")
@@ -324,17 +346,18 @@ def _favorite_offer_aggregate_body(
     return f"{supermarket_name}: nuovi preferiti in offerta"
 
 
-def _find_existing_favorite_notification(
+def _find_existing_notification(
     sb: object,
     *,
     user_id: str,
+    kind: str,
     aggregation_key: str,
 ) -> dict | None:
     resp = (
         sb.table("app_notifications")  # type: ignore[union-attr]
         .select("id, data")
         .eq("user_id", user_id)
-        .eq("kind", "favorite_offer")
+        .eq("kind", kind)
         .contains("data", {"aggregation_key": aggregation_key})
         .order("created_at", desc=True)
         .limit(1)
@@ -342,6 +365,20 @@ def _find_existing_favorite_notification(
     )
     rows = resp.data if isinstance(resp.data, list) else []
     return rows[0] if rows else None
+
+
+def _find_existing_favorite_notification(
+    sb: object,
+    *,
+    user_id: str,
+    aggregation_key: str,
+) -> dict | None:
+    return _find_existing_notification(
+        sb,
+        user_id=user_id,
+        kind="favorite_offer",
+        aggregation_key=aggregation_key,
+    )
 
 
 def _persist_favorite_offer_notification(
@@ -416,6 +453,11 @@ def notify_favorite_offer_published(sb: object, offer: dict) -> None:
             aggregation_key=aggregation_key,
         )
         existing_data = existing.get("data", {}) if existing else {}
+        if (
+            isinstance(existing_data, dict)
+            and str(product_id) in existing_data.get("matched_product_ids", [])
+        ):
+            continue
         matched_product_ids = _merge_unique_strings(
             existing_data.get("matched_product_ids", [])
             if isinstance(existing_data, dict)
@@ -449,6 +491,30 @@ def notify_favorite_offer_published(sb: object, offer: dict) -> None:
             data=data,
         )
         _send_push_to_user(sb, user_id=user_id, title=title, body=body, data=data)
+
+
+def _persist_idempotent_notification(
+    sb: object,
+    *,
+    user_id: str,
+    kind: str,
+    title: str,
+    body: str,
+    data: dict[str, object],
+) -> bool:
+    existing = _find_existing_notification(
+        sb,
+        user_id=user_id,
+        kind=kind,
+        aggregation_key=str(data["aggregation_key"]),
+    )
+    if not existing:
+        _persist_notification(sb, user_id=user_id, kind=kind, title=title, body=body, data=data)
+        return True
+    sb.table("app_notifications").update(  # type: ignore[union-attr]
+        {"title": title, "body": body, "data": data, "read_at": None}
+    ).eq("id", existing["id"]).execute()
+    return False
 
 
 def send_push_notification(
@@ -627,7 +693,7 @@ def notify_public_flyer_published(
 ) -> None:
     supermarket_resp = (
         sb.table("supermarkets")  # type: ignore[union-attr]
-        .select("id, lat, lng")
+        .select("id, slug, lat, lng")
         .eq("id", supermarket_id)
         .maybe_single()
         .execute()
@@ -643,36 +709,37 @@ def notify_public_flyer_published(
     profiles_resp = (
         sb.table("user_profiles")  # type: ignore[union-attr]
         .select(
-            "id, role, home_lat, home_lng, search_lat, search_lng, max_distance_km"
+            "id, role, home_lat, home_lng, search_lat, search_lng, "
+            "max_distance_km, preferred_supermarkets"
         )
-        .eq("role", "customer")
         .execute()
     )
     profiles = profiles_resp.data or []
     if not profiles:
         return
 
-    title = "Nuovo volantino vicino a te"
-    body = f"{supermarket_name}: {products_count} offerte nuove disponibili vicino a te"
     data = {
         "kind": "flyer_published",
         "flyer_id": flyer_id,
         "supermarket_id": supermarket_id,
+        "aggregation_key": f"flyer-published:{flyer_id}",
         "products_count": products_count,
         "url": "/volantini",
     }
 
-    target_lat = float(supermarket["lat"])
-    target_lng = float(supermarket["lng"])
-
     for profile in profiles:
-        user_lat, user_lng = _profile_reference_point(profile)
-        if user_lat is None or user_lng is None:
+        is_preferred = _profile_prefers_supermarket(profile, supermarket)
+        is_visible = _profile_is_within_radius(profile, supermarket)
+        is_nearby_customer = profile.get("role") == "customer" and is_visible
+        if not (is_preferred and is_visible) and not is_nearby_customer:
             continue
-        max_distance_km = float(profile.get("max_distance_km") or 10)
-        if _haversine_km(user_lat, user_lng, target_lat, target_lng) > max_distance_km:
-            continue
-        _persist_notification(
+        title = (
+            f"Nuovo volantino da {supermarket_name}"
+            if is_preferred
+            else "Nuovo volantino vicino a te"
+        )
+        body = f"{supermarket_name}: {products_count} offerte nuove disponibili"
+        should_push = _persist_idempotent_notification(
             sb,
             user_id=profile["id"],
             kind="flyer_published",
@@ -680,6 +747,8 @@ def notify_public_flyer_published(
             body=body,
             data=data,
         )
+        if not should_push:
+            continue
         _send_push_to_user(
             sb,
             user_id=profile["id"],

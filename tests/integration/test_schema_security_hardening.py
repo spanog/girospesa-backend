@@ -31,7 +31,11 @@ def test_internal_tables_have_rls_enabled():
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
-          AND c.relname IN ('analytics_data', 'extraction_log')
+          AND c.relname IN (
+            'analytics_data',
+            'extraction_log',
+            'notification_jobs'
+          )
         ORDER BY c.relname
         """
     )
@@ -39,6 +43,7 @@ def test_internal_tables_have_rls_enabled():
     assert rows == [
         {"table_name": "analytics_data", "rls_enabled": True},
         {"table_name": "extraction_log", "rls_enabled": True},
+        {"table_name": "notification_jobs", "rls_enabled": True},
     ]
 
 
@@ -80,7 +85,11 @@ def test_internal_tables_have_explicit_deny_all_policies():
         SELECT tablename, policyname, cmd, roles, qual, with_check
         FROM pg_policies
         WHERE schemaname = 'public'
-          AND tablename IN ('analytics_data', 'extraction_log')
+          AND tablename IN (
+            'analytics_data',
+            'extraction_log',
+            'notification_jobs'
+          )
         ORDER BY tablename, policyname
         """
     )
@@ -97,6 +106,14 @@ def test_internal_tables_have_explicit_deny_all_policies():
         {
             "tablename": "extraction_log",
             "policyname": "extraction_log_deny_all",
+            "cmd": "ALL",
+            "roles": ["public"],
+            "qual": "false",
+            "with_check": "false",
+        },
+        {
+            "tablename": "notification_jobs",
+            "policyname": "notification_jobs_deny_all",
             "cmd": "ALL",
             "roles": ["public"],
             "qual": "false",

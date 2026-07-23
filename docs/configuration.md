@@ -36,7 +36,7 @@ SMTP_USE_SSL=false
 # SMTP_USE_TLS=false
 # SMTP_USE_SSL=false
 
-# ── Web Push / webhook opzionali --------------------------------------------
+# ── Web Push / native push ---------------------------------------------------
 VAPID_PRIVATE_KEY=
 VAPID_PUBLIC_KEY=
 VAPID_MAILTO=mailto:info@girospesa.it
@@ -44,7 +44,6 @@ FCM_ENABLED=false
 FCM_PROJECT_ID=
 FCM_CLIENT_EMAIL=
 FCM_PRIVATE_KEY=
-WEBHOOK_SECRET=
 
 # ── Copia da `supabase status -o env` ---------------------------------------
 # SUPABASE_SECRET_KEY <- SERVICE_ROLE_KEY
@@ -78,7 +77,7 @@ Flow identica in locale, test, prod: cambia solo valore env.
 | **Google Gemini** | Estrazione AI volantini | `GOOGLE_API_KEY` + `GEMINI_MODEL` | Unica dipendenza esterna richiesta quando usi AI extraction |
 | **Nominatim (OpenStreetMap)** | Geocoding indirizzi | `GEOCODING_PROVIDER=nominatim` | Default in locale per test manuali end-to-end; disabilitalo solo se vuoi evitare chiamate esterne |
 | **SMTP provider** | Email transazionali / contatto pubblico | `MAIL_FROM` + `SMTP_*` | Backend runtime attuale usa SMTP diretto via `smtplib`; in produzione GiroSpesa usa `Brevo` come relay SMTP e `Aruba` solo per ricezione mailbox |
-| **Web Push (VAPID)** | Notifiche browser | Coppia VAPID + `WEBHOOK_SECRET` | Standard W3C, nessun servizio proprietario |
+| **Web Push (VAPID)** | Notifiche browser | Coppia VAPID | Standard W3C, nessun servizio proprietario |
 
 ### Retry policy Gemini
 

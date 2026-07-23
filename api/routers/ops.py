@@ -7,6 +7,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 
 from core.config import settings
 from services.flyer_cleanup import FlyerCleanupService
+from services.notification_jobs import NotificationJobWorker
 from services.purchased_items_cleanup import PurchasedItemsCleanupService
 
 router = APIRouter()
@@ -52,3 +53,12 @@ async def trigger_daily_maintenance(
         "removed_purchased_items": removed_purchased_items,
         "errors": errors,
     }
+
+
+@router.post("/cron/notifications", status_code=status.HTTP_200_OK)
+async def trigger_notification_jobs(
+    x_ops_secret: str | None = Header(default=None),
+) -> dict[str, int | str]:
+    _require_ops_secret(x_ops_secret)
+    result = NotificationJobWorker().run_pending()
+    return {"status": "ok", **result}
