@@ -27,7 +27,6 @@ class DealFreshnessItem(TypedDict):
     list_item_id: str
     list_item_name: str
     pinned_offer_id: str | None
-    pinned_product_id: str | None
     status: str  # DealFreshnessStatus value
     current_price: float | None
     pinned_price: float | None
@@ -81,7 +80,6 @@ def classify_deal_freshness(
                 list_item_id=item.get("id", ""),
                 list_item_name=item.get("name", ""),
                 pinned_offer_id=offer_id,
-                pinned_product_id=item.get("pinned_product_id"),
                 status=status.value,
                 current_price=current_price,
                 pinned_price=pinned_price,

@@ -2,31 +2,20 @@
 
 ## Flows
 
-### 1. Ottimizzazione lista spesa
+### 1. Lista spesa con offerte pinnate
 
 ```
 Frontend
-  POST /optimize {list_id}
+  Utente aggiunge offerta attiva alla lista
                     │
                     ▼
-  Carica items non spuntati dalla lista
-  Carica posizione utente (search_location, oppure home_location)
-  Carica tutte le offerte attive nella finestra corrente (`valid_from <= oggi <= valid_to`, null-safe) con prodotto + supermercato
-                    │
-                    ▼ per ogni item
-  Usa `pinned_offer_id` come default se ancora valido/vicino
-  Usa `pinned_product_id` come match canonico se non c'è offerta specifica
-  Gli item manuali restano nel gruppo `Senza offerta`
-  L'MVP non espone UI di alternative o sostituzioni suggerite
-  Filtra per distanza con PostGIS (`nearby_supermarkets`, `ST_DWithin`)
+  Lista salva `pinned_offer_id` e snapshot essenziale
                     │
                     ▼
-  Raggruppa item con offerta per supermercato
-  Raggruppa item manuali senza offerta separatamente
+  GET lista proietta offerte scadute o eliminate come voce manuale
                     │
                     ▼
-  Risposta: store_groups[{supermercato, prodotti, subtotal,
-            savings, distanza_km, alternative per item}]
+  UI raggruppa per supermercato le offerte attive e mostra le altre in “Senza offerta”
 ```
 
 ### 2. Upload volantino e estrazione AI
@@ -50,9 +39,9 @@ Frontend
                          ▼
   ExtractionService:
     → scarica file
-    → Gemini estrae prodotti
-    → normalizza prodotti
-    → match prodotti esistenti + upsert draft offers con is_confirmed=false
+    → Gemini estrae offerte
+    → normalizza offerte e salva crop in `offers.image_url`
+    → inserisce draft offers con is_confirmed=false
     → aggiorna status → 'done'
                          │
                          ▼
@@ -60,10 +49,10 @@ Frontend
     GET /flyers/{id}/draft-offers
     → response ricostruisce format_label da format se manca
     PATCH draft offers
-    POST /flyers/{id}/offers/confirm (crea prodotti nuovi se necessari)
+    POST /flyers/{id}/offers/confirm (pubblica solo offerte)
                          │
                          ▼
-  Frontend pubblico: GET /products / GET /flyers/public
+  Frontend pubblico: GET /offers / GET /flyers/public
 ```
 
 ### 3. Push notification su nuova offerta
@@ -75,15 +64,15 @@ Frontend
   Backend: salva in push_subscriptions (upsert per user_id + endpoint)
                          │
   Admin o manager conferma nuove offerte
-  Backend crea cloni published_target
+  Backend pubblica le offerte confermate
                          │
                          ▼
   Backend accoda notification_jobs idempotenti
                          │
                          ▼
-  Worker notifiche legge offerte e utenti interessati
+  Worker notifiche raggiunge utenti nel raggio del supermercato
     Per ogni utente:
-      → insert app_notifications.favorite_offer
+      → insert app_notifications.flyer_published
       → fetch push_subscriptions esistenti
       → per ogni subscription:
             send_push_notification (VAPID, pywebpush)
@@ -108,7 +97,7 @@ Frontend
 ### 5. Freshness delle offerte in lista
 
 ```
-  Utente aggiunge item con pinned_offer_id (da ottimizzazione o ricerca)
+  Utente aggiunge item con pinned_offer_id dalla griglia offerte
   Volantino scade o prezzo cambia
                     │
   Frontend: GET /lists/{id}/deal-freshness
@@ -124,3 +113,6 @@ Frontend
 ```
 
 ---
+## Ritagli prodotto nelle bozze
+
+Durante l'estrazione PDF, Gemini può restituire pagina sorgente e bounding box normalizzato del solo packshot. Il backend rende la pagina, amplia il box con un margine adattivo anti-taglio e salva il prodotto in `product-images` come `draft_image_url`. La review delle bozze lo mostra automaticamente. Coordinate mancanti o non valide non bloccano l'estrazione e lasciano la bozza senza immagine; immagini manuali esistenti non vengono sovrascritte.

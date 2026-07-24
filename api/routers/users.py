@@ -103,38 +103,6 @@ async def geocode_user_address(
     return {"lat": None, "lng": None}
 
 
-@router.get("/me/favorites")
-async def get_favorites(user_id: Annotated[str, Depends(get_current_user_id)]) -> list[dict]:
-    sb = get_supabase()
-    resp = (
-        sb.table("favorites")
-        .select("products(*)")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    return [row["products"] for row in resp.data if row.get("products")]
-
-
-@router.post("/me/favorites/{product_id}", status_code=201)
-async def add_favorite(
-    product_id: str,
-    user_id: Annotated[str, Depends(get_current_user_id)],
-) -> dict:
-    sb = get_supabase()
-    resp = sb.table("favorites").upsert({"user_id": user_id, "product_id": product_id}).execute()
-    return resp.data[0]
-
-
-@router.delete("/me/favorites/{product_id}", status_code=204)
-async def remove_favorite(
-    product_id: str,
-    user_id: Annotated[str, Depends(get_current_user_id)],
-) -> Response:
-    sb = get_supabase()
-    sb.table("favorites").delete().eq("user_id", user_id).eq("product_id", product_id).execute()
-    return Response(status_code=204)
-
-
 @router.post("/me/avatar")
 async def upload_avatar(
     file: UploadFile,

@@ -136,6 +136,23 @@ async def test_lat_lng_returns_postgis_nearby_supermarkets():
     )
 
 
+@pytest.mark.asyncio
+async def test_lat_lng_includes_deep_link_supermarket_outside_radius():
+    sb = MagicMock()
+    sb.rpc.return_value.execute.return_value = MagicMock(data=[])
+    sb.table.return_value.select.return_value.in_.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[{"id": "sm-far", "name": "Conad", "is_active": True}]
+    )
+
+    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+        resp = await _get(
+            "/supermarkets?lat=45.464&lng=9.189&max_distance_km=10&include_ids=sm-far"
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == [{"id": "sm-far", "name": "Conad", "is_active": True}]
+
+
 # ---------------------------------------------------------------------------
 # POST /supermarkets tests
 # ---------------------------------------------------------------------------

@@ -143,7 +143,7 @@ Minimum:
 
 ```bash
 curl -fsS https://api.girospesa.it/health
-curl -fsS "https://api.girospesa.it/products?lat=38.4116708&lng=16.0742832&max_distance_km=10" >/dev/null
+curl -fsS "https://api.girospesa.it/offers?lat=38.4116708&lng=16.0742832&max_distance_km=10" >/dev/null
 ```
 
 If Supabase changed, verify frontend login and one authenticated route.

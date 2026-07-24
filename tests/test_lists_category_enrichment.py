@@ -34,31 +34,14 @@ class Query:
 
 class SupabaseStub:
     def __init__(self):
-        self.products = Query([
+        self.offers = Query([
             {
-                "id": "prod-1",
-                "name": "Pasta",
-                "brand": "Barilla",
-                "category": "dispensa",
-                "subcategory": "Primi Piatti e Preparati",
-            },
-            {
-                "id": "prod-2",
+                "id": "offer-1",
                 "name": "Acqua naturale",
                 "brand": "Sant'Anna",
                 "category": "bevande",
                 "subcategory": "Acqua e Bibite",
-            },
-        ])
-        self.offers = Query([
-            {
-                "id": "offer-1",
-                "product_id": "prod-2",
-                "products": {
-                    "brand": "Sant'Anna",
-                    "category": "bevande",
-                    "subcategory": "Acqua e Bibite",
-                },
+                "image_url": "https://storage.test/acqua.png",
                 "supermarket_id": "store-1",
                 "price_offer": 0.49,
                 "price_original": 0.79,
@@ -75,21 +58,9 @@ class SupabaseStub:
         ])
 
     def table(self, name: str) -> Query:
-        if name == "products":
-            return self.products
         if name == "supermarkets":
             return self.supermarkets
         return self.offers
-
-
-def test_enriches_items_from_pinned_product_id():
-    items = [{"id": "item-1", "name": "Pasta", "pinned_product_id": "prod-1"}]
-
-    enriched = _enrich_items_with_categories(SupabaseStub(), items)
-
-    assert enriched[0]["category"] == "dispensa"
-    assert enriched[0]["subcategory"] == "Primi Piatti e Preparati"
-    assert enriched[0]["brand"] == "Barilla"
 
 
 def test_enriches_items_from_pinned_offer_id():
@@ -115,7 +86,6 @@ def test_preserves_existing_snapshot_when_lookup_is_missing():
     items = [{
         "id": "item-1",
         "name": "Archivio",
-        "pinned_product_id": "missing",
         "category": "surgelati",
         "subcategory": "Gelati",
     }]
@@ -131,7 +101,7 @@ def test_selected_offer_patch_builds_coherent_snapshot():
 
     assert patch["source"] == "offer"
     assert patch["brand"] == "Sant'Anna"
-    assert patch["pinned_product_id"] == "prod-2"
+    assert "pinned_product_id" not in patch
     assert patch["pinned_offer_id"] == "offer-1"
     assert patch["category"] == "bevande"
     assert patch["subcategory"] == "Acqua e Bibite"

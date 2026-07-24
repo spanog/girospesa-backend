@@ -7,12 +7,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
-from services.push_notify import notify_favorite_offer_published, notify_public_flyer_published
+from services.push_notify import notify_public_flyer_published
 
 logger = logging.getLogger(__name__)
 
 JOB_FLYER_PUBLISHED = "flyer_published"
-JOB_FAVORITE_OFFERS_PUBLISHED = "favorite_offers_published"
 STATUS_DEAD = "dead"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
@@ -40,15 +39,6 @@ def enqueue_flyer_published(
             "supermarket_name": supermarket_name,
             "products_count": products_count,
         },
-    )
-
-
-def enqueue_favorite_offers_published(sb: object, *, flyer_id: str) -> None:
-    _enqueue(
-        sb,
-        kind=JOB_FAVORITE_OFFERS_PUBLISHED,
-        idempotency_key=f"favorite-offers-published:{flyer_id}",
-        payload={"flyer_id": flyer_id},
     )
 
 
@@ -104,31 +94,10 @@ class NotificationJobWorker:
         if kind == JOB_FLYER_PUBLISHED:
             self._process_flyer_published(payload)
             return
-        if kind == JOB_FAVORITE_OFFERS_PUBLISHED:
-            self._process_favorite_offers_published(payload)
-            return
         raise ValueError(f"Unsupported notification job kind: {kind}")
 
     def _process_flyer_published(self, payload: dict[str, Any]) -> None:
         notify_public_flyer_published(self._supabase(), **payload)
-
-    def _process_favorite_offers_published(self, payload: dict[str, Any]) -> None:
-        flyer_id = str(payload.get("flyer_id") or "")
-        if not flyer_id:
-            return
-        for offer in self._published_offers(flyer_id):
-            notify_favorite_offer_published(self._supabase(), offer)
-
-    def _published_offers(self, flyer_id: str) -> list[dict[str, Any]]:
-        response = (
-            self._supabase()
-            .table("offers")
-            .select("*")
-            .eq("flyer_id", flyer_id)
-            .eq("is_confirmed", True)
-            .execute()
-        )
-        return [_offer_payload(row) for row in response.data or []]
 
     def _claim_jobs(self, limit: int) -> list[dict[str, Any]]:
         if not has_direct_postgres():

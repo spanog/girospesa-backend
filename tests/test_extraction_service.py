@@ -28,6 +28,28 @@ sys.modules["core.database"] = MagicMock()
 import pytest
 
 
+def test_resume_keeps_checkpointed_pdf_chunk_size() -> None:
+    from services.extraction.service import ExtractionService
+
+    provider = MagicMock()
+    provider.chunk_size_pages = 2
+    state = ExtractionService(provider=provider)._resume_state(
+        {
+            "extraction_metadata": {
+                "chunk_size_pages": 3,
+                "last_completed_chunk": 1,
+                "next_chunk_index": 2,
+                "resume_available": True,
+            }
+        },
+        "application/pdf",
+        24,
+    )
+
+    assert state["chunk_size_pages"] == 3
+    assert state["start_chunk_index"] == 2
+
+
 def _make_sb(
     flyer_data: dict | None = None,
     upsert_data: list | None = None,
@@ -89,7 +111,7 @@ def _offer_upsert_calls(sb: MagicMock) -> list:
     return [
         call
         for call in sb.table.return_value.upsert.call_args_list
-        if call.kwargs.get("on_conflict") == "flyer_id,draft_product_key,format_key"
+        if call.kwargs.get("on_conflict") == "flyer_id,offer_key,format_key"
     ]
 
 
@@ -773,41 +795,6 @@ class TestExtractionServiceErrorPath:
         assert error_log_payload["details"]["resume"]["reason"] == "not_available"
 
 
-class TestUpsertProductFallback:
-    """_upsert_product falls back to SELECT when upsert returns empty data."""
-
-    def test_upsert_product_conflict_fallback(self):
-        sb = MagicMock()
-        # upsert returns empty → triggers SELECT fallback
-        sb.table.return_value.upsert.return_value.execute.return_value = MagicMock(data=[])
-        # For brand present: chain is .select().eq(name).eq(brand).limit().execute()
-        existing = MagicMock()
-        existing.data = [{"id": "existing-prod-uuid"}]
-        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = existing
-
-        with patch("services.extraction.service.get_provider", return_value=MagicMock()):
-            from services.extraction.service import ExtractionService
-            svc = ExtractionService()
-            product_id = svc._upsert_product(sb, {"name": "Pasta", "brand": "Barilla"})
-
-        assert product_id == "existing-prod-uuid"
-
-    def test_upsert_product_not_found_raises(self):
-        sb = MagicMock()
-        # upsert returns empty
-        sb.table.return_value.upsert.return_value.execute.return_value = MagicMock(data=[])
-        # For None brand: chain is .select().eq(name).is_(brand).limit().execute()
-        empty = MagicMock()
-        empty.data = []
-        sb.table.return_value.select.return_value.eq.return_value.is_.return_value.limit.return_value.execute.return_value = empty
-
-        with patch("services.extraction.service.get_provider", return_value=MagicMock()):
-            from services.extraction.service import ExtractionService
-            svc = ExtractionService()
-            with pytest.raises(ValueError, match="Product not found after upsert"):
-                svc._upsert_product(sb, {"name": "Pasta", "brand": None})
-
-
 class TestExtractionServiceSubcategoryPersisted:
     """Subcategory from LLM response must reach draft offers."""
 
@@ -832,8 +819,7 @@ class TestExtractionServiceSubcategoryPersisted:
         offer_calls = _offer_upsert_calls(sb)
         assert offer_calls, "Expected at least one offer upsert"
         offer_row = offer_calls[0][0][0][0]
-        assert offer_row.get("product_id") is None
-        assert offer_row.get("draft_subcategory") == "Conserve Ittiche e di Carne"
+        assert offer_row.get("subcategory") == "Conserve Ittiche e di Carne"
         assert offer_row.get("format_key")
         assert offer_row.get("format_label") == "2x80 g"
 
@@ -844,9 +830,9 @@ class TestExtractionServiceSubcategoryPersisted:
             svc = ExtractionService()
 
         rows = [
-            {"draft_product_key": "pasta|barilla", "flyer_id": "flyer-1", "format_key": "v1:500g", "price_offer": 1.29},
-            {"draft_product_key": "pasta|barilla", "flyer_id": "flyer-1", "format_key": "v1:500g", "price_offer": 1.49},
-            {"draft_product_key": "pasta|barilla", "flyer_id": "flyer-1", "format_key": "v1:1kg", "price_offer": 2.49},
+            {"offer_key": "pasta|barilla", "flyer_id": "flyer-1", "format_key": "v1:500g", "price_offer": 1.29},
+            {"offer_key": "pasta|barilla", "flyer_id": "flyer-1", "format_key": "v1:500g", "price_offer": 1.49},
+            {"offer_key": "pasta|barilla", "flyer_id": "flyer-1", "format_key": "v1:1kg", "price_offer": 2.49},
         ]
 
         unique_rows = svc._deduplicate_offer_rows(rows)
@@ -906,8 +892,7 @@ class TestExtractionServiceSubcategoryPersisted:
         batch_payload = offer_calls[0][0][0]
         assert isinstance(batch_payload, list)
         assert len(batch_payload) == 2
-        assert all(row["product_id"] is None for row in batch_payload)
-        assert {row["draft_product_key"] for row in batch_payload} == {
+        assert {row["offer_key"] for row in batch_payload} == {
             "pasta barilla|barilla",
             "latte berna|berna",
         }

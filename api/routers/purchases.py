@@ -72,13 +72,12 @@ class SavingsSummary(BaseModel):
 
 def _build_purchase_snapshot(item: dict, offer_data: dict) -> dict:
     deal = (item.get("found_deals") or [None])[0] or {}
-    product = offer_data.get("products") or {}
     return {
-        "brand": item.get("brand") or product.get("brand"),
+        "brand": item.get("brand") or offer_data.get("brand"),
         "format_label": deal.get("format_label") or offer_data.get("format_label"),
-        "image_url": item.get("image_url") or product.get("image_url"),
-        "category": item.get("category") or product.get("category"),
-        "subcategory": item.get("subcategory") or product.get("subcategory"),
+        "image_url": item.get("image_url") or offer_data.get("image_url"),
+        "category": item.get("category") or offer_data.get("category"),
+        "subcategory": item.get("subcategory") or offer_data.get("subcategory"),
         "unit_price": deal.get("unit_price") or offer_data.get("unit_price"),
         "unit_price_value": deal.get("unit_price_value") or offer_data.get("unit_price_value"),
         "unit_price_unit": deal.get("unit_price_unit") or offer_data.get("unit_price_unit"),
@@ -175,9 +174,9 @@ def _load_offer_data(sb: object, offer_id: str) -> dict:
     response = (
         sb.table("offers")  # type: ignore[union-attr,attr-defined]
         .select(
-            "id, product_id, format_label, price_offer, price_original, "
+            "id, name, brand, image_url, category, subcategory, format_label, price_offer, price_original, "
             "discount_pct, unit_price, unit_price_value, unit_price_unit, "
-            "supermarket_id, supermarkets(name), products(brand,image_url,category,subcategory)"
+            "supermarket_id, supermarkets(name)"
         )
         .eq("id", offer_id)
         .limit(1)
@@ -219,7 +218,6 @@ async def purchase_item(
         deal = item["found_deals"][0]
         offer_data = {
             "id": None,
-            "product_id": deal.get("product_id"),
             "price_offer": deal.get("price_offer"),
             "price_original": deal.get("price_original"),
             "discount_pct": deal.get("discount_pct"),
@@ -230,12 +228,10 @@ async def purchase_item(
             "unit_price_label": deal.get("unit_price_label"),
             "supermarket_id": deal.get("supermarket_id"),
             "supermarkets": {"name": deal.get("supermarket_name")},
-            "products": {
-                "brand": item.get("brand"),
-                "image_url": item.get("image_url"),
-                "category": item.get("category"),
-                "subcategory": item.get("subcategory"),
-            },
+            "brand": item.get("brand"),
+            "image_url": item.get("image_url"),
+            "category": item.get("category"),
+            "subcategory": item.get("subcategory"),
         }
 
     quantity = float(item.get("quantity") or 1)
@@ -255,7 +251,7 @@ async def purchase_item(
         "list_id": body.list_id,
         "list_item_id": item_id,
         "item_name": item["name"],
-        "product_id": offer_data.get("product_id"),
+        "product_id": None,
         "offer_id": offer_data.get("id"),
         "supermarket_id": offer_data.get("supermarket_id"),
         "supermarket_name": (offer_data.get("supermarkets") or {}).get("name"),

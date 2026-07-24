@@ -366,6 +366,17 @@ def _coerce_int(value: object) -> int | None:
         return None
 
 
+def _normalized_packshot_box(value: object) -> list[int] | None:
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    try:
+        box = [int(float(item)) for item in value]
+    except (TypeError, ValueError):
+        return None
+    y1, x1, y2, x2 = box
+    return box if 0 <= y1 < y2 <= 1000 and 0 <= x1 < x2 <= 1000 else None
+
+
 def _coerce_format_bundle(raw: dict) -> NormalizedFormatBundle:
     existing_bundle = raw.get("_format_bundle")
     if isinstance(existing_bundle, NormalizedFormatBundle):
@@ -407,6 +418,8 @@ def normalize_product(raw: dict) -> dict:
         "offer_notes": _coerce_str(raw.get("offer_notes")),
         "valid_from": _coerce_str(raw.get("valid_from")),
         "valid_to": _coerce_str(raw.get("valid_to")),
+        "source_page": _coerce_int(raw.get("source_page")),
+        "packshot_bbox": _normalized_packshot_box(raw.get("packshot_bbox")),
     }
 
 

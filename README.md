@@ -2,9 +2,9 @@
 
 > Scope: questo file e' documentazione per persone. Regole operative per agenti e convenzioni di esecuzione vivono in `AGENTS.md`.
 
-FastAPI backend per GiroSpesa. Contiene la logica di business dell'applicazione: ottimizzazione lista della spesa, gestione liste condivise, geocoding indirizzi, push notification, analytics B2B e catalogo prodotti.
+FastAPI backend per GiroSpesa. Contiene la logica di business dell'applicazione: offerte estratte dai volantini, gestione liste condivise, geocoding indirizzi, notifiche di pubblicazione e analytics B2B.
 
-> **Estrazione AI volantini:** questo repo contiene runtime, review flow e CLI di valutazione. Il vecchio workspace di estrazione e' stato assorbito in questo backend.
+> **Estrazione AI volantini:** questo repo contiene runtime, review flow e CLI di valutazione. Il vecchio workspace di estrazione e' stato assorbito in questo backend. Quando il modello localizza un packshot nel PDF, la bozza conserva automaticamente il relativo ritaglio per la review. I PDF nuovi vengono inviati a Gemini in chunk da due pagine, con deadline hard di otto minuti; i checkpoint conservano la dimensione chunk originale per una ripresa coerente.
 
 ## System Overview
 
@@ -12,8 +12,8 @@ Il frontend web usa Supabase Auth con `@supabase/ssr`: browser, proxy Next.js e 
 
 Il backend valida i bearer token utente tramite signing keys/JWKS di Supabase e usa `SUPABASE_SECRET_KEY` per operazioni server-side privilegiate su Auth, Database e Storage. Non esiste un cookie sessione backend per auth applicativa o stream SSE.
 
-Le notifiche di pubblicazione volantino/offerte preferite sono accodate in `notification_jobs` e drenate fuori dalle richieste utente da APScheduler o da `POST /ops/cron/notifications`.
-`GET /products` supporta `favorites_only=true` per utenti autenticati: il filtro sui prodotti preferiti avviene lato backend prima di paginazione, conteggi e filtro supermercato.
+Le notifiche di pubblicazione volantino sono accodate in `notification_jobs` e drenate fuori dalle richieste utente da APScheduler o da `POST /ops/cron/notifications`.
+`GET /offers` restituisce offerte pubbliche autosufficienti, incluse immagine estratta, dati del supermercato e periodo di validità.
 
 Dettagli architetturali: [docs/architecture.md](docs/architecture.md).
 
@@ -29,6 +29,10 @@ python -m pip install -r requirements.txt
 python -m scripts.seed_admin
 python -m uvicorn main:app --reload --port 8000
 ```
+
+## Baseline catalogo prodotti
+
+Il tag annotato `v.0.1-product-catalog` conserva l'architettura precedente basata su prodotti canonici, preferiti e immagini di catalogo. Il modello corrente è basato esclusivamente sulle offerte e sulle immagini estratte dal volantino. Il tag è il punto di ripartenza per una futura reintroduzione del catalogo, delle notifiche sui preferiti e di immagini curate ad alta qualità.
 
 - API locale: `http://localhost:8000`
 - Swagger: `http://localhost:8000/docs`
@@ -61,6 +65,14 @@ Use the workspace guide [../docs/deploy-production-guide.md](../docs/deploy-prod
 .venv/bin/python -m pytest tests/integration -v
 RUN_PERFORMANCE_TESTS=1 .venv/bin/python -m pytest tests/performance -v -s
 .venv/bin/python -m scripts.seed_admin --check
+```
+
+## Reset iniziale modello solo offerte
+
+La migrazione `20260724000000_offer_only_reset.sql` è intenzionalmente distruttiva: elimina volantini, offerte, catalogo e preferiti, mantenendo account, supermercati, avatar, loghi e liste normalizzate come voci manuali. Prima applicare la migrazione, eseguire una sola volta il comando seguente con credenziali service-role: svuota esclusivamente i bucket `flyers` e `product-images`, verifica che siano vuoti e non tocca `avatars` o `logos`.
+
+```bash
+.venv/bin/python -m scripts.reset_offer_only_storage --confirm-offer-only-reset
 ```
 
 ## Project Map

@@ -42,7 +42,7 @@ Per sync quasi immediato tra membri, il backend espone anche `GET /lists/{list_i
 | `POST` | `/lists/{id}/reset` | ✅ member | Svuota la lista corrente dopo conferma frontend e restituisce la lista aggiornata |
 | `POST` | `/lists/{id}/items/remove-purchased` | ✅ member | Rimuove in blocco dalla lista solo gli item acquistati e restituisce la lista aggiornata, senza cancellare `purchase_history` |
 | `POST` | `/lists/{id}/items` | ✅ member | Aggiunge item (manuale o da offerta) e salva snapshot `brand`/`category`/`subcategory` quando collegato a prodotto/offerta; persistenza via RPC concorrente-safe `append_list_item` (`SECURITY INVOKER`, `search_path` fissato a `public`) |
-| `PATCH` | `/lists/{id}/items/{item_id}` | ✅ member | Aggiorna quantità o binding esplicito a un'offerta; con `pinned_offer_id` salva `source`, `pinned_product_id`, `found_deals`, categoria e sottocategoria coerenti via RPC concorrente-safe `update_list_item` (`SECURITY INVOKER`, protetta da RLS + `auth.uid()`), poi rilegge item persistito |
+| `PATCH` | `/lists/{id}/items/{item_id}` | ✅ member | Aggiorna quantità, categoria o binding esplicito a un'offerta; con `pinned_offer_id` salva snapshot e categoria coerenti via RPC concorrente-safe `update_list_item` (`SECURITY INVOKER`, protetta da RLS + `auth.uid()`), poi rilegge item persistito |
 | `DELETE` | `/lists/{id}/items/{item_id}` | ✅ member | Rimuove item via RPC concorrente-safe `remove_list_item` (`SECURITY INVOKER`, `search_path` fissato a `public`) |
 | `POST` | `/lists/{id}/items/{item_id}/toggle` | ✅ member | Check/uncheck item; registra `checked_by`, `checked_at` |
 | `POST` | `/lists/{id}/invite` | ✅ owner | Crea link invito (token 64 char, TTL 7 giorni) |
@@ -51,24 +51,13 @@ Per sync quasi immediato tra membri, il backend espone anche `GET /lists/{list_i
 | `GET` | `/lists/{id}/deal-freshness` | ✅ member | Freshness di tutte le offerte pinnate nella lista; le offerte fuori raggio per il viewer corrente risultano `unavailable` con flag risposta `offer_visibility_status='hidden_for_viewer'`, senza esporre prezzo attuale |
 | `POST` | `/lists/{id}/clear-stale-offers` | ✅ member | Pulisce `pinned_offer_id` e `found_deals` degli item con offerte `expired`/`unavailable` tramite la stessa RPC concorrente-safe `update_list_item` usata dalle patch item, cosi' lo stato persistito si riallinea dopo che le read API hanno gia' proiettato l'item sotto `Senza offerta` |
 
-### Prodotti e offerte (`/products`)
+### Offerte (`/offers`)
 
 | Metodo | Path | Auth | Descrizione |
 |--------|------|------|-------------|
-| `GET` | `/products` | ❌ | Offerte attive con ricerca `q` ibrida (`word_similarity` + match per prefisso/sottostringa), filtro esatto `product_id` sul prodotto canonico, filtri `category`, `supermarket` (slug compat legacy), `supermarket_id` (punto vendita esatto) oppure `supermarket_ids=<uuid>&supermarket_ids=<uuid>` per multi-store nativo, ordinamento default per nome prodotto, `sort=expiry` per scadenza crescente, `expiring_soon=true` per offerte che scadono entro 3 giorni, paginazione |
-| `GET` | `/products/{id}` | ❌ | Dettaglio singola offerta (prodotto + supermercato) |
-| `GET` | `/products/{id}/similar` | ❌ | Altre offerte attive per lo stesso prodotto canonico (ordinate per prezzo) |
+| `GET` | `/offers` | ❌ | Offerte attive confermate, con ricerca per nome, filtri `category` e `supermarket_id`, paginazione e dati del supermercato |
 
-Nota implementativa: `/products` restituisce sempre `{ items, nextPage, total?, supermarket_count?, expiring_soon_count?, counts_by_supermarket_id?, counts_by_supermarket_slug? }`. I due dizionari `counts_by_supermarket_*` sono pensati per badge/cards supermercati su `/offerte` e `/volantini` senza più N+1 chiamate client. Il filtro `expiring_soon=true` usa stessa finestra temporale del contatore `expiring_soon_count`: `valid_to` compreso tra oggi e oggi + 3 giorni. La ricerca `q` passa da `public.search_products_catalog`, che mantiene ranking fuzzy con `word_similarity` ma include anche match per prefisso e sottostringa su nome/brand, così query come `mozza` trovano `Mozzarella` senza perdere tolleranza ai refusi. `product_id=<canonical-products.id>` restringe invece il listing a tutte le offerte pubbliche attive di quel prodotto canonico. Per compatibilità storica `supermarket=<slug>` continua a risolvere la prima insegna corrispondente, ma i filtri frontend per singolo store devono usare `supermarket_id=<uuid>` e quelli multi-store `supermarket_ids[]=...` per distinguere filiali con lo stesso `slug`.
-
-### Preferiti (`/favorites`)
-
-| Metodo | Path | Auth | Descrizione |
-|--------|------|------|-------------|
-| `GET` | `/favorites` | ✅ | Lista preferiti con `active_offers[]` ordinato per prezzo, `best_offer` come primo elemento e metadati supermercato (`name`, `logo_url`, `address`) per ogni offerta |
-| `GET` | `/favorites/{product_id}` | ✅ | Controlla se un prodotto è tra i preferiti |
-| `POST` | `/favorites` | ✅ | Aggiunge ai preferiti (body: `{product_id}`) |
-| `DELETE` | `/favorites/{product_id}` | ✅ | Rimuove dai preferiti |
+Nota implementativa: `/offers` restituisce `{ items, nextPage, total }`. L'immagine estratta o caricata in review è la proprietà `image_url` dell'offerta.
 
 ### Volantini (`/flyers`)
 
@@ -84,14 +73,14 @@ Nota implementativa: `/products` restituisce sempre `{ items, nextPage, total?, 
 Contratto di conferma:
 
 - `POST /flyers/{flyer_id}/offers/confirm` conferma sempre le offerte del flyer sorgente come `source_master`.
-- La visibilita' pubblica su `/products` e `/flyers/public` dipende invece dai cloni `published_target`.
+- La visibilita' pubblica su `/offers` e `/flyers/public` dipende dalle offerte confermate `published_target`.
 - La conferma deve quindi essere idempotente: se una pubblicazione si interrompe dopo aver confermato il source ma prima di aver clonato tutto, rilanciare `confirm` deve completare i `published_target` mancanti e riallineare `products_count` del flyer pubblico al numero reale di offerte pubblicate.
 - Dopo la conferma, `PUT/PATCH /flyers/{flyer_id}/targets` mantiene lo stesso contratto materiale: target aggiunti creano/upsertano flyer pubblici e offerte `published_target`, target rimossi eliminano le offerte pubbliche e il flyer clone di quel supermercato.
 | `POST` | `/flyers/upload-url` | ✅ admin/manager | Crea URL/token firmato per caricare direttamente nel bucket privato `flyers` senza passare il file dalla Function frontend; valida tipo, dimensione dichiarata e target manager/admin |
 | `POST` | `/flyers/upload/complete` | ✅ admin/manager | Valida oggetto Storage caricato (PDF/JPG/PNG/WebP, max 50 MB), calcola hash server-side, controlla duplicati e crea un solo flyer `status='pending'` + righe `flyer_targets` |
 | `POST` | `/flyers/{flyer_id}/extract` | ✅ admin/manager | Avvia estrazione AI per un volantino `pending` oppure riprende dal prossimo chunk non ancora completato quando esiste progresso PDF persistito (`status='error'` o retry manuale dopo failure transiente) |
 | `GET` | `/flyers/{flyer_id}/draft-offers` | ✅ admin/manager | Lista offerte estratte ma non confermate |
-| `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline di una draft offer; `product_id` aggancia la bozza a un prodotto catalogo esistente, `detach_product=true` rimuove il binding catalogo senza creare prodotti |
+| `PATCH` | `/flyers/{flyer_id}/draft-offers/{offer_id}` | ✅ admin/manager | Modifica inline dei campi e dell'immagine della draft offer |
 | `POST` | `/flyers/{flyer_id}/draft-offers/{offer_id}/image` | ✅ admin/manager | Upload immagine prodotto staged per una bozza non agganciata; salva `draft_image_url` fino alla conferma |
 | `POST` | `/flyers/{flyer_id}/offers/confirm` | ✅ admin/manager | Conferma le draft del flyer sorgente, crea/upserta i prodotti canonici mancanti, marca le righe sorgente come `source_master`, poi materializza/upserta un volantino pubblico distinto e un set di offerte `published_target` distinto per ogni supermercato target |
 | `POST` | `/flyers/admin/cleanup` | 👑 admin | Trigger manuale pulizia volantini scaduti (eseguita automaticamente ogni mezzanotte) |
@@ -106,14 +95,14 @@ Contratto di conferma:
   - `unit_price_value NUMERIC(8,2)`
   - `unit_price_unit TEXT` con valori ammessi `kg`, `L`, `kg sgocc`
   - `unit_price TEXT` come label derivata per compatibilità
-- Gli endpoint che restituiscono offerte (`/products`, `/flyers/{flyer_id}/draft-offers`, `/favorites`, `/optimize`) espongono anche `unit_price_value`, `unit_price_unit`, `unit_price_label`.
+- Gli endpoint che restituiscono offerte (`/offers`, `/flyers/{flyer_id}/draft-offers`) espongono anche `unit_price_value`, `unit_price_unit`, `unit_price_label`.
 - `GET /flyers/{flyer_id}/draft-offers` espone `image_url` con precedenza `draft_image_url -> products.image_url`, così la review mostra l'immagine staged anche prima della creazione del prodotto canonico.
 - In review, validità offerte è flyer-scoped: creazione manuale bozza eredita sempre `flyers.valid_from`/`flyers.valid_to`, `PATCH /flyers/{flyer_id}/draft-offers/{offer_id}` non modifica più le date, e `PATCH /flyers/{flyer_id}` aggiorna l'intero set estratto.
 - Dopo la conferma finale esistono due livelli di offerte:
   - righe sorgente `offers.offer_kind='source_master'` sul flyer `flyer_kind='source'`, usate come master admin per review/edit/delete
   - cloni pubblici `offers.offer_kind='published_target'` su flyer `flyer_kind='published_target'`, uno per supermercato target
 - Ogni clone pubblico salva `source_offer_id` verso la riga `source_master` da cui deriva. Re-run della conferma e PATCH/DELETE su offerte confermate devono aggiornare o rimuovere i cloni esistenti, non duplicarli.
-- Gli endpoint customer-facing (`/products`, `/favorites`, `/optimize`) e le policy RLS pubbliche considerano offerte reali solo le righe `offer_kind='published_target'`.
+- Gli endpoint customer-facing (`/offers`) e le policy RLS pubbliche considerano offerte reali solo le righe `offer_kind='published_target'`.
 
 ### Contratto formato prodotto
 
@@ -130,9 +119,8 @@ Contratto di conferma:
 - `format.tipo="confezione_singola"` può rappresentare confezioni senza peso o volume noto. Quando disponibile, usare `peso_volume` + `unita_misura`; per confezioni contabili usare `num_pezzi`; se il dato non è presente, mantenere solo `tipo`.
 - Il provider LLM deve emettere un `format` strutturato sparso: solo `tipo` e campi pertinenti, senza `null` superflui. Il backend resta source of truth per canonicalizzazione e compattazione.
 - `format.varianti` è consentito solo in input estrazione LLM: il backend lo espande in prodotti/offerte distinti prima dell'upsert. Nessun prodotto persistito rappresenta un parent con varianti miste.
-- Matching fuzzy/optimizer usa `name`, `brand`, `format_label`; mai JSON raw.
-- Durante l'estrazione il backend deduplica prima in memoria su `(name, brand)`, cerca match fuzzy nel catalogo esistente per agganciare le bozze quando possibile, deduplica le offerte su `(flyer_id, draft_product_key, format_key)` e fa upsert idempotente delle draft offers. Non crea nuovi prodotti canonici finché le offerte restano in bozza; li crea/upserta solo alla conferma finale.
-- In review il reviewer può caricare un'immagine prodotto solo per bozze `new_on_confirm` (incluse bozze sganciate manualmente dal catalogo). Alla conferma, `draft_image_url` viene copiato in `products.image_url`; le bozze già agganciate a un prodotto esistente non possono modificare l'immagine catalogo da questa pagina.
+- L'estrazione deduplica le offerte su chiave del flyer e formato, senza matching verso un catalogo.
+- In review il reviewer può caricare o sostituire l'immagine dell'offerta; alla conferma resta in `offers.image_url`.
 - Per PDF multipagina il backend divide il file in chunk PDF rigidi da 3 pagine e invia un chunk per volta a Gemini. Dopo ogni chunk riuscito persiste subito le draft offers di quel chunk e aggiorna `flyers.extraction_metadata` con pagina corrente, percentuale, `last_completed_chunk` e `next_chunk_*`, così il frontend può mostrare avanzamento live durante il polling e review parziale.
 - Se un chunk fallisce dopo i retry, il flyer passa a `status='error'`, ma le draft offers dei chunk già riusciti restano salvate. `flyers.extraction_metadata` espone `resume_available`, `failed_chunk_*`, `next_chunk_*` e `partial_products_count`; una nuova `POST /flyers/{flyer_id}/extract` riparte dal primo chunk non completato correttamente senza duplicare le offerte già persistite. La ripresa si basa su `extraction_metadata` persistito, non sullo `status` transitorio del flyer mentre il retry è già tornato a `processing`.
 - Anche un failure runtime generico dopo almeno un chunk già persistito (per esempio errori transienti `httpx`/Supabase durante polling, review o altri accessi concorrenti) deve lasciare un resume point valido: `next_chunk_*` resta fonte di verità, `resume_available` viene rialzato e il retry successivo riparte dal prossimo chunk salvato invece di rieseguire il chunk 1.
@@ -140,12 +128,6 @@ Contratto di conferma:
 - Allo startup del backend, un recovery pass scansiona i flyer rimasti `processing` dopo il crash/riavvio dell'istanza precedente. Se trova `last_completed_chunk` + `next_chunk_*`, marca il flyer come recoverable e mette automaticamente in coda un nuovo `ExtractionService().run(...)`; se invece il crash e' avvenuto prima del primo checkpoint, il flyer viene chiuso in `error` con messaggio esplicito e senza retry automatico.
 - Se tutti i chunk risultano già persistiti e il failure arriva solo in coda (per esempio su update finale o side effect post-successo), il flyer non deve tornare a `status='error'`: il backend deve consolidarlo a `done`, con `resume_available=false`, perché non esiste più alcun checkpoint utile da riprendere.
 - Quando Gemini fallisce o va in retry, backend logga anche contesto strutturato se disponibile: tipo eccezione, `code`, `status`, `message`, HTTP status/body e request id. Stesso dettaglio finisce in `retry_errors` dentro `extraction_log`.
-
-### Ottimizzazione (`/optimize`)
-
-| Metodo | Path | Auth | Descrizione |
-|--------|------|------|-------------|
-| `POST` | `/optimize` | ✅ member | Ottimizza lista spesa → gruppi per supermercato con risparmio e alternative; accesso consentito solo ai membri della lista indicata. Il matching usa solo i supermercati visibili al viewer corrente secondo `search_*`/`home_*` + `max_distance_km`; un `pinned_offer_id` fuori raggio non viene restituito come default né incluso tra le alternative |
 
 ### Supermercati (`/supermarkets`)
 
@@ -172,7 +154,7 @@ Contratto di conferma:
 
 Le notifiche Web Push e native FCM condividono lo stesso payload `data`, incluso `kind`, `flyer_id`, `status`, `products_count` e `url`. Il frontend usa questi campi per aggiornare subito la cache e aprire il deep link corretto. Le notifiche native FCM includono `android.notification.icon = "ic_notification"` e `android.notification.color = "#1E7A45"` per forzare la preview Android brandizzata, oltre a `apns.payload.aps.sound = "default"` per attivare il suono standard di iOS quando le impostazioni del dispositivo lo consentono.
 La conferma di un volantino accoda job `notification_jobs` idempotenti e non invia in modo sincrono a tutti gli utenti. Il worker drenato da APScheduler o da `/ops/cron/notifications` crea le notifiche `favorite_offer` e `flyer_published`, persistendo sempre lo storico in `app_notifications` prima di inviare Web Push/FCM. Quando più prodotti preferiti dello stesso utente compaiono nello stesso flyer, il backend aggiorna una sola notifica aggregata per quel `user_id + flyer_id`. Le notifiche `flyer_published` raggiungono utenti che vedono il punto vendita nel raggio configurato; se il supermercato è anche tra i preferiti, il titolo usa il nome del supermercato.
-Il copy standard è `Nuovo volantino da <nome_supermercato>` con body `<numero_offerte> nuove offerte disponibili` e `<count_offerte_prodotti_preferiti> offerta/e da <nome_supermercato>` con body `<brand> - <prodotto> a <prezzo>`. Se lo stesso volantino contiene piu prodotti preferiti, il backend aggiorna una sola notifica mostrando il dettaglio di massimo 2 offerte e poi `e altri N`. Il deep link `favorite_offer` apre `/offerte?favorites=1&sort=published_at&scroll=offers&context_supermarket_id=<supermarket_id>`; il deep link `flyer_published` apre `/offerte?sort=published_at&scroll=offers&context_supermarket_id=<supermarket_id>`.
+Il copy standard è `Nuovo volantino da <nome_supermercato>` con body `<numero_offerte> nuove offerte disponibili`. Il deep link `flyer_published` apre `/offerte?sort=published_at&scroll=offers&context_supermarket_id=<supermarket_id>`.
 
 ### Ops (`/ops`)
 
@@ -195,18 +177,4 @@ Il copy standard è `Nuovo volantino da <nome_supermercato>` con body `<numero_o
 |--------|------|------|-------------|
 | `GET` | `/analytics/b2b` | API key | Top prodotti ricercati + totale liste (dati anonimi aggregati per catene GDO) |
 
-### Admin (`/admin/products`)
-
-| Metodo | Path | Auth | Descrizione |
-|--------|------|------|-------------|
-| `GET` | `/admin/products` | 👑 admin | Catalogo prodotti con filtri (`q`, `category`, `subcategory`, `archived`, `no_image`) e paginazione |
-| `POST` | `/admin/products` | 👑 admin | Crea prodotto manuale |
-| `GET` | `/admin/products/{id}` | 👑 admin | Dettaglio prodotto con le offerte pubbliche (`offer_kind='published_target'`) e il formato corrente di ciascuna offerta |
-| `PATCH` | `/admin/products/{id}` | 👑 admin | Modifica prodotto |
-| `POST` | `/admin/products/{id}/archive` | 👑 admin | Archivia prodotto (soft delete) |
-| `POST` | `/admin/products/{id}/restore` | 👑 admin | Ripristina prodotto archiviato |
-| `DELETE` | `/admin/products/{id}` | 👑 admin | Elimina definitivamente prodotto senza offerte collegate; rimuove anche i preferiti collegati |
-| `POST` | `/admin/products/{id}/image` | 👑 admin | Upload immagine prodotto → bucket `product-images` |
-| `PATCH` | `/admin/products/{id}/offers/{oid}` | 👑 admin | Modifica offerta pubblica, incluso `format` strutturato; backend ricalcola `format_key` e `format_label` |
-| `DELETE` | `/admin/products/{id}/offers/{oid}` | 👑 admin | Elimina offerta |
 ---

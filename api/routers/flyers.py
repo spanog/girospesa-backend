@@ -21,7 +21,6 @@ from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
 from services.notification_jobs import (
     NotificationJobWorker,
-    enqueue_favorite_offers_published,
     enqueue_flyer_published,
 )
 from services.offer_visibility import apply_current_offer_window
@@ -29,11 +28,9 @@ from services.product_format import ProductFormat, build_format_bundle
 from api.routers._offer_utils import (
     _OFFER_PRODUCT_SELECT,
     _flatten_draft_offer,
-    build_product_row,
     build_format_fields,
-    draft_product_key,
-    upsert_product,
     build_offer_row,
+    draft_product_key,
     insert_and_fetch_offer,
 )
 
@@ -49,7 +46,6 @@ PROCESSING_RESUME_STALE_AFTER = timedelta(minutes=5)
 
 
 class DraftOfferUpdate(BaseModel):
-    product_id: str | None = None
     name: str | None = None
     brand: str | None = None
     category: str | None = None
@@ -61,7 +57,6 @@ class DraftOfferUpdate(BaseModel):
     unit_price_unit: str | None = None
     offer_notes: str | None = None
     is_reviewed: bool | None = None
-    detach_product: bool | None = None
 
 
 class DraftOfferCreate(BaseModel):
@@ -321,13 +316,12 @@ def _clone_offer_fields(
     supermarket_name: str,
 ) -> dict:
     return {
-        "product_id": source_offer.get("product_id"),
-        "draft_name": source_offer.get("draft_name"),
-        "draft_brand": source_offer.get("draft_brand"),
-        "draft_category": source_offer.get("draft_category"),
-        "draft_subcategory": source_offer.get("draft_subcategory"),
-        "draft_product_key": source_offer.get("draft_product_key"),
-        "draft_image_url": source_offer.get("draft_image_url"),
+        "name": source_offer.get("name"),
+        "brand": source_offer.get("brand"),
+        "category": source_offer.get("category"),
+        "subcategory": source_offer.get("subcategory"),
+        "offer_key": source_offer.get("offer_key"),
+        "image_url": source_offer.get("image_url"),
         "flyer_id": flyer_id,
         "supermarket_id": supermarket_id,
         "supermarket_name": supermarket_name,
@@ -536,8 +530,6 @@ def _sync_published_targets_for_source_flyer(
             "id",
             published_flyer_id,
         ).execute()
-        if notify_new:
-            enqueue_favorite_offers_published(sb, flyer_id=published_flyer_id)
     return counts
 
 
@@ -1330,7 +1322,7 @@ async def create_draft_offer(
 
     normalized_unit = normalize_unit_price_measure(payload.unit_price_unit) if payload.unit_price_unit else None
     offer_row = build_offer_row(
-        payload, None, flyer["supermarket_id"], flyer.get("supermarket_name"),
+        payload, flyer["supermarket_id"], flyer.get("supermarket_name"),
         flyer_id, normalized_unit, format_fields=build_format_fields(payload),
     )
     # Apply flyer date fallback (flyers.py-specific concern)
@@ -1357,7 +1349,7 @@ async def update_draft_offer(
 
     offer_result = (
         sb.table("offers")
-        .select("id, product_id, flyer_id, is_confirmed")
+        .select("id, flyer_id, is_confirmed")
         .eq("id", offer_id)
         .eq("flyer_id", flyer_id)
         .maybe_single()
@@ -1368,30 +1360,6 @@ async def update_draft_offer(
 
     offer = offer_result.data
     sent = payload.model_fields_set
-    if payload.detach_product and offer.get("is_confirmed"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Confirmed offers must stay linked to a product",
-        )
-    if payload.product_id and offer.get("is_confirmed"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Confirmed offers must stay linked to their original product",
-        )
-    if payload.product_id:
-        product = (
-            sb.table("products")
-            .select("id")
-            .eq("id", payload.product_id)
-            .maybe_single()
-            .execute()
-        )
-        if not product or not product.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Product not found",
-            )
-
     offer_fields = {
         k: (normalize_unit_price_measure(v) if k == "unit_price_unit" else v)
         for k, v in {
@@ -1401,9 +1369,8 @@ async def update_draft_offer(
             "unit_price_unit": payload.unit_price_unit,
             "offer_notes": payload.offer_notes,
             "is_reviewed": payload.is_reviewed,
-            "product_id": None if payload.detach_product else payload.product_id,
         }.items()
-        if k in sent or (k == "product_id" and payload.detach_product)
+        if k in sent
     }
     if "unit_price_value" in offer_fields and "unit_price_unit" in offer_fields:
         offer_fields["unit_price"] = format_unit_price_label(
@@ -1426,29 +1393,24 @@ async def update_draft_offer(
     }
     product_fields = {k: v for k, v in product_payload.items() if k in sent}
     if product_fields:
-        draft_fields = {
-            f"draft_{k}": v
-            for k, v in product_fields.items()
-        }
-        draft_fields["draft_product_key"] = draft_product_key(
+        draft_fields = dict(product_fields)
+        draft_fields["offer_key"] = draft_product_key(
             payload.name if "name" in sent else None,
             payload.brand if "brand" in sent else None,
         )
         if "name" not in sent or "brand" not in sent:
             current = (
                 sb.table("offers")
-                .select("draft_name, draft_brand")
+                .select("name, brand")
                 .eq("id", offer_id)
                 .single()
                 .execute()
             )
             current_data = current.data or {}
             draft_fields["draft_product_key"] = draft_product_key(
-                payload.name if "name" in sent else current_data.get("draft_name"),
-                payload.brand if "brand" in sent else current_data.get("draft_brand"),
+                payload.name if "name" in sent else current_data.get("name"),
+                payload.brand if "brand" in sent else current_data.get("brand"),
             )
-        if offer.get("is_confirmed"):
-            sb.table("products").update(product_fields).eq("id", offer["product_id"]).execute()
         sb.table("offers").update(draft_fields).eq("id", offer_id).execute()
 
     updated = (
@@ -1499,7 +1461,7 @@ async def upload_draft_offer_image(
 
     offer_result = (
         sb.table("offers")
-        .select("id, product_id, flyer_id, is_confirmed")
+        .select("id, flyer_id, is_confirmed")
         .eq("id", offer_id)
         .eq("flyer_id", flyer_id)
         .maybe_single()
@@ -1513,11 +1475,6 @@ async def upload_draft_offer_image(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Confirmed offers must be updated from the catalog product page",
-        )
-    if offer.get("product_id"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Detach the catalog product before uploading a draft image",
         )
     if not file.content_type or file.content_type not in ALLOWED_PRODUCT_IMAGE_TYPES:
         raise HTTPException(
@@ -1539,7 +1496,7 @@ async def upload_draft_offer_image(
         content_type=file.content_type,
         filename=file.filename,
     )
-    sb.table("offers").update({"draft_image_url": public_url}).eq("id", offer_id).execute()
+    sb.table("offers").update({"image_url": public_url}).eq("id", offer_id).execute()
 
     updated = (
         sb.table("offers")
@@ -1620,17 +1577,6 @@ async def confirm_offers(
         .execute()
     )
     draft_rows = drafts.data or []
-    for draft in draft_rows:
-        if draft.get("product_id"):
-            continue
-        product_id = upsert_product(sb, {
-            "name": draft.get("draft_name"),
-            "brand": draft.get("draft_brand"),
-            "category": draft.get("draft_category"),
-            "subcategory": draft.get("draft_subcategory"),
-            "image_url": draft.get("draft_image_url"),
-        })
-        sb.table("offers").update({"product_id": product_id}).eq("id", draft["id"]).execute()
 
     if draft_rows:
         sb.table("offers").update(
@@ -1736,9 +1682,6 @@ async def confirm_offers(
         sb.table("flyers").update(
             {"products_count": published_counts.get(published_flyer_id, 0)}
         ).eq("id", published_flyer_id).execute()
-        if confirmed_count > 0:
-            enqueue_favorite_offers_published(sb, flyer_id=published_flyer_id)
-
     if confirmed_count > 0:
         background_tasks.add_task(NotificationJobWorker(sb).run_pending)
 

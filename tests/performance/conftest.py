@@ -67,7 +67,6 @@ TRUNCATE_TABLES = [
     "list_members",
     "shopping_lists",
     "offers",
-    "products",
     "flyers",
     "supermarkets",
 ]
@@ -92,13 +91,6 @@ def _batch_insert(supabase_client, table: str, rows: list[dict], batch_size: int
     return inserted
 
 
-def _product_row(name: str, brand: str, grams: int) -> dict:
-    return {
-        "name": name,
-        "brand": brand,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Session-scoped supermarkets (shared by all performance tests)
 # ---------------------------------------------------------------------------
@@ -116,80 +108,29 @@ def perf_supermarkets(supabase_client):
 
 
 # ---------------------------------------------------------------------------
-# Session-scoped 10k products + 10k offers (for DB performance tests)
+# Session-scoped 10k offers (for DB performance tests)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def seeded_10k_dataset(supabase_client, perf_supermarkets):
-    """Seed 10,000 products and 10,000 offers; return (products, offers, supermarkets)."""
-    # --- Products ---
-    products_payload = [
-        _product_row(
-            name=f"{_PERF_PREFIX}Prodotto_{i:05d}",
-            brand=f"Brand_{i % 10:02d}",
-            grams=(i % 6 + 1) * 100,
-        )
-        for i in range(10_000)
-    ]
-    products = _batch_insert(supabase_client, "products", products_payload)
-
-    # --- Offers (1 per product, cycling through 5 supermarkets) ---
+    """Seed 10,000 self-contained offers cycling through five supermarkets."""
     offers_payload = [
         {
-            "product_id": p["id"],
             "supermarket_id": perf_supermarkets[idx % 5]["id"],
             "supermarket_name": perf_supermarkets[idx % 5]["name"],
+            "name": f"{_PERF_PREFIX}Prodotto_{idx:05d}",
+            "brand": f"Brand_{idx % 10:02d}",
+            "category": "dispensa",
             "price_offer": round(0.99 + (idx % 100) * 0.1, 2),
             "price_original": round(1.29 + (idx % 100) * 0.1, 2),
+            "valid_from": "2020-01-01",
             "valid_to": _FUTURE_DATE,
+            "is_confirmed": True,
+            "offer_kind": "published_target",
         }
-        for idx, p in enumerate(products)
+        for idx in range(10_000)
     ]
     offers = _batch_insert(supabase_client, "offers", offers_payload)
 
-    yield {"products": products, "offers": offers, "supermarkets": perf_supermarkets}
-
-
-# ---------------------------------------------------------------------------
-# Session-scoped 1000 products + 1000 offers (for optimizer performance tests)
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="session")
-def seeded_1k_optimizer_dataset(supabase_client):
-    """Seed 1,000 products and 1,000 offers for optimizer benchmarking."""
-    _delete_perf_data(supabase_client)
-    markets = [
-        {"name": f"{_PERF_PREFIX}OptMarket_{i}", "slug": f"perf-opt-market-{uuid.uuid4().hex[:6]}", "lat": 45.46 + i * 0.01, "lng": 9.18}
-        for i in range(5)
-    ]
-    supermarkets = _batch_insert(supabase_client, "supermarkets", markets)
-    product_names = [
-        "latte", "burro", "pane", "pasta", "riso", "olio", "pollo", "manzo",
-        "pesce", "uova", "formaggio", "yogurt", "mozzarella", "prosciutto", "salame",
-        "carote", "patate", "cipolle", "pomodori", "zucchine",
-    ]
-    products_payload = [
-        _product_row(
-            name=f"{_PERF_PREFIX}{product_names[i % len(product_names)].capitalize()} Opt_{i:04d}",
-            brand=f"BrandOpt_{i % 5:02d}",
-            grams=(i % 4 + 1) * 250,
-        )
-        for i in range(1_000)
-    ]
-    products = _batch_insert(supabase_client, "products", products_payload)
-
-    offers_payload = [
-        {
-            "product_id": p["id"],
-            "supermarket_id": supermarkets[idx % 5]["id"],
-            "supermarket_name": supermarkets[idx % 5]["name"],
-            "price_offer": round(1.0 + (idx % 50) * 0.05, 2),
-            "price_original": round(1.5 + (idx % 50) * 0.05, 2),
-            "valid_to": _FUTURE_DATE,
-        }
-        for idx, p in enumerate(products)
-    ]
-    offers = _batch_insert(supabase_client, "offers", offers_payload)
-
-    yield {"products": products, "offers": offers, "supermarkets": supermarkets}
+    yield {"offers": offers, "supermarkets": perf_supermarkets}
     _delete_perf_data(supabase_client)

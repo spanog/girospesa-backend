@@ -88,7 +88,9 @@ Restituisci un JSON con questa struttura esatta:
 
       "offer_notes": null,
       "valid_from": "YYYY-MM-DD",
-      "valid_to": "YYYY-MM-DD"
+      "valid_to": "YYYY-MM-DD",
+      "source_page": 1,
+      "packshot_bbox": [y_min, x_min, y_max, x_max]
     }
   ]
 }
@@ -222,6 +224,17 @@ Esempio:
 ---
 
 ## 4. Regole Operative Generali
+
+### Ritratto prodotto dal volantino
+Per ogni prodotto, restituisci `source_page` e `packshot_bbox` per permettere
+il ritaglio della sola confezione/prodotto mostrato nel volantino. `packshot_bbox`
+usa coordinate normalizzate nella griglia 0-1000, ordinate `[y_min, x_min, y_max,
+x_max]`. Includi sempre l'intero prodotto, con un piccolo margine di sicurezza:
+non tagliare mai lati, tappo, collo, base o confezioni dello stesso multipack.
+Escludi prezzo, testo, bollini e loghi del supermercato quando possibile.
+`source_page` deve essere sempre relativa al PDF ricevuto: 1 = prima pagina del
+chunk, 2 = seconda pagina. Se non puoi localizzare con affidabilità il packshot,
+ometti entrambi i campi.
 
 ### Filtro Categorie
 Estrai solo i prodotti appartenenti ai 7 punti della tassonomia.

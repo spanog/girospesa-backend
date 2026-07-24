@@ -6,10 +6,10 @@ Runs inside the backend as a FastAPI BackgroundTask.
 Pipeline:
   1. Fetch flyer row from DB
   2. Download file bytes
-  3. Extract products via configured LLM provider
+  3. Extract offer candidates via configured LLM provider
   4. Normalize + deduplicate
-  5. Match existing canonical products when confidence is high
-  6. Insert draft offers (is_confirmed=False); new products are created on confirmation
+  5. Persist self-contained draft offers (is_confirmed=False)
+  6. Attach each generated crop directly to its offer
   7. Update flyer status to 'done'
 
 For PDFs, chunk results are persisted incrementally. If one chunk fails after
@@ -28,16 +28,15 @@ import requests
 
 from core.config import settings
 from core.database import get_supabase
-from rapidfuzz import fuzz
 
 from services.extraction.normalizer import (
     deduplicate_products,
     expand_products,
     json_size_bytes,
-    normalize_for_comparison,
     normalize_product,
 )
 from services.extraction.pdf_utils import count_pdf_pages, is_pdf, mime_type_for_filename
+from services.extraction.packshots import render_packshot
 from services.extraction.providers import ExtractionProvider, get_provider
 from services.extraction.providers.base import PdfChunkExtractionError
 from services.extraction.extraction_log import ERROR, SUCCESS, WARNING, log_event
@@ -50,13 +49,6 @@ _FLYER_SELECT = (
     "id, file_url, file_name, supermarket_id, supermarket_name, valid_from, valid_to, "
     "user_id, status, extraction_metadata"
 )
-_PRODUCT_COLUMNS = (
-    "name",
-    "brand",
-    "category",
-    "subcategory",
-)
-
 
 class ExtractionService:
     def __init__(
@@ -68,7 +60,7 @@ class ExtractionService:
         self._supabase_factory = supabase_factory or get_supabase
 
     def run(self, flyer_id: str) -> None:
-        """Download → extract → normalize → upsert products → insert draft offers."""
+        """Download, extract, normalize, and persist self-contained draft offers."""
         sb = self._supabase_factory()
         flyer = self._fetch_flyer(sb, flyer_id)
         supermarket_id = flyer.get("supermarket_id")
@@ -102,6 +94,8 @@ class ExtractionService:
         mime_type = mime_type_for_filename(file_name)
         pages_count = count_pdf_pages(content) if is_pdf(file_name) else 1
         resume_state = self._resume_state(flyer, mime_type, pages_count)
+        if mime_type == "application/pdf":
+            self._provider.chunk_size_pages = resume_state["chunk_size_pages"]
         extraction_started_at = resume_state["extraction_started_at"]
         runtime = self._build_runtime_state(resume_state)
 
@@ -153,6 +147,7 @@ class ExtractionService:
                 supermarket_name=supermarket_name,
                 extracted_products=chunk_products,
                 runtime=runtime,
+                source_file_bytes=content,
             )
             retry_errors.extend(chunk_retry_errors)
             if chunk_retry_errors:
@@ -189,6 +184,7 @@ class ExtractionService:
                     supermarket_name=supermarket_name,
                     extracted_products=all_products,
                     runtime=runtime,
+                    source_file_bytes=content,
                 )
             runtime["chunks_completed"] = self._chunk_metadata(
                 mime_type,
@@ -209,6 +205,7 @@ class ExtractionService:
                 supermarket_name=supermarket_name,
                 extracted_products=all_products,
                 runtime=runtime,
+                source_file_bytes=content,
             )
         provider_seconds = time.perf_counter() - provider_started_at
 
@@ -348,14 +345,16 @@ class ExtractionService:
     def _resume_state(self, flyer: dict, mime_type: str, pages_count: int) -> dict:
         metadata = flyer.get("extraction_metadata")
         current = metadata if isinstance(metadata, dict) else {}
-        chunk_size = getattr(self._provider, "chunk_size_pages", 1) if mime_type == "application/pdf" else 1
-        if not isinstance(chunk_size, int) or chunk_size < 1:
-            chunk_size = 1
-        chunks_total = max(1, (pages_count + chunk_size - 1) // chunk_size)
+        default_chunk_size = getattr(self._provider, "chunk_size_pages", 1) if mime_type == "application/pdf" else 1
+        saved_chunk_size = self._int_metadata(current.get("chunk_size_pages"), minimum=1)
         chunks_completed = self._int_metadata(current.get("last_completed_chunk"), minimum=0) or self._int_metadata(
             current.get("chunks_completed"),
             minimum=0,
         ) or 0
+        chunk_size = saved_chunk_size if mime_type == "application/pdf" and chunks_completed > 0 and saved_chunk_size else default_chunk_size
+        if not isinstance(chunk_size, int) or chunk_size < 1:
+            chunk_size = 1
+        chunks_total = max(1, (pages_count + chunk_size - 1) // chunk_size)
         next_chunk_index = self._int_metadata(current.get("next_chunk_index"), minimum=1)
         resume_available = (
             mime_type == "application/pdf"
@@ -369,6 +368,7 @@ class ExtractionService:
             resume_available = False
         return {
             "resume_available": resume_available,
+            "chunk_size_pages": chunk_size,
             "start_chunk_index": start_chunk_index,
             "extraction_started_at": current.get("extraction_started_at") if resume_available else self._utc_timestamp(),
             "products_saved_count": self._int_metadata(
@@ -432,6 +432,7 @@ class ExtractionService:
         supermarket_name: str,
         extracted_products: list[dict],
         runtime: dict,
+        source_file_bytes: bytes | None = None,
     ) -> int:
         variant_started_at = time.perf_counter()
         expanded_products = expand_products(extracted_products)
@@ -462,13 +463,8 @@ class ExtractionService:
         if not normalized:
             return 0
 
-        product_upsert_started_at = time.perf_counter()
-        product_ids = self._match_existing_products_batch(sb, normalized)
-        runtime["product_upsert_seconds"] += time.perf_counter() - product_upsert_started_at
-
         offer_insert_started_at = time.perf_counter()
         offer_rows = self._build_offer_rows(
-            product_ids,
             normalized,
             flyer,
             supermarket_id,
@@ -478,76 +474,66 @@ class ExtractionService:
         if unique_offer_rows:
             sb.table("offers").upsert(  # type: ignore[union-attr]
                 unique_offer_rows,
-                on_conflict="flyer_id,draft_product_key,format_key",
+                on_conflict="flyer_id,offer_key,format_key",
                 ignore_duplicates=True,
             ).execute()
+            self._save_packshots(sb, source_file_bytes, unique_offer_rows, normalized)
         runtime["offer_insert_seconds"] += time.perf_counter() - offer_insert_started_at
         runtime["products_saved_count"] += len(unique_offer_rows)
         return len(unique_offer_rows)
 
+    def _save_packshots(
+        self,
+        sb: object,
+        source_file_bytes: bytes | None,
+        offer_rows: list[dict],
+        products: list[dict],
+    ) -> None:
+        if not source_file_bytes:
+            return
+        by_key = {
+            (self._offer_key(product), product.get("format_key")): product
+            for product in products
+            if product.get("source_page") and product.get("packshot_bbox")
+        }
+        for row in offer_rows:
+            product = by_key.get((row["offer_key"], row["format_key"]))
+            if not product:
+                continue
+            self._save_packshot(sb, row, source_file_bytes, product)
+
+    def _save_packshot(self, sb: object, row: dict, pdf_bytes: bytes, product: dict) -> None:
+        offer = (
+            sb.table("offers")
+            .select("id, image_url")
+            .eq("flyer_id", row["flyer_id"])
+            .eq("offer_key", row["offer_key"])
+            .eq("format_key", row["format_key"])
+            .maybe_single()
+            .execute()
+        )
+        if not offer.data or offer.data.get("image_url"):
+            return
+        image = render_packshot(pdf_bytes, product["source_page"], product["packshot_bbox"])
+        if not image:
+            return
+        path = f"draft-offers/{offer.data['id']}/auto-packshot.png"
+        sb.storage.from_("product-images").upload(
+            path=path, file=image, file_options={"content-type": "image/png", "upsert": "true"}
+        )
+        url = sb.storage.from_("product-images").get_public_url(path)
+        sb.table("offers").update({"image_url": url}).eq("id", offer.data["id"]).execute()
+
     def _conflict_key(self, row: dict) -> tuple[str, str | None]:
         return (row["name"], row.get("brand"))
 
-    def _product_row_from_normalized(self, row: dict) -> dict:
-        return {column: row.get(column) for column in _PRODUCT_COLUMNS}
-
-    def _find_similar_product(
-        self,
-        incoming: dict,
-        candidates: list[dict],
-    ) -> str | None:
-        """Return existing product_id if a candidate is similar enough to incoming, else None.
-
-        Candidates are pre-filtered by brand (exact citext match).
-        Name uses partial_ratio() (catches "Miscela Forte" vs "Miscela Forte Macinatura Moka").
-        """
-        name_b = normalize_for_comparison(incoming["name"])
-
-        for existing in candidates:
-            name_a = normalize_for_comparison(existing["name"])
-            name_score = fuzz.partial_ratio(name_a, name_b) / 100
-            if name_score >= settings.product_name_similarity_threshold:
-                return existing["id"]
-
-        return None
-
-    def _draft_product_key(self, row: dict) -> str:
+    def _offer_key(self, row: dict) -> str:
         name = " ".join((row.get("name") or "").split()).strip().lower()
         brand = " ".join((row.get("brand") or "").split()).strip().lower()
         return f"{name}|{brand}"
 
-    def _match_existing_products_batch(
-        self,
-        sb: object,
-        product_rows: list[dict],
-    ) -> dict[tuple[str, str | None], str | None]:
-        if not product_rows:
-            return {}
-        canonical_rows = [self._product_row_from_normalized(row) for row in product_rows]
-
-        # Group by brand and fetch candidates once per unique brand value. If a
-        # similar product exists, reuse its id; otherwise keep draft unbound.
-        by_conflict_key: dict[tuple[str, str | None], str | None] = {}
-        candidates_cache: dict[str | None, list[dict]] = {}
-
-        for row in canonical_rows:
-            brand = row.get("brand")
-            if brand not in candidates_cache:
-                q = sb.table("products").select("id, name, brand")  # type: ignore[union-attr]
-                if brand is None:
-                    q = q.is_("brand", "null")
-                else:
-                    q = q.eq("brand", brand)
-                candidates_cache[brand] = q.execute().data or []
-
-            existing_id = self._find_similar_product(row, candidates_cache[brand])
-            key = self._conflict_key(row)
-            by_conflict_key[key] = existing_id
-        return by_conflict_key
-
     def _build_offer_rows(
         self,
-        product_ids: dict[tuple[str, str | None], str | None],
         normalized: list[dict],
         flyer: dict,
         supermarket_id: str | None,
@@ -555,16 +541,14 @@ class ExtractionService:
     ) -> list[dict]:
         offer_rows: list[dict] = []
         for p in normalized:
-            key = self._conflict_key(p)
-            product_id = product_ids.get(key)
-            offer_rows.append(self._build_offer_row(product_id, p, flyer, supermarket_id, supermarket_name))
+            offer_rows.append(self._build_offer_row(p, flyer, supermarket_id, supermarket_name))
         return offer_rows
 
     def _deduplicate_offer_rows(self, offer_rows: list[dict]) -> list[dict]:
         seen: set[tuple[str | None, str | None, str]] = set()
         unique: list[dict] = []
         for row in offer_rows:
-            key = (row.get("flyer_id"), row.get("draft_product_key"), row["format_key"])
+            key = (row.get("flyer_id"), row.get("offer_key"), row["format_key"])
             if key not in seen:
                 seen.add(key)
                 unique.append(row)
@@ -852,52 +836,19 @@ class ExtractionService:
             return resp.content
         return bytes(sb.storage.from_("flyers").download(storage_path))  # type: ignore[union-attr]
 
-    def _upsert_product(self, sb: object, product_row: dict) -> str:
-        """
-        Upsert a canonical product row and return its stable UUID.
-
-        Uses ON CONFLICT (name, brand) DO UPDATE to always get the row
-        back in the RETURNING clause, even when the product already existed.
-        Falls back to a SELECT when the upsert returns an empty result set.
-
-        Raises ValueError if the product cannot be found or created.
-        """
-        canonical_row = self._product_row_from_normalized(product_row)
-        result = (
-            sb.table("products")  # type: ignore[union-attr]
-            .upsert(canonical_row, on_conflict="name,brand")
-            .execute()
-        )
-        if result.data:
-            return result.data[0]["id"]
-
-        # Fallback: SELECT with conflict-key filters
-        query = sb.table("products").select("id").eq("name", canonical_row["name"])  # type: ignore[union-attr]
-        brand = canonical_row.get("brand")
-        query = query.is_("brand", "null") if brand is None else query.eq("brand", brand)
-        existing = query.limit(1).execute()
-
-        if not existing.data:
-            raise ValueError(
-                f"Product not found after upsert: name={canonical_row['name']!r} brand={brand!r}"
-            )
-        return existing.data[0]["id"]
-
     def _build_offer_row(
         self,
-        product_id: str | None,
         p: dict,
         flyer: dict,
         supermarket_id: str | None,
         supermarket_name: str,
     ) -> dict:
         return {
-            "product_id": product_id,
-            "draft_name": p.get("name"),
-            "draft_brand": p.get("brand"),
-            "draft_category": p.get("category"),
-            "draft_subcategory": p.get("subcategory"),
-            "draft_product_key": self._draft_product_key(p),
+            "name": p.get("name"),
+            "brand": p.get("brand"),
+            "category": p.get("category"),
+            "subcategory": p.get("subcategory"),
+            "offer_key": self._offer_key(p),
             "supermarket_id": supermarket_id,
             "supermarket_name": supermarket_name,
             "flyer_id": flyer["id"],
