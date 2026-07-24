@@ -67,6 +67,7 @@ async def list_supermarkets(
     lat: float | None = Query(None),
     lng: float | None = Query(None),
     max_distance_km: float = Query(10.0, gt=0, le=20),
+    include_ids: list[str] = Query(default=[]),
 ) -> list[dict]:
     """Return active supermarkets. Public endpoint — no auth required.
 
@@ -76,10 +77,23 @@ async def list_supermarkets(
     if lat is not None and lng is not None:
         nearby = _nearby_supermarkets(sb, lat, lng, max_distance_km)
         ids = [row["id"] for row in nearby]
-        if not ids:
+        if not ids and not include_ids:
             return []
-        resp = sb.table("supermarkets").select("*").in_("id", ids).execute()
-        return _merge_distances(resp.data or [], nearby)
+        nearby_rows = []
+        if ids:
+            resp = sb.table("supermarkets").select("*").in_("id", ids).execute()
+            nearby_rows = _merge_distances(resp.data or [], nearby)
+        missing_ids = [store_id for store_id in include_ids if store_id not in ids]
+        if not missing_ids:
+            return nearby_rows
+        included = (
+            sb.table("supermarkets")
+            .select("*")
+            .in_("id", missing_ids)
+            .eq("is_active", True)
+            .execute()
+        )
+        return [*nearby_rows, *(included.data or [])]
 
     if has_active_offers:
         resp = apply_current_offer_window(
