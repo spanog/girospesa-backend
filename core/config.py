@@ -48,10 +48,6 @@ class Settings(BaseSettings):
     backend_url: str = "http://localhost:8000"
     cors_extra_origins: str = ""
 
-    # Product fuzzy deduplication thresholds (pre-upsert similarity check)
-    product_name_similarity_threshold: float = 0.85   # rapidfuzz partial_ratio / 100
-    product_brand_similarity_threshold: float = 0.90  # rapidfuzz ratio / 100 (after diacritic normalization)
-
     @field_validator("app_session_secret")
     @classmethod
     def validate_app_session_secret(cls, value: str) -> str:

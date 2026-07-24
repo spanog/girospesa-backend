@@ -10,10 +10,9 @@ The backend runs scheduled background jobs via APScheduler (`AsyncIOScheduler`),
 
 ### Note storico acquisti
 
-- `purchase_history.product_id` resta valorizzabile come snapshot storico del prodotto acquistato, ma non mantiene più una foreign key verso `products`.
+- `purchase_history.product_id` è un campo di compatibilità e viene salvato a `NULL`; non mantiene una foreign key verso un catalogo prodotti.
 - `purchase_history.quantity` salva quantità acquistata; `price_paid`, `price_original` e `savings` nello storico sono importi totali già scalati per quantità.
-- `purchase_history` salva anche snapshot di `brand`, `format_label`, `image_url`, `category`, `subcategory` e dei campi `unit_price*`, così lo storico frontend mantiene stessa densità informativa anche se catalogo o offerte cambiano nel tempo.
-- Questo permette di eliminare prodotti canonici non più usati senza perdere coerenza nello storico acquisti.
+- `purchase_history` salva anche snapshot di `brand`, `format_label`, `image_url`, `category`, `subcategory` e dei campi `unit_price*`, così lo storico frontend resta coerente anche quando un'offerta non è più disponibile.
 
 | Job | Schedule | Service | Description |
 |-----|----------|---------|-------------|

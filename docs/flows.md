@@ -113,6 +113,6 @@ Frontend
 ```
 
 ---
-## Ritagli prodotto nelle bozze
+## Ritagli offerta nelle bozze
 
-Durante l'estrazione PDF, Gemini può restituire pagina sorgente e bounding box normalizzato del solo packshot. Il backend rende la pagina, amplia il box con un margine adattivo anti-taglio e salva il prodotto in `product-images` come `draft_image_url`. La review delle bozze lo mostra automaticamente. Coordinate mancanti o non valide non bloccano l'estrazione e lasciano la bozza senza immagine; immagini manuali esistenti non vengono sovrascritte.
+Durante l'estrazione PDF, Gemini può restituire pagina sorgente e bounding box normalizzato del packshot. Il backend rende la pagina, amplia il box con un margine adattivo anti-taglio e salva il crop in `product-images`, assegnandone l'URL a `offers.image_url`. La review delle bozze lo mostra automaticamente. Coordinate mancanti o non valide non bloccano l'estrazione e lasciano la bozza senza immagine; immagini manuali esistenti non vengono sovrascritte.
