@@ -1,4 +1,4 @@
-"""Performance tests — Supabase query benchmarks with 10,000+ products.
+"""Performance tests — Supabase query benchmarks with 10,000 offers.
 
 Verifies that indexed queries (FTS, is_active filter, JOIN) complete within
 acceptable wall-clock thresholds. A failure here indicates a missing index
@@ -21,23 +21,19 @@ import pytest
 # Thresholds (ms)
 # ---------------------------------------------------------------------------
 
-FTS_LIMIT_MS = 500       # full-text search on 10k products
+FTS_LIMIT_MS = 500       # name search on 10k offers
 FILTER_LIMIT_MS = 500    # active offers filter + JOIN on 10k offers
 PAGINATED_LIMIT_MS = 300 # paginated offer list (first page, 50 rows)
 
 
 class TestDatabaseQueryPerformance:
-    """Query timing assertions against a 10,000-product dataset."""
+    """Query timing assertions against a 10,000-offer dataset."""
 
     def test_fts_query_under_threshold(self, supabase_client, seeded_10k_dataset):
-        """FTS search on `name_tsv` with 10k products completes in < 500ms.
-
-        Uses the GIN-indexed `name_tsv` column. Slow result indicates missing
-        index or PostgREST/Supabase config issue.
-        """
+        """Name search on 10k self-contained offers completes in < 500ms."""
         start = time.perf_counter()
         result = (
-            supabase_client.table("products")
+            supabase_client.table("offers")
             .select("id, name, brand")
             .ilike("name", "%PERF_Prodotto_0%")
             .limit(50)
@@ -47,16 +43,12 @@ class TestDatabaseQueryPerformance:
 
         assert elapsed_ms < FTS_LIMIT_MS, (
             f"FTS query took {elapsed_ms:.0f}ms — exceeds {FTS_LIMIT_MS}ms threshold. "
-            "Check GIN index on name_tsv."
+            "Check the offer name index."
         )
         assert len(result.data) > 0, "FTS query returned no results — check seeded data"
 
     def test_active_offers_filter_under_threshold(self, supabase_client, seeded_10k_dataset):
-        """Filtering active offers (valid_to >= today) with product+supermarket JOIN completes in < 500ms.
-
-        The `valid_to` column should have a B-tree index. The JOIN with `products`
-        and `supermarkets` should use FK-based lookups.
-        """
+        """Filtering active offers with supermarket data completes in < 500ms."""
         import datetime
 
         today = datetime.date.today().isoformat()
@@ -64,7 +56,7 @@ class TestDatabaseQueryPerformance:
         start = time.perf_counter()
         result = (
             supabase_client.table("offers")
-            .select("id, price_offer, valid_to, products(name, brand), supermarkets(name)")
+            .select("id, name, brand, price_offer, valid_to, supermarkets(name)")
             .gte("valid_to", today)
             .limit(50)
             .execute()
@@ -95,16 +87,16 @@ class TestDatabaseQueryPerformance:
         )
         assert len(result.data) == 50
 
-    def test_product_count_consistency(self, supabase_client, seeded_10k_dataset):
-        """Sanity check: at least 10,000 PERF_ products exist in the DB."""
+    def test_offer_count_consistency(self, supabase_client, seeded_10k_dataset):
+        """Sanity check: at least 10,000 PERF_ offers exist in the DB."""
         result = (
-            supabase_client.table("products")
+            supabase_client.table("offers")
             .select("id", count="exact")
             .ilike("name", "PERF_%")
             .execute()
         )
         assert result.count >= 10_000, (
-            f"Expected ≥10,000 PERF_ products but found {result.count}. "
+            f"Expected ≥10,000 PERF_ offers but found {result.count}. "
             "Seeding may have failed — check conftest.py."
         )
 
