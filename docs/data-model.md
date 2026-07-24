@@ -16,8 +16,8 @@
 | Bucket | Pattern path | Scopo | Max dimensione | Accesso |
 |--------|-------------|-------|----------------|---------|
 | `avatars` | `{user_id}.{jpg\|png\|webp}` | Foto profilo utente | 5 MB | URL pubblico |
-| `flyers` | `{user_id}/{uuid}.{pdf\|jpg}` | Volantini caricati (pre-estrazione) | 50 MB | URL pubblico |
-| `product-images` | `{product_id}/{uuid}.{ext}` o `draft-offers/{offer_id}/{uuid}.{ext}` | Immagini prodotti admin e immagini staged durante review flyer | — | URL pubblico |
+| `flyers` | `{user_id}/{uuid}.{pdf\|jpg}` | Volantini caricati (pre-estrazione) | 50 MB | Privato, accesso backend/service role |
+| `product-images` | `draft-offers/{offer_id}/auto-packshot.png` o `draft-offers/{offer_id}/{uuid}.{ext}` | Crop estratti dal volantino e immagini caricate in review | — | URL pubblico |
 
 I bucket pubblici non espongono listing anonimo via `storage.objects`: client e frontend devono usare solo URL diretti `/storage/v1/object/public/...`.
 
