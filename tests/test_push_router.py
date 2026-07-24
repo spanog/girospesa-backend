@@ -534,7 +534,7 @@ class TestNotifyPublicFlyerPublished:
                     "supermarket_id": "super-1",
                     "aggregation_key": "flyer-published:flyer-1",
                     "products_count": 12,
-                    "url": "/offerte?sort=published_at&scroll=offers&context_supermarket_id=super-1",
+                    "url": "/offerte?sort=published_at&scroll=offers&supermarket_id=super-1",
                 },
             }
         )
@@ -684,7 +684,7 @@ class TestNotifyPublicFlyerPublished:
                     "supermarket_id": "super-1",
                     "aggregation_key": "flyer-published:flyer-1",
                     "products_count": 12,
-                    "url": "/offerte?sort=published_at&scroll=offers&context_supermarket_id=super-1",
+                    "url": "/offerte?sort=published_at&scroll=offers&supermarket_id=super-1",
                 },
             }
         )

@@ -222,7 +222,7 @@ def _offer_is_currently_active(record: dict) -> bool:
 def _offers_url(*, supermarket_id: str | None) -> str:
     params = ["sort=published_at", "scroll=offers"]
     if supermarket_id:
-        params.append(f"context_supermarket_id={supermarket_id}")
+        params.append(f"supermarket_id={supermarket_id}")
     return f"/offerte?{'&'.join(params)}"
 
 
