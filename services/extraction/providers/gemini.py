@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import multiprocessing
 import random
 import re
 import time
@@ -21,10 +22,69 @@ RETRY_BACKOFF_S = 2
 TRANSIENT_ERROR_BACKOFF_S = 10
 SERVER_OVERLOAD_BACKOFF_S = 20
 RETRY_JITTER_RATIO = 0.25
-PDF_CHUNK_SIZE_PAGES = 3
+PDF_CHUNK_SIZE_PAGES = 2
+GEMINI_REQUEST_TIMEOUT_MS = 8 * 60 * 1000
+GEMINI_REQUEST_TIMEOUT_S = GEMINI_REQUEST_TIMEOUT_MS / 1000
 _RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)s'")
 _UNAVAILABLE_RE = re.compile(r"503|UNAVAILABLE", re.IGNORECASE)
 _TRANSIENT_SERVER_ERROR_RE = re.compile(r"500|502|504|INTERNAL|BAD_GATEWAY|GATEWAY_TIMEOUT", re.IGNORECASE)
+
+
+class GeminiRequestTimeoutError(TimeoutError):
+    """Raised when one Gemini request exceeds its hard deadline."""
+
+
+def _generate_in_child(
+    api_key: str, model: str, payload_bytes: bytes, mime_type: str, prompt: str, result: object
+) -> None:
+    try:
+        from google import genai
+        from google.genai import types as gtypes
+
+        response = genai.Client(
+            api_key=api_key,
+            http_options=gtypes.HttpOptions(timeout=GEMINI_REQUEST_TIMEOUT_MS),
+        ).models.generate_content(
+            model=model,
+            contents=[gtypes.Part.from_bytes(data=payload_bytes, mime_type=mime_type), gtypes.Part.from_text(text=prompt)],
+            config=gtypes.GenerateContentConfig(
+                response_mime_type="application/json", temperature=0.1,
+                http_options=gtypes.HttpOptions(timeout=GEMINI_REQUEST_TIMEOUT_MS),
+            ),
+        )
+        result.send(("ok", response.text or "{}"))
+    except Exception as exc:
+        result.send(("error", _format_exception(exc)))
+    finally:
+        result.close()
+
+
+def _generate_with_hard_deadline(
+    *, api_key: str, model: str, payload_bytes: bytes, mime_type: str, prompt: str, **_: object
+) -> str:
+    context = multiprocessing.get_context("spawn")
+    received, sent = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_generate_in_child,
+        args=(api_key, model, payload_bytes, mime_type, prompt, sent),
+    )
+    process.start()
+    sent.close()
+    try:
+        if not received.poll(GEMINI_REQUEST_TIMEOUT_S):
+            process.terminate()
+            process.join()
+            raise GeminiRequestTimeoutError(f"Gemini request exceeded {GEMINI_REQUEST_TIMEOUT_S:.0f}s deadline")
+        status, payload = received.recv()
+        process.join()
+        if status != "ok":
+            raise RuntimeError(payload)
+        return payload
+    finally:
+        received.close()
+        if process.is_alive():
+            process.terminate()
+            process.join()
 
 
 def _retry_delay(exc: Exception, attempt: int = 0) -> float:
@@ -102,9 +162,15 @@ def _format_exception(exc: Exception) -> str:
 
 
 class GeminiProvider:
-    def __init__(self, api_key: str, model: str = "gemma-4-31b-it") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gemma-4-31b-it",
+        request_executor: Callable[..., str] | None = None,
+    ) -> None:
         self._api_key = api_key
         self._model = model
+        self._request_executor = request_executor or _generate_with_hard_deadline
         self.chunk_size_pages = PDF_CHUNK_SIZE_PAGES
 
     def extract_products(
@@ -136,7 +202,10 @@ class GeminiProvider:
                 "Compress or split the file before extraction."
             )
 
-        client = genai.Client(api_key=self._api_key)
+        client = genai.Client(
+            api_key=self._api_key,
+            http_options=gtypes.HttpOptions(timeout=GEMINI_REQUEST_TIMEOUT_MS),
+        )
         if mime_type == "application/pdf":
             return self._extract_pdf_chunks(
                 client=client,
@@ -160,19 +229,18 @@ class GeminiProvider:
         gtypes: object,
         payload_bytes: bytes,
         mime_type: str,
+        prompt: str = EXTRACTION_PROMPT,
     ) -> dict:
-        response = client.models.generate_content(
+        response_text = self._request_executor(
+            api_key=self._api_key,
+            client=client,
+            gtypes=gtypes,
             model=self._model,
-            contents=[
-                gtypes.Part.from_bytes(data=payload_bytes, mime_type=mime_type),
-                gtypes.Part.from_text(text=EXTRACTION_PROMPT),
-            ],
-            config=gtypes.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
+            payload_bytes=payload_bytes,
+            mime_type=mime_type,
+            prompt=prompt,
         )
-        return json.loads(response.text or "{}")
+        return json.loads(response_text)
 
     def _extract_single_payload(
         self,
@@ -218,7 +286,7 @@ class GeminiProvider:
         chunk_result_callback: Callable[[dict], None] | None,
         start_chunk_index: int,
     ) -> tuple[list[dict], list[str]]:
-        chunks = split_pdf_into_chunks(pdf_bytes, PDF_CHUNK_SIZE_PAGES)
+        chunks = split_pdf_into_chunks(pdf_bytes, self.chunk_size_pages)
         products: list[dict] = []
         retry_errors: list[str] = []
 
@@ -305,6 +373,7 @@ class GeminiProvider:
                     gtypes=gtypes,
                     payload_bytes=chunk.pdf_bytes,
                     mime_type="application/pdf",
+                    prompt=EXTRACTION_PROMPT,
                 )
             except Exception as exc:
                 msg = (
@@ -319,6 +388,27 @@ class GeminiProvider:
                         logger.info("Rate limited — waiting %.0fs before retry", delay)
                     time.sleep(delay)
                 continue
-            products = data.get("products", [])
-            return [p for p in products if isinstance(p, dict)], retry_errors
+            products = [p for p in data.get("products", []) if isinstance(p, dict)]
+            return self._absolute_chunk_pages(products, chunk), retry_errors
         return [], retry_errors
+
+    def _absolute_chunk_pages(self, products: list[dict], chunk: PdfChunk) -> list[dict]:
+        normalized: list[dict] = []
+        chunk_pages = chunk.end_page - chunk.start_page + 1
+        for product in products:
+            copy = dict(product)
+            page = self._relative_page(copy.get("source_page"), chunk_pages)
+            if page is None:
+                copy.pop("source_page", None)
+                copy.pop("packshot_bbox", None)
+            else:
+                copy["source_page"] = chunk.start_page + page - 1
+            normalized.append(copy)
+        return normalized
+
+    def _relative_page(self, value: object, chunk_pages: int) -> int | None:
+        try:
+            page = int(value)
+        except (TypeError, ValueError):
+            return None
+        return page if 1 <= page <= chunk_pages else None

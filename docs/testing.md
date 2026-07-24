@@ -34,9 +34,9 @@ Comandi manuali utili:
 
 FastAPI non deve essere avviato separatamente: i test HTTP usano l'app in-process via HTTPX/ASGI.
 
-I test di integrazione coprono: geocoding, ottimizzazione, upload volantino, lifecycle preferiti, inviti lista, eliminazione account (GDPR).
+I test di integrazione coprono: geocoding, upload/revisione/conferma volantino, inviti lista, scadenza offerte ed eliminazione account (GDPR).
 
-I contract snapshot di integrazione vivono in `tests/integration/__snapshots__/`. Servono a bloccare regressioni di shape JSON su `/favorites`, `/optimize`, `/invite`, `/lists/active` e route affini senza sostituire le assertion semantiche.
+I contract snapshot di integrazione vivono in `tests/integration/__snapshots__/`. Servono a bloccare regressioni di shape JSON su `/offers`, `/invite`, `/lists/active` e route affini senza sostituire le assertion semantiche.
 
 ### Test di performance (opt-in)
 

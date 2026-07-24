@@ -103,7 +103,6 @@ class AddItemBody(BaseModel):
     quantity: float = 1.0
     unit: str | None = None
     source: Literal["manual", "offer"] = "manual"
-    pinned_product_id: str | None = None  # canonical products.id (set when source='offer')
     pinned_offer_id: str | None = None    # specific offers.id (set when source='offer')
     image_url: str | None = None
 
@@ -135,36 +134,21 @@ def _is_past_timestamp(value: str | datetime | None) -> bool:
     return value < _now_utc()
 
 
-def _product_categories(sb: object, product_ids: set[str]) -> dict[str, dict]:
-    if not product_ids:
+def _offer_categories(sb: object, offer_ids: set[str]) -> dict[str, dict]:
+    if not offer_ids:
         return {}
     rows = (
-        sb.table("products")  # type: ignore[union-attr,attr-defined]
+        sb.table("offers")  # type: ignore[union-attr,attr-defined]
         .select("id, brand, category, subcategory")
-        .in_("id", sorted(product_ids))
+        .in_("id", sorted(offer_ids))
         .execute()
         .data
     )
     return {row["id"]: row for row in rows}
 
 
-def _offer_categories(sb: object, offer_ids: set[str]) -> dict[str, dict]:
-    if not offer_ids:
-        return {}
-    rows = (
-        sb.table("offers")  # type: ignore[union-attr,attr-defined]
-        .select("id, product_id, products(brand, category, subcategory)")
-        .in_("id", sorted(offer_ids))
-        .execute()
-        .data
-    )
-    return {row["id"]: row.get("products") or {} for row in rows}
-
-
-def _category_for_item(item: dict, products: dict, offers: dict) -> dict:
-    product_id = item.get("pinned_product_id")
-    product = products.get(product_id) if product_id else None
-    category_source = product or offers.get(item.get("pinned_offer_id")) or {}
+def _category_for_item(item: dict, offers: dict) -> dict:
+    category_source = offers.get(item.get("pinned_offer_id")) or {}
     return {
         **item,
         "brand": category_source.get("brand", item.get("brand")),
@@ -174,11 +158,9 @@ def _category_for_item(item: dict, products: dict, offers: dict) -> dict:
 
 
 def _enrich_items_with_categories(sb: object, items: list[dict]) -> list[dict]:
-    product_ids = {item["pinned_product_id"] for item in items if item.get("pinned_product_id")}
     offer_ids = {item["pinned_offer_id"] for item in items if item.get("pinned_offer_id")}
-    products = _product_categories(sb, product_ids)
     offers = _offer_categories(sb, offer_ids)
-    return [_category_for_item(item, products, offers) for item in items]
+    return [_category_for_item(item, offers) for item in items]
 
 
 def _patch_quantity_in_items(
@@ -248,12 +230,10 @@ def _find_item(items: list[dict], item_id: str) -> dict:
 
 
 def _deal_snapshot_from_offer(offer: dict) -> dict:
-    product = offer.get("products") or {}
     supermarket = offer.get("supermarkets") or {}
     return {
         "offer_id": offer["id"],
-        "product_id": offer["product_id"],
-        "product_name": product.get("name"),
+        "product_name": offer.get("name"),
         "supermarket_id": offer.get("supermarket_id"),
         "supermarket_name": supermarket.get("name"),
         "price_offer": offer.get("price_offer"),
@@ -276,7 +256,7 @@ def _offer_row(sb: object, offer_id: str) -> dict:
     rows = (
         sb.table("offers")  # type: ignore[union-attr,attr-defined]
         .select(
-            "id, product_id, supermarket_id, price_offer, price_original, "
+            "id, name, brand, category, subcategory, image_url, supermarket_id, price_offer, price_original, "
             "discount_pct, unit_price, unit_price_value, unit_price_unit, "
             "valid_to, format_label"
         )
@@ -288,18 +268,6 @@ def _offer_row(sb: object, offer_id: str) -> dict:
     if not rows:
         raise HTTPException(status_code=404, detail="Offer not found")
     return rows[0]
-
-
-def _product_row(sb: object, product_id: str) -> dict:
-    rows = (
-        sb.table("products")  # type: ignore[union-attr,attr-defined]
-        .select("id, name, brand, category, subcategory, image_url")
-        .eq("id", product_id)
-        .limit(1)
-        .execute()
-        .data
-    )
-    return rows[0] if rows else {}
 
 
 def _supermarket_row(sb: object, supermarket_id: str | None) -> dict:
@@ -318,23 +286,19 @@ def _supermarket_row(sb: object, supermarket_id: str | None) -> dict:
 
 def _selected_offer_patch(sb: object, offer_id: str) -> dict:
     offer = _offer_row(sb, offer_id)
-    product = _product_row(sb, offer["product_id"])
     supermarket = _supermarket_row(sb, offer.get("supermarket_id"))
     offer = {
         **offer,
-        "products": product,
         "supermarkets": supermarket,
     }
-    product = offer.get("products") or {}
     return {
         "source": "offer",
-        "name": product.get("name", ""),
-        "brand": product.get("brand"),
-        "pinned_product_id": offer["product_id"],
+        "name": offer.get("name", ""),
+        "brand": offer.get("brand"),
         "pinned_offer_id": offer["id"],
-        "image_url": product.get("image_url"),
-        "category": product.get("category"),
-        "subcategory": product.get("subcategory"),
+        "image_url": offer.get("image_url"),
+        "category": offer.get("category"),
+        "subcategory": offer.get("subcategory"),
         "found_deals": [_deal_snapshot_from_offer(offer)],
     }
 
@@ -1146,7 +1110,6 @@ async def add_item(
         "added_by": user_id,
         "added_at": datetime.now(timezone.utc).isoformat(),
         "source": body.source,
-        "pinned_product_id": body.pinned_product_id,
         "pinned_offer_id": body.pinned_offer_id,
         "image_url": body.image_url,
         "category": None,
@@ -1523,7 +1486,6 @@ async def get_deal_freshness(
             "current_price": entry["current_price"],
             "snapshot_price": entry["pinned_price"],
             "pinned_offer_id": entry.get("pinned_offer_id"),
-            "pinned_product_id": entry.get("pinned_product_id"),
             "offer_visibility_status": (
                 HIDDEN_FOR_VIEWER
                 if entry.get("pinned_offer_id") in hidden_offer_ids

@@ -113,7 +113,7 @@ class TestManualOffersAuthzIntegration:
         offers = (
             supabase_client.table("offers")
             .select("supermarket_id")
-            .eq("draft_name", "Mozzarella test")
+            .eq("name", "Mozzarella test")
             .execute()
         ).data
         assert offers == [{"supermarket_id": supermarkets["managed"]["id"]}]

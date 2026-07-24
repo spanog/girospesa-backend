@@ -69,11 +69,6 @@ def _make_sb(supermarket_data: dict | None = None) -> MagicMock:
     sm_result.data = supermarket_data if supermarket_data is not None else {"id": "sup-1", "name": "Coop"}
     sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = sm_result
 
-    # product upsert
-    prod_upsert_result = MagicMock()
-    prod_upsert_result.data = [{"id": "prod-1"}]
-    sb.table.return_value.upsert.return_value.execute.return_value = prod_upsert_result
-
     # offer insert
     insert_result = MagicMock()
     insert_result.data = [{"id": "offer-new"}]
@@ -86,6 +81,13 @@ def _make_sb(supermarket_data: dict | None = None) -> MagicMock:
         "flyer_id": None,
         "supermarket_id": "sup-1",
         "supermarket_name": "Coop",
+        "name": "Mozzarella",
+        "brand": "Galbani",
+        "category": None,
+        "subcategory": None,
+        "format": {},
+        "format_label": "",
+        "image_url": None,
         "price_offer": 1.99,
         "price_original": None,
         "unit_price": None,
@@ -95,16 +97,6 @@ def _make_sb(supermarket_data: dict | None = None) -> MagicMock:
         "valid_from": None,
         "valid_to": None,
         "is_confirmed": False,
-        "products": {
-            "id": "prod-1",
-            "name": "Mozzarella",
-            "brand": "Galbani",
-            "category": None,
-            "subcategory": None,
-            "format": {},
-            "format_label": "",
-            "image_url": None,
-        },
     }
     sb.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = final_result
 

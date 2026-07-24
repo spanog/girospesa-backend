@@ -11,7 +11,7 @@
 │  │  girospesa-webapp/     │ ────────▶ │  girospesa-backend/             │   │
 │  │  (Next.js)         │           │  (questo repo — FastAPI)    │   │
 │  │                    │           │                             │   │
-│  │  Frontend SPA      │ ◀──────── │  /products  /optimize       │   │
+│  │  Frontend SPA      │ ◀──────── │  /offers  /lists            │   │
 │  │  Supabase Auth     │  JSON     │  /lists     /invite         │   │
 │  │  Realtime subs     │           │  /push      /users          │   │
 │  └────────────────────┘           │  /analytics /admin/...      │   │
@@ -48,17 +48,14 @@ girospesa-backend/
 ├── api/routers/              # Endpoint HTTP organizzati per dominio
 │   ├── users.py              # Profilo utente, geocoding, avatar, eliminazione account
 │   ├── lists.py              # CRUD lista spesa, gestione items, freshness offerte
-│   ├── products.py           # Catalogo offerte attive, ricerca full-text, prodotti simili
-│   ├── favorites.py          # Prodotti preferiti per utente
+│   ├── offers.py             # Offerte attive, ricerca e filtri
 │   ├── flyers.py             # Upload volantini, listing volantini pubblici
-│   ├── optimize.py           # Algoritmo greedy set-cover per ottimizzazione lista
 │   ├── supermarkets.py       # Directory supermercati (pubblica)
 │   ├── lists.py              # Lista singola + condivisione via inviti email
 │   ├── push.py               # Iscrizioni Web Push/native
 │   ├── purchases.py          # Storico acquisti, tracking risparmio
 │   ├── analytics.py          # Analytics B2B anonimizzata (API key auth)
 │   ├── contact_requests.py   # Contatti pubblici, bug report, collaborazione, volantini mancanti
-│   └── admin_products.py     # CRUD prodotti e offerte (admin only)
 │
 ├── core/                     # Infrastruttura condivisa
 │   ├── config.py             # Pydantic settings da .env
@@ -77,7 +74,7 @@ girospesa-backend/
 └── tests/
     ├── unit/                 # Test unitari (nessuna infrastruttura)
     ├── integration/          # Test di integrazione (richiede `supabase start`)
-    └── performance/          # Benchmark DB, optimizer, upload
+    └── performance/          # Benchmark DB e upload
 ```
 
 ---
