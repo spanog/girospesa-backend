@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from PIL import Image
 
 
 _BOX_GRID_SIZE = 1000
+_PACKSHOT_RENDER_SCALE = 2
 
 
 def normalized_box(value: object) -> tuple[int, int, int, int] | None:
@@ -23,18 +24,33 @@ def normalized_box(value: object) -> tuple[int, int, int, int] | None:
 
 
 def render_packshot(pdf_bytes: bytes, page_number: int, box: object) -> bytes | None:
-    coordinates = normalized_box(box)
-    if coordinates is None or page_number < 1:
-        return None
+    return render_page_packshots(pdf_bytes, page_number, {"packshot": box}).get("packshot")
+
+
+def render_page_packshots(
+    pdf_bytes: bytes, page_number: int, boxes: Mapping[str, object]
+) -> dict[str, bytes]:
     image = _render_page(pdf_bytes, page_number)
     if image is None:
-        return None
-    crop = image.crop(_pixel_box(image.size, expanded_box(coordinates)))
+        return {}
     try:
-        return _png_bytes(crop)
+        return _render_crops(image, boxes)
     finally:
-        crop.close()
         image.close()
+
+
+def _render_crops(image: Image.Image, boxes: Mapping[str, object]) -> dict[str, bytes]:
+    rendered: dict[str, bytes] = {}
+    for key, box in boxes.items():
+        coordinates = normalized_box(box)
+        if coordinates is None:
+            continue
+        crop = image.crop(_pixel_box(image.size, expanded_box(coordinates)))
+        try:
+            rendered[key] = _png_bytes(crop)
+        finally:
+            crop.close()
+    return rendered
 
 
 def _render_page(pdf_bytes: bytes, page_number: int) -> Image.Image | None:
@@ -45,7 +61,9 @@ def _render_page(pdf_bytes: bytes, page_number: int) -> Image.Image | None:
         if page_number > len(document):
             document.close()
             return None
-        pixmap = document.load_page(page_number - 1).get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
+        pixmap = document.load_page(page_number - 1).get_pixmap(
+            matrix=fitz.Matrix(_PACKSHOT_RENDER_SCALE, _PACKSHOT_RENDER_SCALE), alpha=False
+        )
         document.close()
         with BytesIO(pixmap.tobytes("png")) as buffer:
             with Image.open(buffer) as source:
