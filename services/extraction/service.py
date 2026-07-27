@@ -98,6 +98,7 @@ class ExtractionService:
             self._provider.chunk_size_pages = resume_state["chunk_size_pages"]
         extraction_started_at = resume_state["extraction_started_at"]
         runtime = self._build_runtime_state(resume_state)
+        self._save_pending_packshots(sb, flyer_id, content)
 
         sb.table("flyers").update(  # type: ignore[union-attr]
             {
@@ -147,8 +148,17 @@ class ExtractionService:
                 supermarket_name=supermarket_name,
                 extracted_products=chunk_products,
                 runtime=runtime,
-                source_file_bytes=content,
             )
+            self._checkpoint_persisted_chunk(
+                sb=sb,
+                flyer_id=flyer_id,
+                mime_type=mime_type,
+                pages_count=pages_count,
+                extraction_started_at=extraction_started_at,
+                chunk_payload=chunk_payload,
+                runtime=runtime,
+            )
+            self._save_pending_packshots(sb, flyer_id, content)
             retry_errors.extend(chunk_retry_errors)
             if chunk_retry_errors:
                 log_event(
@@ -184,7 +194,6 @@ class ExtractionService:
                     supermarket_name=supermarket_name,
                     extracted_products=all_products,
                     runtime=runtime,
-                    source_file_bytes=content,
                 )
             runtime["chunks_completed"] = self._chunk_metadata(
                 mime_type,
@@ -205,8 +214,8 @@ class ExtractionService:
                 supermarket_name=supermarket_name,
                 extracted_products=all_products,
                 runtime=runtime,
-                source_file_bytes=content,
             )
+        self._save_pending_packshots(sb, flyer_id, content)
         provider_seconds = time.perf_counter() - provider_started_at
 
         sb.table("flyers").update({  # type: ignore[union-attr]
@@ -432,7 +441,6 @@ class ExtractionService:
         supermarket_name: str,
         extracted_products: list[dict],
         runtime: dict,
-        source_file_bytes: bytes | None = None,
     ) -> int:
         variant_started_at = time.perf_counter()
         expanded_products = expand_products(extracted_products)
@@ -477,52 +485,65 @@ class ExtractionService:
                 on_conflict="flyer_id,offer_key,format_key",
                 ignore_duplicates=True,
             ).execute()
-            self._save_packshots(sb, source_file_bytes, unique_offer_rows, normalized)
         runtime["offer_insert_seconds"] += time.perf_counter() - offer_insert_started_at
         runtime["products_saved_count"] += len(unique_offer_rows)
         return len(unique_offer_rows)
 
-    def _save_packshots(
-        self,
-        sb: object,
-        source_file_bytes: bytes | None,
-        offer_rows: list[dict],
-        products: list[dict],
-    ) -> None:
-        if not source_file_bytes:
-            return
-        by_key = {
-            (self._offer_key(product), product.get("format_key")): product
-            for product in products
-            if product.get("source_page") and product.get("packshot_bbox")
-        }
-        for row in offer_rows:
-            product = by_key.get((row["offer_key"], row["format_key"]))
-            if not product:
-                continue
-            self._save_packshot(sb, row, source_file_bytes, product)
-
-    def _save_packshot(self, sb: object, row: dict, pdf_bytes: bytes, product: dict) -> None:
-        offer = (
-            sb.table("offers")
-            .select("id, image_url")
-            .eq("flyer_id", row["flyer_id"])
-            .eq("offer_key", row["offer_key"])
-            .eq("format_key", row["format_key"])
-            .maybe_single()
+    def _save_pending_packshots(self, sb: object, flyer_id: str, pdf_bytes: bytes) -> None:
+        pending = (
+            sb.table("offers")  # type: ignore[union-attr]
+            .select("id, image_url, packshot_source_page, packshot_bbox")
+            .eq("flyer_id", flyer_id)
+            .is_("image_url", "null")
+            .not_.is_("packshot_source_page", "null")
+            .not_.is_("packshot_bbox", "null")
             .execute()
         )
-        if not offer.data or offer.data.get("image_url"):
-            return
-        image = render_packshot(pdf_bytes, product["source_page"], product["packshot_bbox"])
+        for offer in pending.data or []:
+            self._upload_packshot(sb, offer, pdf_bytes, offer["packshot_source_page"], offer["packshot_bbox"])
+
+    def _upload_packshot(
+        self, sb: object, offer: dict, pdf_bytes: bytes, source_page: int, packshot_bbox: object
+    ) -> None:
+        image = render_packshot(pdf_bytes, source_page, packshot_bbox)
         if not image:
             return
-        path = f"draft-offers/{offer.data['id']}/auto-packshot.png"
-        sb.storage.from_("product-images").upload(
-            path=path, file=image, file_options={"content-type": "image/png", "upsert": "true"}
+        try:
+            path = f"draft-offers/{offer['id']}/auto-packshot.png"
+            sb.storage.from_("product-images").upload(
+                path=path, file=image, file_options={"content-type": "image/png", "upsert": "true"}
+            )
+            url = sb.storage.from_("product-images").get_public_url(path)
+            sb.table("offers").update({"image_url": url}).eq("id", offer["id"]).execute()
+        finally:
+            del image
+
+    def _checkpoint_persisted_chunk(
+        self,
+        *,
+        sb: object,
+        flyer_id: str,
+        mime_type: str,
+        pages_count: int,
+        extraction_started_at: str,
+        chunk_payload: dict,
+        runtime: dict,
+    ) -> None:
+        self._update_chunk_progress(
+            sb,
+            flyer_id,
+            mime_type,
+            pages_count,
+            extraction_started_at,
+            {
+                "chunks_completed": chunk_payload["chunk_index"],
+                "current_chunk_start": chunk_payload["current_chunk_start"],
+                "current_chunk_end": chunk_payload["current_chunk_end"],
+                "pages_processed": chunk_payload["current_chunk_end"],
+                "products_found": runtime["products_saved_count"],
+            },
+            runtime,
         )
-        url = sb.storage.from_("product-images").get_public_url(path)
-        sb.table("offers").update({"image_url": url}).eq("id", offer.data["id"]).execute()
 
     def _conflict_key(self, row: dict) -> tuple[str, str | None]:
         return (row["name"], row.get("brand"))
@@ -864,6 +885,8 @@ class ExtractionService:
             "valid_from": flyer.get("valid_from") or p.get("valid_from"),
             "valid_to": flyer.get("valid_to") or p.get("valid_to"),
             "is_confirmed": False,
+            "packshot_source_page": p.get("source_page"),
+            "packshot_bbox": p.get("packshot_bbox"),
         }
 
     def _handle_error(

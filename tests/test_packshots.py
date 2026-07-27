@@ -45,30 +45,27 @@ def test_packshot_upload_populates_empty_draft_image() -> None:
     from services.extraction.service import ExtractionService
 
     sb = MagicMock()
-    offer_query = sb.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.maybe_single.return_value
-    offer_query.execute.return_value.data = {"id": "offer-1", "image_url": None}
     sb.storage.from_.return_value.get_public_url.return_value = "https://storage.test/packshot.png"
-    row = {"flyer_id": "flyer-1", "offer_key": "passata|petti", "format_key": "v1:{}"}
-    product = {"source_page": 1, "packshot_bbox": [100, 200, 900, 800]}
 
     with patch("services.extraction.service.render_packshot", return_value=b"png"):
-        ExtractionService()._save_packshot(sb, row, b"%PDF", product)
+        ExtractionService()._upload_packshot(sb, {"id": "offer-1"}, b"%PDF", 1, [100, 200, 900, 800])
 
     sb.storage.from_.return_value.upload.assert_called_once()
     sb.table.return_value.update.assert_called_once_with({"image_url": "https://storage.test/packshot.png"})
 
 
-def test_packshot_upload_preserves_manual_draft_image() -> None:
+def test_pending_packshots_are_uploaded_from_persisted_metadata() -> None:
     from services.extraction.service import ExtractionService
 
     sb = MagicMock()
-    offer_query = sb.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.maybe_single.return_value
-    offer_query.execute.return_value.data = {"id": "offer-1", "image_url": "https://manual.test/image.png"}
-    row = {"flyer_id": "flyer-1", "offer_key": "passata|petti", "format_key": "v1:{}"}
-    product = {"source_page": 1, "packshot_bbox": [100, 200, 900, 800]}
+    pending = (
+        sb.table.return_value.select.return_value.eq.return_value.is_.return_value.not_.is_.return_value.not_.is_.return_value
+    )
+    pending.execute.return_value.data = [
+        {"id": "offer-1", "image_url": None, "packshot_source_page": 2, "packshot_bbox": [1, 2, 3, 4]}
+    ]
 
-    with patch("services.extraction.service.render_packshot") as render:
-        ExtractionService()._save_packshot(sb, row, b"%PDF", product)
+    with patch.object(ExtractionService, "_upload_packshot") as upload:
+        ExtractionService()._save_pending_packshots(sb, "flyer-1", b"%PDF")
 
-    render.assert_not_called()
-    sb.storage.from_.assert_not_called()
+    upload.assert_called_once_with(sb, pending.execute.return_value.data[0], b"%PDF", 2, [1, 2, 3, 4])

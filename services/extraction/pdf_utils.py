@@ -4,6 +4,7 @@ pdf_utils.py — PDF utility helpers (page count, chunking, page rasterization, 
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import NamedTuple
 
 
@@ -38,11 +39,15 @@ def count_pdf_pages(pdf_bytes: bytes) -> int:
 
 def split_pdf_into_chunks(pdf_bytes: bytes, chunk_size: int) -> list[PdfChunk]:
     """Split a PDF into smaller PDF byte payloads with fixed page counts."""
+    return list(iter_pdf_chunks(pdf_bytes, chunk_size))
+
+
+def iter_pdf_chunks(pdf_bytes: bytes, chunk_size: int) -> Iterator[PdfChunk]:
+    """Yield PDF chunks one at a time, keeping one generated chunk in memory."""
     if chunk_size < 1:
         raise ValueError("chunk_size must be >= 1")
 
     doc = _open_pdf(pdf_bytes)
-    chunks: list[PdfChunk] = []
     try:
         import fitz  # PyMuPDF
 
@@ -53,16 +58,13 @@ def split_pdf_into_chunks(pdf_bytes: bytes, chunk_size: int) -> list[PdfChunk]:
             out_doc.insert_pdf(doc, from_page=start_index, to_page=end_index)
             chunk_bytes = out_doc.tobytes()
             out_doc.close()
-            chunks.append(
-                PdfChunk(
-                    start_page=start_index + 1,
-                    end_page=end_index + 1,
-                    pdf_bytes=chunk_bytes,
-                )
+            yield PdfChunk(
+                start_page=start_index + 1,
+                end_page=end_index + 1,
+                pdf_bytes=chunk_bytes,
             )
     finally:
         doc.close()
-    return chunks
 
 
 def split_pdf_to_jpeg_pages(pdf_bytes: bytes, dpi: int = 150) -> list[bytes]:
