@@ -16,11 +16,46 @@ from api.routers._offer_utils import build_offer_row, insert_and_fetch_offer
 router = APIRouter()
 
 
+def _nearby_supermarket_ids(
+    sb, lat: float, lng: float, max_distance_km: float
+) -> list[str]:
+    response = sb.rpc(
+        "nearby_supermarkets",
+        {
+            "user_lat": lat,
+            "user_lng": lng,
+            "radius_m": max_distance_km * 1000,
+        },
+    ).execute()
+    return [row["id"] for row in (response.data or [])]
+
+
+def _supermarket_address(supermarket: dict, fallback_name: str | None) -> str | None:
+    address = (supermarket.get("address") or "").strip()
+    city = (supermarket.get("city") or "").strip()
+    if not address:
+        return city or None
+    if not city:
+        return address
+    normalized_address = address.casefold()
+    normalized_city = city.casefold()
+    normalized_name = (supermarket.get("name") or fallback_name or "").strip().casefold()
+    if normalized_address == normalized_city or (
+        normalized_name and normalized_address.startswith(normalized_name)
+        and normalized_address.endswith(normalized_city)
+    ):
+        return city
+    return address if normalized_city in normalized_address else f"{address}, {city}"
+
+
 @router.get("")
 async def list_public_offers(
     q: str | None = Query(None),
     category: str | None = Query(None),
     supermarket_id: str | None = Query(None),
+    lat: float | None = Query(None),
+    lng: float | None = Query(None),
+    max_distance_km: float | None = Query(None, gt=0, le=20),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> dict:
@@ -33,6 +68,13 @@ async def list_public_offers(
         .eq("offer_kind", "published_target")
     )
     query = apply_current_offer_window(query)
+    if lat is not None and lng is not None:
+        nearby_ids = _nearby_supermarket_ids(
+            sb, lat, lng, max_distance_km if max_distance_km is not None else 10.0
+        )
+        if not nearby_ids:
+            return {"items": [], "total": 0, "nextPage": None}
+        query = query.in_("supermarket_id", nearby_ids)
     if q:
         query = query.ilike("name", f"%{q.strip()}%")
     if category:
@@ -48,9 +90,9 @@ async def list_public_offers(
             "supermarket_name": supermarket.get("name") or row.get("supermarket_name"),
             "supermarket_slug": supermarket.get("slug"),
             "supermarket_logo_url": supermarket.get("logo_url"),
-            "supermarket_address": ", ".join(
-                value for value in (supermarket.get("address"), supermarket.get("city")) if value
-            ) or None,
+            "supermarket_address": _supermarket_address(
+                supermarket, row.get("supermarket_name")
+            ),
         })
     total = response.count or 0
     return {"items": items, "total": total, "nextPage": offset + limit if offset + limit < total else None}

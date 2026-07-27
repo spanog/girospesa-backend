@@ -60,6 +60,12 @@ async def _post(url: str, dep_overrides: dict, json: dict | None = None) -> http
         return await client.post(url, json=json)
 
 
+async def _get(url: str) -> httpx.Response:
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get(url)
+
+
 def _make_sb(supermarket_data: dict | None = None) -> MagicMock:
     """Build a Supabase mock for the offers router."""
     sb = MagicMock()
@@ -106,6 +112,46 @@ def _make_sb(supermarket_data: dict | None = None) -> MagicMock:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_public_offers_filters_by_nearby_supermarkets():
+    sb = MagicMock()
+    sb.rpc.return_value.execute.return_value = MagicMock(data=[{"id": "sup-1"}])
+    query = sb.table.return_value.select.return_value.eq.return_value.eq.return_value
+    query.in_.return_value.order.return_value.range.return_value.execute.return_value = MagicMock(
+        data=[], count=0
+    )
+
+    with patch("api.routers.offers.get_supabase", return_value=sb), patch(
+        "api.routers.offers.apply_current_offer_window", side_effect=lambda value: value
+    ):
+        resp = await _get("/offers?lat=45.464&lng=9.189&max_distance_km=10")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"items": [], "total": 0, "nextPage": None}
+    sb.rpc.assert_called_once_with(
+        "nearby_supermarkets",
+        {"user_lat": 45.464, "user_lng": 9.189, "radius_m": 10000.0},
+    )
+    query.in_.assert_called_once_with("supermarket_id", ["sup-1"])
+
+
+def test_supermarket_address_keeps_only_city_for_city_only_location():
+    assert _offers_module._supermarket_address(
+        {
+            "name": "Conad Superstore",
+            "address": "Conad Superstore - Taurianova",
+            "city": "Taurianova",
+        },
+        "Conad Superstore",
+    ) == "Taurianova"
+
+
+def test_supermarket_address_keeps_street_and_city():
+    assert _offers_module._supermarket_address(
+        {"address": "Via Roma 12", "city": "Milano"}, None
+    ) == "Via Roma 12, Milano"
 
 class TestCreateManualOffer:
     @pytest.mark.asyncio
