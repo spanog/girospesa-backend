@@ -31,6 +31,8 @@ def _resolved_format_label(offer: dict) -> str:
 
 def _flatten_draft_offer(offer: dict) -> dict:
     offer = dict(offer)
+    offer.pop("packshot_source_page", None)
+    offer.pop("packshot_bbox", None)
     return {
         **offer,
         "format_label": _resolved_format_label(offer),

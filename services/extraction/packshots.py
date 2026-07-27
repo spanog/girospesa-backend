@@ -30,7 +30,11 @@ def render_packshot(pdf_bytes: bytes, page_number: int, box: object) -> bytes | 
     if image is None:
         return None
     crop = image.crop(_pixel_box(image.size, expanded_box(coordinates)))
-    return _png_bytes(crop)
+    try:
+        return _png_bytes(crop)
+    finally:
+        crop.close()
+        image.close()
 
 
 def _render_page(pdf_bytes: bytes, page_number: int) -> Image.Image | None:
@@ -43,7 +47,9 @@ def _render_page(pdf_bytes: bytes, page_number: int) -> Image.Image | None:
             return None
         pixmap = document.load_page(page_number - 1).get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
         document.close()
-        return Image.open(BytesIO(pixmap.tobytes("png"))).convert("RGB")
+        with BytesIO(pixmap.tobytes("png")) as buffer:
+            with Image.open(buffer) as source:
+                return source.convert("RGB")
     except (ImportError, RuntimeError, ValueError):
         return None
 

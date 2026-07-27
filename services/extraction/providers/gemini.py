@@ -10,7 +10,7 @@ import re
 import time
 from typing import Callable
 
-from services.extraction.pdf_utils import PdfChunk, split_pdf_into_chunks
+from services.extraction.pdf_utils import PdfChunk, count_pdf_pages, iter_pdf_chunks
 from services.extraction.providers.base import PdfChunkExtractionError
 from services.extraction.providers.prompts import EXTRACTION_PROMPT
 
@@ -286,22 +286,23 @@ class GeminiProvider:
         chunk_result_callback: Callable[[dict], None] | None,
         start_chunk_index: int,
     ) -> tuple[list[dict], list[str]]:
-        chunks = split_pdf_into_chunks(pdf_bytes, self.chunk_size_pages)
         products: list[dict] = []
         retry_errors: list[str] = []
+        pages_total = count_pdf_pages(pdf_bytes)
+        chunks_total = max(1, (pages_total + self.chunk_size_pages - 1) // self.chunk_size_pages)
 
-        if start_chunk_index < 1 or start_chunk_index > len(chunks):
+        if start_chunk_index < 1 or start_chunk_index > chunks_total:
             raise ValueError(
-                f"Invalid start_chunk_index {start_chunk_index} for {len(chunks)} chunk(s)"
+                f"Invalid start_chunk_index {start_chunk_index} for {chunks_total} chunk(s)"
             )
 
-        for chunk_index, chunk in enumerate(chunks, start=1):
+        for chunk_index, chunk in enumerate(iter_pdf_chunks(pdf_bytes, self.chunk_size_pages), start=1):
             if chunk_index < start_chunk_index:
                 continue
             if progress_callback:
                 progress = {
                     "chunks_completed": chunk_index - 1,
-                    "chunks_total": len(chunks),
+                    "chunks_total": chunks_total,
                     "current_chunk_start": chunk.start_page,
                     "current_chunk_end": chunk.end_page,
                     "pages_processed": chunk.start_page - 1,
@@ -315,13 +316,13 @@ class GeminiProvider:
                 gtypes=gtypes,
                 chunk=chunk,
                 chunk_index=chunk_index,
-                chunks_total=len(chunks),
+                chunks_total=chunks_total,
             )
             retry_errors.extend(chunk_errors)
             if chunk_errors and not chunk_products:
                 raise PdfChunkExtractionError(
                     chunk_index=chunk_index,
-                    chunks_total=len(chunks),
+                    chunks_total=chunks_total,
                     start_page=chunk.start_page,
                     end_page=chunk.end_page,
                     retry_errors=chunk_errors,
@@ -330,7 +331,7 @@ class GeminiProvider:
                 chunk_result_callback(
                     {
                         "chunk_index": chunk_index,
-                        "chunks_total": len(chunks),
+                        "chunks_total": chunks_total,
                         "current_chunk_start": chunk.start_page,
                         "current_chunk_end": chunk.end_page,
                         "products": chunk_products,
@@ -342,7 +343,7 @@ class GeminiProvider:
                 progress_callback(
                     {
                         "chunks_completed": chunk_index,
-                        "chunks_total": len(chunks),
+                        "chunks_total": chunks_total,
                         "current_chunk_start": chunk.start_page,
                         "current_chunk_end": chunk.end_page,
                         "pages_processed": chunk.end_page,

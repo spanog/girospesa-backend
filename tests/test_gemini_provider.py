@@ -137,11 +137,12 @@ def test_extract_products_chunks_pdf_in_fixed_groups_of_three_pages() -> None:
         PdfChunk(start_page=7, end_page=7, pdf_bytes=b"chunk-7"),
     ]
     progress_events: list[dict] = []
-    with patch(
-        "services.extraction.providers.gemini.split_pdf_into_chunks",
-        return_value=chunks,
+    with (
+        patch("services.extraction.providers.gemini.count_pdf_pages", return_value=7),
+        patch("services.extraction.providers.gemini.iter_pdf_chunks", return_value=iter(chunks)),
     ):
         provider = GeminiProvider(api_key="test-key", request_executor=_direct_request_executor)
+        provider.chunk_size_pages = 3
         products, retry_errors = provider.extract_products(
             b"%PDF-fake",
             "application/pdf",
@@ -224,14 +225,16 @@ def test_extract_products_aborts_when_one_pdf_chunk_keeps_failing() -> None:
     from services.extraction.providers.base import PdfChunkExtractionError
     from services.extraction.providers.gemini import GeminiProvider
 
-    with patch(
-        "services.extraction.providers.gemini.split_pdf_into_chunks",
-        return_value=[
-            PdfChunk(start_page=1, end_page=3, pdf_bytes=b"chunk-1-3"),
-            PdfChunk(start_page=4, end_page=6, pdf_bytes=b"chunk-4-6"),
-        ],
+    chunks = [
+        PdfChunk(start_page=1, end_page=3, pdf_bytes=b"chunk-1-3"),
+        PdfChunk(start_page=4, end_page=6, pdf_bytes=b"chunk-4-6"),
+    ]
+    with (
+        patch("services.extraction.providers.gemini.count_pdf_pages", return_value=6),
+        patch("services.extraction.providers.gemini.iter_pdf_chunks", return_value=iter(chunks)),
     ):
         provider = GeminiProvider(api_key="test-key", request_executor=_direct_request_executor)
+        provider.chunk_size_pages = 3
         with pytest.raises(PdfChunkExtractionError) as excinfo:
             provider.extract_products(b"%PDF-fake", "application/pdf")
 
@@ -255,15 +258,17 @@ def test_extract_products_can_resume_from_specific_pdf_chunk() -> None:
     from services.extraction.pdf_utils import PdfChunk
     from services.extraction.providers.gemini import GeminiProvider
 
-    with patch(
-        "services.extraction.providers.gemini.split_pdf_into_chunks",
-        return_value=[
-            PdfChunk(start_page=1, end_page=3, pdf_bytes=b"chunk-1-3"),
-            PdfChunk(start_page=4, end_page=6, pdf_bytes=b"chunk-4-6"),
-            PdfChunk(start_page=7, end_page=7, pdf_bytes=b"chunk-7"),
-        ],
+    chunks = [
+        PdfChunk(start_page=1, end_page=3, pdf_bytes=b"chunk-1-3"),
+        PdfChunk(start_page=4, end_page=6, pdf_bytes=b"chunk-4-6"),
+        PdfChunk(start_page=7, end_page=7, pdf_bytes=b"chunk-7"),
+    ]
+    with (
+        patch("services.extraction.providers.gemini.count_pdf_pages", return_value=7),
+        patch("services.extraction.providers.gemini.iter_pdf_chunks", return_value=iter(chunks)),
     ):
         provider = GeminiProvider(api_key="test-key", request_executor=_direct_request_executor)
+        provider.chunk_size_pages = 3
         products, retry_errors = provider.extract_products(
             b"%PDF-fake",
             "application/pdf",
