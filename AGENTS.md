@@ -15,6 +15,7 @@
 - Supabase schema or RLS changes must keep `supabase db advisors --local` clean for touched areas; wrap `auth.uid()` / `auth.jwt()` as `select` expressions in policies when possible to avoid advisor performance warnings.
 - Snapshot tests support, not replace, explicit assertions on permissions, ordering, lifecycle transitions, and domain invariants.
 - `GET /offers` deve applicare `lat`, `lng` e `max_distance_km` al filtro dei supermercati prima di paginare le offerte.
+- `append_list_item` deve incrementare atomically una riga attiva con lo stesso `pinned_offer_id`, senza unire righe già acquistate.
 
 ## Commands
 

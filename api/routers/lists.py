@@ -372,11 +372,60 @@ def _direct_rpc_call(function_name: str, payload: dict, user_id: str) -> None:
             cursor.execute(
                 """
                 UPDATE public.shopping_lists
-                SET items = COALESCE(items, '[]'::jsonb) || jsonb_build_array(%s::jsonb),
+                SET items = CASE
+                    WHEN %s::jsonb->>'source' = 'offer'
+                        AND %s::jsonb->>'pinned_offer_id' IS NOT NULL
+                        AND EXISTS (
+                            SELECT 1
+                            FROM jsonb_array_elements(COALESCE(items, '[]'::jsonb)) item
+                            WHERE item->>'source' = 'offer'
+                              AND item->>'pinned_offer_id' = %s::jsonb->>'pinned_offer_id'
+                              AND COALESCE((item->>'purchased')::boolean, false) = false
+                        )
+                    THEN (
+                        SELECT jsonb_agg(
+                            CASE
+                                WHEN item->>'source' = 'offer'
+                                    AND item->>'pinned_offer_id' = %s::jsonb->>'pinned_offer_id'
+                                    AND COALESCE((item->>'purchased')::boolean, false) = false
+                                    AND item->>'id' = (
+                                        SELECT candidate->>'id'
+                                        FROM jsonb_array_elements(COALESCE(items, '[]'::jsonb)) candidate
+                                        WHERE candidate->>'source' = 'offer'
+                                          AND candidate->>'pinned_offer_id' = %s::jsonb->>'pinned_offer_id'
+                                          AND COALESCE((candidate->>'purchased')::boolean, false) = false
+                                        LIMIT 1
+                                    )
+                                THEN jsonb_set(
+                                    item,
+                                    '{quantity}',
+                                    to_jsonb(
+                                        COALESCE((item->>'quantity')::numeric, 0)
+                                        + COALESCE((%s::jsonb->>'quantity')::numeric, 1)
+                                    )
+                                )
+                                ELSE item
+                            END
+                            ORDER BY position
+                        )
+                        FROM jsonb_array_elements(COALESCE(items, '[]'::jsonb))
+                            WITH ORDINALITY AS entries(item, position)
+                    )
+                    ELSE COALESCE(items, '[]'::jsonb) || jsonb_build_array(%s::jsonb)
+                END,
                     updated_at = now()
                 WHERE id = %s
                 """,
-                (json.dumps(payload["p_item"]), payload["p_list_id"]),
+                (
+                    json.dumps(payload["p_item"]),
+                    json.dumps(payload["p_item"]),
+                    json.dumps(payload["p_item"]),
+                    json.dumps(payload["p_item"]),
+                    json.dumps(payload["p_item"]),
+                    json.dumps(payload["p_item"]),
+                    json.dumps(payload["p_item"]),
+                    payload["p_list_id"],
+                ),
             )
             return
         if function_name == "remove_list_item":

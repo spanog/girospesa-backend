@@ -148,6 +148,42 @@ def test_update_list_item_concurrent_patches(db_setup):
     assert len(items) == 2
 
 
+def test_append_list_item_increments_matching_active_offer(db_setup):
+    conn, owner_id, list_id, _item1_id, _item2_id = db_setup
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    first_item = {
+        "id": str(uuid.uuid4()),
+        "name": "Latte",
+        "quantity": 1,
+        "source": "offer",
+        "pinned_offer_id": "offer-1",
+        "purchased": False,
+    }
+    second_item = {**first_item, "id": str(uuid.uuid4()), "quantity": 2}
+
+    cur.execute("SET LOCAL role = authenticated;")
+    cur.execute(
+        "SELECT set_config('request.jwt.claims', %s, true)",
+        (json.dumps({"sub": owner_id, "role": "authenticated"}),),
+    )
+    cur.execute(
+        "SELECT append_list_item(%s::uuid, %s::jsonb)",
+        (list_id, json.dumps(first_item)),
+    )
+    cur.execute(
+        "SELECT append_list_item(%s::uuid, %s::jsonb)",
+        (list_id, json.dumps(second_item)),
+    )
+    conn.commit()
+
+    cur.execute("SELECT items FROM public.shopping_lists WHERE id = %s", (list_id,))
+    items = cur.fetchone()["items"]
+    matching_items = [item for item in items if item.get("pinned_offer_id") == "offer-1"]
+
+    assert len(matching_items) == 1
+    assert matching_items[0]["quantity"] == 3
+
+
 def test_update_list_item_rpc_denied_to_anon(db_setup):
     conn, owner_id, list_id, item1_id, _item2_id = db_setup
     cur = conn.cursor()
