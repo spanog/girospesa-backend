@@ -36,7 +36,7 @@ from services.extraction.normalizer import (
     normalize_product,
 )
 from services.extraction.pdf_utils import count_pdf_pages, is_pdf, mime_type_for_filename
-from services.extraction.packshots import render_packshot
+from services.extraction.packshots import render_page_packshots
 from services.extraction.providers import ExtractionProvider, get_provider
 from services.extraction.providers.base import PdfChunkExtractionError
 from services.extraction.extraction_log import ERROR, SUCCESS, WARNING, log_event
@@ -499,13 +499,22 @@ class ExtractionService:
             .not_.is_("packshot_bbox", "null")
             .execute()
         )
-        for offer in pending.data or []:
-            self._upload_packshot(sb, offer, pdf_bytes, offer["packshot_source_page"], offer["packshot_bbox"])
+        for source_page, offers in self._packshots_by_page(pending.data or []).items():
+            images = render_page_packshots(
+                pdf_bytes, source_page, {offer["id"]: offer["packshot_bbox"] for offer in offers}
+            )
+            for offer in offers:
+                self._upload_packshot(sb, offer, images.get(offer["id"]))
+
+    def _packshots_by_page(self, offers: list[dict]) -> dict[int, list[dict]]:
+        grouped: dict[int, list[dict]] = {}
+        for offer in offers:
+            grouped.setdefault(offer["packshot_source_page"], []).append(offer)
+        return grouped
 
     def _upload_packshot(
-        self, sb: object, offer: dict, pdf_bytes: bytes, source_page: int, packshot_bbox: object
+        self, sb: object, offer: dict, image: bytes | None
     ) -> None:
-        image = render_packshot(pdf_bytes, source_page, packshot_bbox)
         if not image:
             return
         try:

@@ -3,7 +3,9 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from services.extraction.normalizer import normalize_product
-from services.extraction.packshots import expanded_box, normalized_box
+from PIL import Image
+
+from services.extraction.packshots import expanded_box, normalized_box, render_page_packshots
 
 
 def test_normalized_box_accepts_gemma_grid_coordinates() -> None:
@@ -47,8 +49,7 @@ def test_packshot_upload_populates_empty_draft_image() -> None:
     sb = MagicMock()
     sb.storage.from_.return_value.get_public_url.return_value = "https://storage.test/packshot.png"
 
-    with patch("services.extraction.service.render_packshot", return_value=b"png"):
-        ExtractionService()._upload_packshot(sb, {"id": "offer-1"}, b"%PDF", 1, [100, 200, 900, 800])
+    ExtractionService()._upload_packshot(sb, {"id": "offer-1"}, b"png")
 
     sb.storage.from_.return_value.upload.assert_called_once()
     sb.table.return_value.update.assert_called_once_with({"image_url": "https://storage.test/packshot.png"})
@@ -65,7 +66,18 @@ def test_pending_packshots_are_uploaded_from_persisted_metadata() -> None:
         {"id": "offer-1", "image_url": None, "packshot_source_page": 2, "packshot_bbox": [1, 2, 3, 4]}
     ]
 
-    with patch.object(ExtractionService, "_upload_packshot") as upload:
+    with patch("services.extraction.service.render_page_packshots", return_value={"offer-1": b"png"}) as render, patch.object(ExtractionService, "_upload_packshot") as upload:
         ExtractionService()._save_pending_packshots(sb, "flyer-1", b"%PDF")
 
-    upload.assert_called_once_with(sb, pending.execute.return_value.data[0], b"%PDF", 2, [1, 2, 3, 4])
+    render.assert_called_once_with(b"%PDF", 2, {"offer-1": [1, 2, 3, 4]})
+    upload.assert_called_once_with(sb, pending.execute.return_value.data[0], b"png")
+
+
+def test_page_packshots_render_page_once_for_multiple_crops() -> None:
+    page = Image.new("RGB", (1000, 1000))
+
+    with patch("services.extraction.packshots._render_page", return_value=page) as render:
+        crops = render_page_packshots(b"%PDF", 2, {"one": [100, 100, 300, 300], "two": [400, 400, 700, 700]})
+
+    assert render.call_count == 1
+    assert set(crops) == {"one", "two"}
