@@ -347,15 +347,15 @@ class TestPublicFlyersVisibility:
         assert resp.status_code == 200
         assert resp.json() == [
             {
-                "id": "flyer-taurianova",
-                "source_flyer_id": "source-conad",
-                "supermarket_id": "taurianova",
-                "confirmed_count": 306,
-            },
-            {
                 "id": "flyer-polistena",
                 "source_flyer_id": "source-conad",
                 "supermarket_id": "polistena",
+                "confirmed_count": 306,
+            },
+            {
+                "id": "flyer-taurianova",
+                "source_flyer_id": "source-conad",
+                "supermarket_id": "taurianova",
                 "confirmed_count": 306,
             }
         ]

@@ -936,6 +936,7 @@ async def list_public_flyers(
         flyer["confirmed_count"] = confirmed_count
         visible_flyers.append(flyer)
 
+    visible_flyers.sort(key=lambda flyer: distances[flyer["supermarket_id"]])
     return visible_flyers
 
 

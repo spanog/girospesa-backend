@@ -173,8 +173,8 @@ async def test_with_active_offers_keeps_only_nearby_supermarkets_with_current_of
 
     assert resp.status_code == 200
     assert resp.json() == [
-        {"id": "sup-taurianova", "name": "Conad", "distance_km": 7.3},
         {"id": "sup-polistena", "name": "Conad", "distance_km": 1.1},
+        {"id": "sup-taurianova", "name": "Conad", "distance_km": 7.3},
     ]
 
 
