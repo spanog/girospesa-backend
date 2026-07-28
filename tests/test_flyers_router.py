@@ -298,20 +298,29 @@ class TestPublicFlyersVisibility:
         query = flyers_table.select.return_value
         query.eq.return_value = query
         query.order.return_value = query
-        query.execute.return_value = MagicMock(
+        first_page = MagicMock()
+        first_page.execute.return_value = MagicMock(
+            count=2,
             data=[
                 {
                     "id": "flyer-taurianova",
                     "source_flyer_id": "source-conad",
                     "supermarket_id": "taurianova",
-                },
+                }
+            ],
+        )
+        second_page = MagicMock()
+        second_page.execute.return_value = MagicMock(
+            count=2,
+            data=[
                 {
                     "id": "flyer-polistena",
                     "source_flyer_id": "source-conad",
                     "supermarket_id": "polistena",
-                },
-            ]
+                }
+            ],
         )
+        query.range.side_effect = [first_page, second_page]
         sb.table.return_value = flyers_table
 
         with (
@@ -349,9 +358,11 @@ class TestPublicFlyersVisibility:
             {"id": "flyer-hidden", "status": "done", "is_public": True, "flyer_kind": "published_target"},
             {"id": "flyer-visible", "status": "done", "is_public": True, "flyer_kind": "published_target"},
         ]
-        flyers_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
-            flyers_result
-        )
+        query = flyers_table.select.return_value
+        query.eq.return_value = query
+        query.order.return_value = query
+        query.range.return_value = query
+        query.execute.return_value = flyers_result
 
         offers_table = MagicMock()
         confirmed_result = MagicMock()
@@ -380,18 +391,26 @@ class TestPublicFlyersVisibility:
         ]
 
     @pytest.mark.asyncio
-    async def test_public_list_keeps_future_public_flyers_downloadable(self):
+    async def test_public_list_excludes_future_public_flyers(self):
         sb = MagicMock()
 
         flyers_table = MagicMock()
         flyers_result = MagicMock()
         flyers_result.data = [
-            {"id": "flyer-future", "status": "done", "is_public": True, "flyer_kind": "published_target"},
+            {
+                "id": "flyer-future",
+                "status": "done",
+                "is_public": True,
+                "flyer_kind": "published_target",
+                "valid_from": "2099-01-01",
+            },
             {"id": "flyer-visible", "status": "done", "is_public": True, "flyer_kind": "published_target"},
         ]
-        flyers_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
-            flyers_result
-        )
+        query = flyers_table.select.return_value
+        query.eq.return_value = query
+        query.order.return_value = query
+        query.range.return_value = query
+        query.execute.return_value = flyers_result
 
         offers_table = MagicMock()
         confirmed_result = MagicMock()
@@ -413,13 +432,6 @@ class TestPublicFlyersVisibility:
 
         assert resp.status_code == 200
         assert resp.json() == [
-            {
-                "id": "flyer-future",
-                "status": "done",
-                "is_public": True,
-                "flyer_kind": "published_target",
-                "confirmed_count": 1,
-            },
             {
                 "id": "flyer-visible",
                 "status": "done",
