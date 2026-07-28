@@ -13,7 +13,7 @@ Il frontend web usa Supabase Auth con `@supabase/ssr`: browser, proxy Next.js e 
 Il backend valida i bearer token utente tramite signing keys/JWKS di Supabase e usa `SUPABASE_SECRET_KEY` per operazioni server-side privilegiate su Auth, Database e Storage. Non esiste un cookie sessione backend per auth applicativa o stream SSE.
 
 Le notifiche di pubblicazione volantino sono accodate in `notification_jobs` e drenate fuori dalle richieste utente da APScheduler o da `POST /ops/cron/notifications`.
-`GET /offers` restituisce offerte pubbliche autosufficienti, incluse immagine estratta, dati del supermercato e periodo di validità. Con `lat`, `lng` e `max_distance_km` restituisce solo offerte dei supermercati nel raggio richiesto.
+`GET /offers` restituisce offerte pubbliche autosufficienti, incluse immagine estratta, dati del supermercato e periodo di validità. Con `lat`, `lng` e `max_distance_km` restituisce solo offerte dei supermercati nel raggio richiesto; quando una stessa offerta di un volantino è pubblicata per più sedi, restituisce una sola copia, associata alla sede più vicina. Il filtro ripetibile `supermarket_ids` limita prima le sedi candidate.
 L'aggiunta ripetuta della stessa offerta attiva a una lista incrementa la quantità della riga esistente in modo atomico.
 
 Dettagli architetturali: [docs/architecture.md](docs/architecture.md).

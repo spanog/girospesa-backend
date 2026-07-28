@@ -117,11 +117,11 @@ def _make_sb(supermarket_data: dict | None = None) -> MagicMock:
 @pytest.mark.asyncio
 async def test_list_public_offers_filters_by_nearby_supermarkets():
     sb = MagicMock()
-    sb.rpc.return_value.execute.return_value = MagicMock(data=[{"id": "sup-1"}])
-    query = sb.table.return_value.select.return_value.eq.return_value.eq.return_value
-    query.in_.return_value.order.return_value.range.return_value.execute.return_value = MagicMock(
-        data=[], count=0
+    sb.rpc.return_value.execute.return_value = MagicMock(
+        data=[{"id": "sup-1", "distance_km": 1.2}]
     )
+    query = sb.table.return_value.select.return_value.eq.return_value.eq.return_value
+    query.in_.return_value.order.return_value.execute.return_value = MagicMock(data=[])
 
     with patch("api.routers.offers.get_supabase", return_value=sb), patch(
         "api.routers.offers.apply_current_offer_window", side_effect=lambda value: value
@@ -129,12 +129,138 @@ async def test_list_public_offers_filters_by_nearby_supermarkets():
         resp = await _get("/offers?lat=45.464&lng=9.189&max_distance_km=10")
 
     assert resp.status_code == 200
-    assert resp.json() == {"items": [], "total": 0, "nextPage": None}
+    assert resp.json() == {
+        "items": [],
+        "total": 0,
+        "supermarket_count": 0,
+        "counts_by_supermarket_id": {},
+        "counts_by_supermarket_slug": {},
+        "nextPage": None,
+    }
     sb.rpc.assert_called_once_with(
         "nearby_supermarkets",
         {"user_lat": 45.464, "user_lng": 9.189, "radius_m": 10000.0},
     )
     query.in_.assert_called_once_with("supermarket_id", ["sup-1"])
+
+
+@pytest.mark.asyncio
+async def test_list_public_offers_keeps_clone_copies_without_location():
+    sb = MagicMock()
+    query = sb.table.return_value.select.return_value.eq.return_value.eq.return_value
+    query.order.return_value.range.return_value.execute.return_value = MagicMock(
+        data=[
+            {**_published_offer(offer_id="one", supermarket_id="sup-1", source_offer_id="source-1"), "supermarkets": {}},
+            {**_published_offer(offer_id="two", supermarket_id="sup-2", source_offer_id="source-1"), "supermarkets": {}},
+        ],
+        count=2,
+    )
+
+    with patch("api.routers.offers.get_supabase", return_value=sb), patch(
+        "api.routers.offers.apply_current_offer_window", side_effect=lambda value: value
+    ):
+        response = await _get("/offers")
+
+    assert response.status_code == 200
+    assert [offer["id"] for offer in response.json()["items"]] == ["one", "two"]
+
+
+def _published_offer(
+    *,
+    offer_id: str,
+    supermarket_id: str,
+    source_offer_id: str | None,
+    name: str = "Snack salmone",
+) -> dict:
+    return {
+        "id": offer_id,
+        "name": name,
+        "supermarket_id": supermarket_id,
+        "source_offer_id": source_offer_id,
+    }
+
+
+def test_deduplicate_nearby_offers_keeps_nearest_selected_target():
+    offers = [
+        _published_offer(
+            offer_id="taurianova", supermarket_id="sup-taurianova", source_offer_id="source-1"
+        ),
+        _published_offer(
+            offer_id="polistena", supermarket_id="sup-polistena", source_offer_id="source-1"
+        ),
+    ]
+
+    deduplicated = _offers_module._deduplicate_nearby_offers(
+        offers,
+        {"sup-taurianova": 18.2, "sup-polistena": 1.1},
+    )
+
+    assert [offer["id"] for offer in deduplicated] == ["polistena"]
+
+
+def test_deduplicate_nearby_offers_keeps_selected_store_when_only_target_present():
+    offers = [
+        _published_offer(
+            offer_id="taurianova", supermarket_id="sup-taurianova", source_offer_id="source-1"
+        )
+    ]
+
+    deduplicated = _offers_module._deduplicate_nearby_offers(
+        offers, {"sup-taurianova": 18.2}
+    )
+
+    assert [offer["id"] for offer in deduplicated] == ["taurianova"]
+
+
+def test_deduplicate_nearby_offers_keeps_independent_offers_separate():
+    offers = [
+        _published_offer(
+            offer_id="one", supermarket_id="sup-1", source_offer_id=None
+        ),
+        _published_offer(
+            offer_id="two", supermarket_id="sup-2", source_offer_id=None
+        ),
+    ]
+
+    deduplicated = _offers_module._deduplicate_nearby_offers(
+        offers, {"sup-1": 1, "sup-2": 2}
+    )
+
+    assert [offer["id"] for offer in deduplicated] == ["one", "two"]
+
+
+def test_deduplicate_nearby_offers_uses_stable_tie_breaking():
+    offers = [
+        _published_offer(
+            offer_id="second", supermarket_id="sup-b", source_offer_id="source-1"
+        ),
+        _published_offer(
+            offer_id="first", supermarket_id="sup-a", source_offer_id="source-1"
+        ),
+    ]
+
+    deduplicated = _offers_module._deduplicate_nearby_offers(
+        offers, {"sup-a": 1, "sup-b": 1}
+    )
+
+    assert [offer["id"] for offer in deduplicated] == ["first"]
+
+
+def test_offer_summary_counts_deduplicated_representatives():
+    summary = _offers_module._offer_summary(
+        [
+            {"supermarket_id": "sup-1", "supermarket_slug": "conad"},
+            {"supermarket_id": "sup-1", "supermarket_slug": "conad"},
+            {"supermarket_id": "sup-2", "supermarket_slug": "coop"},
+        ]
+    )
+
+    assert summary == {
+        "total": 3,
+        "supermarket_count": 2,
+        "counts_by_supermarket_id": {"sup-1": 2, "sup-2": 1},
+        "counts_by_supermarket_slug": {"conad": 2, "coop": 1},
+    }
 
 
 def test_supermarket_address_keeps_only_city_for_city_only_location():

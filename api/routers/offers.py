@@ -16,9 +16,9 @@ from api.routers._offer_utils import build_offer_row, insert_and_fetch_offer
 router = APIRouter()
 
 
-def _nearby_supermarket_ids(
+def _nearby_supermarket_distances(
     sb, lat: float, lng: float, max_distance_km: float
-) -> list[str]:
+) -> dict[str, float]:
     response = sb.rpc(
         "nearby_supermarkets",
         {
@@ -27,7 +27,67 @@ def _nearby_supermarket_ids(
             "radius_m": max_distance_km * 1000,
         },
     ).execute()
-    return [row["id"] for row in (response.data or [])]
+    return {
+        row["id"]: float(row["distance_km"])
+        for row in (response.data or [])
+        if row.get("id") is not None and row.get("distance_km") is not None
+    }
+
+
+def _offer_group_key(offer: dict) -> str:
+    """Keep independently published offers separate from cloned flyer offers."""
+    source_offer_id = offer.get("source_offer_id")
+    return f"source:{source_offer_id}" if source_offer_id else f"offer:{offer['id']}"
+
+
+def _deduplicate_nearby_offers(
+    offers: list[dict], distances_by_supermarket_id: dict[str, float]
+) -> list[dict]:
+    """Choose nearest target for each cloned source offer with deterministic ties."""
+    representatives: dict[str, dict] = {}
+    for offer in offers:
+        enriched = {
+            **offer,
+            "distance_km": distances_by_supermarket_id.get(offer["supermarket_id"]),
+        }
+        group_key = _offer_group_key(enriched)
+        current = representatives.get(group_key)
+        if current is None or _offer_distance_sort_key(enriched) < _offer_distance_sort_key(current):
+            representatives[group_key] = enriched
+    return sorted(
+        representatives.values(),
+        key=lambda offer: ((offer.get("name") or "").casefold(), offer["id"]),
+    )
+
+
+def _offer_distance_sort_key(offer: dict) -> tuple[float, str, str]:
+    return (
+        float(offer.get("distance_km") or float("inf")),
+        offer.get("supermarket_id") or "",
+        offer["id"],
+    )
+
+
+def _offer_summary(offers: list[dict]) -> dict:
+    counts_by_supermarket_id: dict[str, int] = {}
+    counts_by_supermarket_slug: dict[str, int] = {}
+    for offer in offers:
+        supermarket_id = offer.get("supermarket_id")
+        if supermarket_id:
+            counts_by_supermarket_id[supermarket_id] = (
+                counts_by_supermarket_id.get(supermarket_id, 0) + 1
+            )
+        supermarket_slug = offer.get("supermarket_slug")
+        if supermarket_slug:
+            counts_by_supermarket_slug[supermarket_slug] = (
+                counts_by_supermarket_slug.get(supermarket_slug, 0) + 1
+            )
+    return {
+        "total": len(offers),
+        "supermarket_count": len(counts_by_supermarket_id),
+        "counts_by_supermarket_id": counts_by_supermarket_id,
+        "counts_by_supermarket_slug": counts_by_supermarket_slug,
+    }
 
 
 def _supermarket_address(supermarket: dict, fallback_name: str | None) -> str | None:
@@ -53,6 +113,7 @@ async def list_public_offers(
     q: str | None = Query(None),
     category: str | None = Query(None),
     supermarket_id: str | None = Query(None),
+    supermarket_ids: list[str] = Query(default=[]),
     lat: float | None = Query(None),
     lng: float | None = Query(None),
     max_distance_km: float | None = Query(None, gt=0, le=20),
@@ -68,24 +129,52 @@ async def list_public_offers(
         .eq("offer_kind", "published_target")
     )
     query = apply_current_offer_window(query)
+    distances_by_supermarket_id: dict[str, float] | None = None
     if lat is not None and lng is not None:
-        nearby_ids = _nearby_supermarket_ids(
+        distances_by_supermarket_id = _nearby_supermarket_distances(
             sb, lat, lng, max_distance_km if max_distance_km is not None else 10.0
         )
-        if not nearby_ids:
+        if not distances_by_supermarket_id:
             return {"items": [], "total": 0, "nextPage": None}
-        query = query.in_("supermarket_id", nearby_ids)
+        query = query.in_("supermarket_id", list(distances_by_supermarket_id))
     if q:
         query = query.ilike("name", f"%{q.strip()}%")
     if category:
         query = query.eq("category", category)
     if supermarket_id:
         query = query.eq("supermarket_id", supermarket_id)
-    response = query.order("name").range(offset, offset + limit - 1).execute()
-    items = []
-    for row in response.data or []:
+    if supermarket_ids:
+        query = query.in_("supermarket_id", list(dict.fromkeys(supermarket_ids)))
+
+    ordered_query = query.order("name")
+    if distances_by_supermarket_id is None:
+        response = ordered_query.range(offset, offset + limit - 1).execute()
+        items = _serialize_offers(response.data or [])
+        total = response.count or 0
+        return {
+            "items": items,
+            "total": total,
+            "nextPage": offset + limit if offset + limit < total else None,
+        }
+
+    response = ordered_query.execute()
+    offers = _serialize_offers(response.data or [])
+    offers = _deduplicate_nearby_offers(offers, distances_by_supermarket_id)
+    summary = _offer_summary(offers)
+    total = summary["total"]
+    items = offers[offset : offset + limit]
+    return {
+        "items": items,
+        **summary,
+        "nextPage": offset + limit if offset + limit < total else None,
+    }
+
+
+def _serialize_offers(rows: list[dict]) -> list[dict]:
+    offers = []
+    for row in rows:
         supermarket = row.pop("supermarkets", None) or {}
-        items.append({
+        offers.append({
             **row,
             "supermarket_name": supermarket.get("name") or row.get("supermarket_name"),
             "supermarket_slug": supermarket.get("slug"),
@@ -94,8 +183,7 @@ async def list_public_offers(
                 supermarket, row.get("supermarket_name")
             ),
         })
-    total = response.count or 0
-    return {"items": items, "total": total, "nextPage": offset + limit if offset + limit < total else None}
+    return offers
 
 
 class ManualOfferCreate(BaseModel):
