@@ -320,7 +320,9 @@ class TestPublicFlyersVisibility:
                 }
             ],
         )
-        query.range.side_effect = [first_page, second_page]
+        empty_page = MagicMock()
+        empty_page.execute.return_value = MagicMock(data=[])
+        query.range.side_effect = [first_page, second_page, empty_page]
         sb.table.return_value = flyers_table
 
         with (
@@ -361,7 +363,9 @@ class TestPublicFlyersVisibility:
         query = flyers_table.select.return_value
         query.eq.return_value = query
         query.order.return_value = query
-        query.range.return_value = query
+        empty_page = MagicMock()
+        empty_page.execute.return_value = MagicMock(data=[])
+        query.range.side_effect = [query, empty_page]
         query.execute.return_value = flyers_result
 
         offers_table = MagicMock()
@@ -409,7 +413,9 @@ class TestPublicFlyersVisibility:
         query = flyers_table.select.return_value
         query.eq.return_value = query
         query.order.return_value = query
-        query.range.return_value = query
+        empty_page = MagicMock()
+        empty_page.execute.return_value = MagicMock(data=[])
+        query.range.side_effect = [query, empty_page]
         query.execute.return_value = flyers_result
 
         offers_table = MagicMock()
