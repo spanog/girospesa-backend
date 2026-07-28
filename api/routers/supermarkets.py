@@ -43,11 +43,12 @@ def _nearby_supermarkets(sb, lat: float, lng: float, max_distance_km: float) -> 
 def _merge_distances(rows: list[dict], nearby_rows: list[dict]) -> list[dict]:
     rows_by_id = {row["id"]: row for row in rows}
     distances = {row["id"]: row["distance_km"] for row in nearby_rows}
-    return [
-        {**rows_by_id[row["id"]], "distance_km": distances[row["id"]]}
-        for row in nearby_rows
-        if row["id"] in rows_by_id
+    merged = [
+        {**row, "distance_km": distances[row["id"]]}
+        for row in rows
+        if row["id"] in distances
     ]
+    return sorted(merged, key=lambda row: (row["distance_km"], row["name"]))
 
 
 def _make_slug(name: str) -> str:
