@@ -43,6 +43,7 @@ OFFER_KIND_SOURCE_MASTER = "source_master"
 OFFER_KIND_PUBLISHED_TARGET = "published_target"
 PROCESSING_RESUME_STALE_AFTER = timedelta(minutes=5)
 PUBLIC_FLYER_PAGE_SIZE = 100
+MAX_PUBLIC_FLYERS = 1_000
 
 
 class DraftOfferUpdate(BaseModel):
@@ -159,7 +160,7 @@ def _is_flyer_current(flyer: dict, today: date) -> bool:
 def _public_flyers(sb) -> list[dict]:
     flyers: list[dict] = []
     offset = 0
-    while True:
+    while offset < MAX_PUBLIC_FLYERS:
         response = (
             sb.table("flyers")
             .select("*", count="exact")
@@ -171,11 +172,11 @@ def _public_flyers(sb) -> list[dict]:
             .execute()
         )
         page = response.data or []
-        flyers.extend(page)
-        total = response.count if isinstance(response.count, int) else None
-        if not page or total is None or len(flyers) >= total:
+        if not page:
             return flyers
+        flyers.extend(page)
         offset += len(page)
+    return flyers
 
 
 def _offer_count_by_flyer(
