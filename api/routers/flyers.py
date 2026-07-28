@@ -16,6 +16,7 @@ from core.auth import (
     managed_supermarket_ids,
     require_admin_or_manager,
 )
+from api.routers._nearby_supermarkets import nearby_supermarket_distances, request_location
 from core.config import settings
 from core.database import get_supabase
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
@@ -907,14 +908,19 @@ async def list_flyers(
 
 @router.get("/public")
 async def list_public_flyers(
+    lat: float | None = Query(None),
+    lng: float | None = Query(None),
+    max_distance_km: float | None = Query(None, gt=0, le=20),
+    user_id: str | None = Depends(get_optional_user_id),
 ) -> list[dict]:
-    """Return every current public flyer that contains confirmed offers.
-
-    Public flyers are deliberately independent from the user's location so every
-    listed card remains downloadable.
-    """
+    """Return current public flyers inside the caller's active radius."""
     sb = get_supabase()
-    flyers = _public_flyers(sb)
+    location = request_location(sb, user_id, lat, lng, max_distance_km)
+    if location is None:
+        return []
+    user_lat, user_lng, radius = location
+    distances = nearby_supermarket_distances(sb, user_lat, user_lng, radius)
+    flyers = [flyer for flyer in _public_flyers(sb) if flyer.get("supermarket_id") in distances]
     if not flyers:
         return flyers
 

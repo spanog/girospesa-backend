@@ -33,6 +33,13 @@ sys.modules["services.geocoding"] = MagicMock()
 _auth_mod = types.ModuleType("core.auth")
 _auth_mod.get_current_user = MagicMock()  # type: ignore[attr-defined]
 _auth_mod.require_admin = MagicMock()  # type: ignore[attr-defined]
+
+
+async def _optional_user_id() -> str | None:
+    return None
+
+
+_auth_mod.get_optional_user_id = _optional_user_id  # type: ignore[attr-defined]
 sys.modules["core.auth"] = _auth_mod
 
 from fastapi import FastAPI, HTTPException
@@ -134,6 +141,72 @@ async def test_lat_lng_returns_postgis_nearby_supermarkets():
             "radius_m": 10000.0,
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_with_active_offers_keeps_only_nearby_supermarkets_with_current_offers():
+    sb = MagicMock()
+    sb.rpc.return_value.execute.return_value = MagicMock(
+        data=[
+            {"id": "sup-taurianova", "distance_km": 7.3},
+            {"id": "sup-polistena", "distance_km": 1.1},
+        ]
+    )
+    query = MagicMock()
+    query.eq.return_value = query
+    query.in_.return_value = query
+    query.execute.return_value = MagicMock(
+        data=[
+            {"id": "sup-taurianova", "name": "Conad", "offers": [{"id": "offer-1"}]},
+            {"id": "sup-polistena", "name": "Conad", "offers": [{"id": "offer-2"}]},
+        ]
+    )
+    sb.table.return_value.select.return_value = query
+
+    with (
+        patch("api.routers.supermarkets.get_supabase", return_value=sb),
+        patch("api.routers.supermarkets.apply_current_offer_window", return_value=query),
+    ):
+        resp = await _get(
+            "/supermarkets?with_active_offers=true&lat=38.4&lng=16.1&max_distance_km=10"
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == [
+        {"id": "sup-taurianova", "name": "Conad", "distance_km": 7.3},
+        {"id": "sup-polistena", "name": "Conad", "distance_km": 1.1},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_with_active_offers_uses_authenticated_profile_radius():
+    sb = MagicMock()
+    with (
+        patch("api.routers.supermarkets.get_supabase", return_value=sb),
+        patch(
+            "api.routers.supermarkets.request_location",
+            return_value=(38.4, 16.1, 7.0),
+        ) as request_location,
+        patch(
+            "api.routers.supermarkets._nearby_supermarkets",
+            return_value=[{"id": "sup-polistena", "distance_km": 1.1}],
+        ),
+        patch(
+            "api.routers.supermarkets._supermarkets_with_active_offers",
+            return_value=[{"id": "sup-polistena", "name": "Conad"}],
+        ),
+    ):
+        result = await _sm_module.list_supermarkets(
+            with_active_offers=True,
+            lat=None,
+            lng=None,
+            max_distance_km=None,
+            include_ids=[],
+            user_id="user-1",
+        )
+
+    request_location.assert_called_once_with(sb, "user-1", None, None, None)
+    assert result == [{"id": "sup-polistena", "name": "Conad", "distance_km": 1.1}]
 
 
 @pytest.mark.asyncio

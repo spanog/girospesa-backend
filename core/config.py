@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     supabase_secret_key: str = Field(
         validation_alias=AliasChoices("SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY")
     )
+    supabase_jwt_secret: str = ""
     app_session_secret: str
     app_session_ttl_seconds: int = Field(default=60 * 60 * 24 * 7, gt=0)
     database_url: str = ""

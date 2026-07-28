@@ -31,6 +31,7 @@ import httpx
 import pytest
 
 import api.routers.offers as _offers_module
+from api.routers._nearby_supermarkets import request_location
 from api.routers.offers import router
 
 _DEP_PROFILE = _offers_module.require_admin_or_manager
@@ -64,6 +65,27 @@ async def _get(url: str) -> httpx.Response:
     transport = httpx.ASGITransport(app=test_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         return await client.get(url)
+
+
+def test_authenticated_request_location_prefers_search_location_and_profile_radius():
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+        data={
+            "search_lat": 38.4,
+            "search_lng": 16.1,
+            "home_lat": 38.5,
+            "home_lng": 16.2,
+            "max_distance_km": 7,
+        }
+    )
+
+    location = request_location(sb, "user-1", 99.0, 99.0, 20.0)
+
+    assert location == (38.4, 16.1, 7.0)
+
+
+def test_guest_request_location_uses_explicit_coordinates():
+    assert request_location(MagicMock(), None, 38.4, 16.1, 7.0) == (38.4, 16.1, 7.0)
 
 
 def _make_sb(supermarket_data: dict | None = None) -> MagicMock:

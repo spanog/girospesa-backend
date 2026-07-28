@@ -4,9 +4,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 
-from core.auth import require_admin
+from core.auth import get_optional_user_id, require_admin
 from core.config import settings
 from core.database import get_supabase
+from api.routers._nearby_supermarkets import request_location
 from services.geocoding import geocode_address
 from services.offer_visibility import apply_current_offer_window
 
@@ -61,24 +62,40 @@ def _unique_slug(sb, base: str) -> str:
     return slug
 
 
+def _supermarkets_with_active_offers(sb, ids: list[str] | None = None) -> list[dict]:
+    query = (
+        sb.table("supermarkets")
+        .select("*, offers!inner(id)")
+        .eq("is_active", True)
+        .eq("offers.is_confirmed", True)
+    )
+    if ids:
+        query = query.in_("id", ids)
+    rows = apply_current_offer_window(query, reference_table="offers").execute().data or []
+    return [{key: value for key, value in row.items() if key != "offers"} for row in rows]
+
+
 @router.get("")
 async def list_supermarkets(
-    has_active_offers: bool = Query(False),
+    with_active_offers: bool = Query(False),
     lat: float | None = Query(None),
     lng: float | None = Query(None),
-    max_distance_km: float = Query(10.0, gt=0, le=20),
+    max_distance_km: float | None = Query(None, gt=0, le=20),
     include_ids: list[str] = Query(default=[]),
+    user_id: str | None = Depends(get_optional_user_id),
 ) -> list[dict]:
-    """Return active supermarkets. Public endpoint — no auth required.
-
-    has_active_offers=true: only supermarkets with ≥1 active confirmed offer.
-    """
+    """Return active supermarkets, optionally limited to current offers."""
     sb = get_supabase()
-    if lat is not None and lng is not None:
-        nearby = _nearby_supermarkets(sb, lat, lng, max_distance_km)
+    location = request_location(sb, user_id, lat, lng, max_distance_km)
+    if location is not None:
+        user_lat, user_lng, radius = location
+        nearby = _nearby_supermarkets(sb, user_lat, user_lng, radius)
         ids = [row["id"] for row in nearby]
         if not ids and not include_ids:
             return []
+        if with_active_offers:
+            active_rows = _supermarkets_with_active_offers(sb, ids)
+            return _merge_distances(active_rows, nearby)
         nearby_rows = []
         if ids:
             resp = sb.table("supermarkets").select("*").in_("id", ids).execute()
@@ -95,18 +112,8 @@ async def list_supermarkets(
         )
         return [*nearby_rows, *(included.data or [])]
 
-    if has_active_offers:
-        resp = apply_current_offer_window(
-            (
-                sb.table("supermarkets")
-                .select("*, offers!inner(id)")
-                .eq("is_active", True)
-                .eq("offers.is_confirmed", True)
-                .order("name")
-            ),
-            reference_table="offers",
-        ).execute()
-        return [{k: v for k, v in row.items() if k != "offers"} for row in resp.data]
+    if with_active_offers:
+        return _supermarkets_with_active_offers(sb)
     resp = sb.table("supermarkets").select("*").eq("is_active", True).order("name").execute()
     return resp.data
 

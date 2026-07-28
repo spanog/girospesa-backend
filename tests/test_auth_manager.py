@@ -51,14 +51,32 @@ class TestRequireAdminOrManager:
 
 
 class TestDecodeToken:
-    def test_rejects_hs256_tokens(self, monkeypatch: pytest.MonkeyPatch):
+    def test_rejects_hs256_tokens_without_shared_secret(self, monkeypatch: pytest.MonkeyPatch):
         header = MagicMock(return_value={"alg": "HS256"})
         monkeypatch.setattr(_auth_module.jwt, "get_unverified_header", header)
+        _auth_module.settings.supabase_jwt_secret = ""
 
         with pytest.raises(HTTPException) as exc_info:
             _auth_module._decode_token("token")
 
         assert exc_info.value.status_code == 401
+
+    def test_uses_shared_secret_for_hs256(self, monkeypatch: pytest.MonkeyPatch):
+        decode = MagicMock(return_value={"sub": "local-user"})
+        header = MagicMock(return_value={"alg": "HS256"})
+        monkeypatch.setattr(_auth_module.jwt, "decode", decode)
+        monkeypatch.setattr(_auth_module.jwt, "get_unverified_header", header)
+        _auth_module.settings.supabase_jwt_secret = "local-jwt-secret"
+
+        result = _auth_module._decode_token("token")
+
+        assert result == {"sub": "local-user"}
+        decode.assert_called_once_with(
+            "token",
+            "local-jwt-secret",
+            algorithms=["HS256"],
+            options={"verify_aud": False},
+        )
 
     def test_uses_jwks_for_es256(self, monkeypatch: pytest.MonkeyPatch):
         decode = MagicMock(return_value={"sub": "u2"})
