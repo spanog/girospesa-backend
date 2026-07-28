@@ -131,21 +131,7 @@ def _can_resume_stale_processing(flyer: dict) -> bool:
 
 
 def _confirmed_count_by_flyer(sb, flyer_ids: list[str]) -> dict[str, int]:
-    if not flyer_ids:
-        return {}
-
-    confirmed_resp = (
-        sb.table("offers")
-        .select("flyer_id")
-        .in_("flyer_id", flyer_ids)
-        .eq("is_confirmed", True)
-        .execute()
-    )
-    confirmed_by_flyer: dict[str, int] = {}
-    for row in confirmed_resp.data or []:
-        fid = row["flyer_id"]
-        confirmed_by_flyer[fid] = confirmed_by_flyer.get(fid, 0) + 1
-    return confirmed_by_flyer
+    return _offer_count_by_flyer(sb, flyer_ids, is_confirmed=True)
 
 
 def _is_flyer_current(flyer: dict, today: date) -> bool:
@@ -189,18 +175,17 @@ def _offer_count_by_flyer(
     if not flyer_ids:
         return {}
 
-    result = (
-        sb.table("offers")
-        .select("flyer_id")
-        .in_("flyer_id", flyer_ids)
-        .eq("is_confirmed", is_confirmed)
-        .execute()
-    )
-    counts: dict[str, int] = {}
-    for row in result.data or []:
-        flyer_id = row["flyer_id"]
-        counts[flyer_id] = counts.get(flyer_id, 0) + 1
-    return counts
+    result = sb.rpc(
+        "count_offers_by_flyer",
+        {
+            "p_flyer_ids": flyer_ids,
+            "p_is_confirmed": is_confirmed,
+        },
+    ).execute()
+    return {
+        row["flyer_id"]: int(row["offer_count"])
+        for row in result.data or []
+    }
 
 
 def _published_target_count_by_source_flyer(

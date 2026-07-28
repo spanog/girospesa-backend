@@ -176,6 +176,21 @@ async def _put(url: str, dep_overrides: dict, json: dict) -> httpx.Response:
         return await client.put(url, json=json)
 
 
+def test_confirmed_count_by_flyer_uses_database_aggregation():
+    sb = MagicMock()
+    sb.rpc.return_value.execute.return_value = MagicMock(
+        data=[{"flyer_id": "flyer-taurianova", "offer_count": 1_353}]
+    )
+
+    counts = _flyers_module._confirmed_count_by_flyer(sb, ["flyer-taurianova"])
+
+    assert counts == {"flyer-taurianova": 1_353}
+    sb.rpc.assert_called_once_with(
+        "count_offers_by_flyer",
+        {"p_flyer_ids": ["flyer-taurianova"], "p_is_confirmed": True},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests — upload privacy
 # ---------------------------------------------------------------------------
@@ -378,15 +393,14 @@ class TestPublicFlyersVisibility:
         query.range.side_effect = [query, empty_page]
         query.execute.return_value = flyers_result
 
-        offers_table = MagicMock()
-        confirmed_result = MagicMock()
-        confirmed_result.data = [{"flyer_id": "flyer-visible"}]
-        offers_table.select.return_value.in_.return_value.eq.return_value.execute.return_value = confirmed_result
+        sb.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"flyer_id": "flyer-visible", "offer_count": 1}]
+        )
 
         def _dispatch(table_name: str) -> MagicMock:
             if table_name == "flyers":
                 return flyers_table
-            return offers_table
+            raise AssertionError(f"unexpected table {table_name}")
 
         sb.table.side_effect = _dispatch
 
@@ -436,18 +450,17 @@ class TestPublicFlyersVisibility:
         query.range.side_effect = [query, empty_page]
         query.execute.return_value = flyers_result
 
-        offers_table = MagicMock()
-        confirmed_result = MagicMock()
-        confirmed_result.data = [
-            {"flyer_id": "flyer-future"},
-            {"flyer_id": "flyer-visible"},
-        ]
-        offers_table.select.return_value.in_.return_value.eq.return_value.execute.return_value = confirmed_result
+        sb.rpc.return_value.execute.return_value = MagicMock(
+            data=[
+                {"flyer_id": "flyer-future", "offer_count": 1},
+                {"flyer_id": "flyer-visible", "offer_count": 1},
+            ]
+        )
 
         def _dispatch(table_name: str) -> MagicMock:
             if table_name == "flyers":
                 return flyers_table
-            return offers_table
+            raise AssertionError(f"unexpected table {table_name}")
 
         sb.table.side_effect = _dispatch
 
@@ -719,10 +732,9 @@ class TestManagerFlyerTargetsAccess:
             data=[{"supermarket_id": "sup-1", "supermarkets": {"name": "Manager Market"}}]
         )
 
-        offers_table = MagicMock()
-        offers_table.select.return_value.in_.return_value.eq.return_value.execute.side_effect = [
+        sb.rpc.return_value.execute.side_effect = [
             MagicMock(data=[]),
-            MagicMock(data=[{"flyer_id": "flyer-source"}, {"flyer_id": "flyer-source"}]),
+            MagicMock(data=[{"flyer_id": "flyer-source", "offer_count": 2}]),
         ]
 
         published_targets_query = MagicMock()
@@ -741,8 +753,6 @@ class TestManagerFlyerTargetsAccess:
                 return _FlyersDispatch()
             if table_name == "flyer_targets":
                 return flyer_targets_table
-            if table_name == "offers":
-                return offers_table
             raise AssertionError(f"unexpected table {table_name}")
 
         sb.table.side_effect = _dispatch
