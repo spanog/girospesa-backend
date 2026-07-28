@@ -23,7 +23,6 @@ from services.notification_jobs import (
     NotificationJobWorker,
     enqueue_flyer_published,
 )
-from services.offer_visibility import apply_current_offer_window
 from services.product_format import ProductFormat, build_format_bundle
 from api.routers._offer_utils import (
     _OFFER_PRODUCT_SELECT,
@@ -132,12 +131,13 @@ def _confirmed_count_by_flyer(sb, flyer_ids: list[str]) -> dict[str, int]:
     if not flyer_ids:
         return {}
 
-    confirmed_resp = apply_current_offer_window(
+    confirmed_resp = (
         sb.table("offers")
         .select("flyer_id")
         .in_("flyer_id", flyer_ids)
         .eq("is_confirmed", True)
-    ).execute()
+        .execute()
+    )
     confirmed_by_flyer: dict[str, int] = {}
     for row in confirmed_resp.data or []:
         fid = row["flyer_id"]
@@ -192,12 +192,13 @@ def _published_target_count_by_source_flyer(
 
 
 def _has_confirmed_offers(sb, flyer_id: str) -> bool:
-    result = apply_current_offer_window(
+    result = (
         sb.table("offers")
         .select("id", count="exact")
         .eq("flyer_id", flyer_id)
         .eq("is_confirmed", True)
-    ).execute()
+        .execute()
+    )
     return (result.count or 0) > 0
 
 
@@ -870,24 +871,13 @@ async def list_flyers(
     return [flyer for flyer in flyers if _manager_can_access_flyer(sb, profile, flyer)]
 
 
-def _nearby_supermarket_ids(sb, lat: float, lng: float, max_distance_km: float) -> list[str]:
-    response = sb.rpc(
-        "nearby_supermarkets",
-        {"user_lat": lat, "user_lng": lng, "radius_m": max_distance_km * 1000},
-    ).execute()
-    return [row["id"] for row in (response.data or [])]
-
-
 @router.get("/public")
 async def list_public_flyers(
-    lat: float | None = Query(None),
-    lng: float | None = Query(None),
-    max_distance_km: float | None = Query(None, gt=0, le=20),
 ) -> list[dict]:
-    """Return done public flyers that already contain confirmed offers.
+    """Return every public flyer that contains confirmed offers.
 
-    When lat/lng are provided, only flyers from supermarkets within max_distance_km
-    (default 10 km) are returned.
+    Public flyers are deliberately independent from the user's location so every
+    listed card remains downloadable.
     """
     sb = get_supabase()
     query = (
@@ -898,13 +888,6 @@ async def list_public_flyers(
         .eq("is_public", True)
         .order("created_at", desc=True)
     )
-
-    if lat is not None and lng is not None:
-        radius = max_distance_km if max_distance_km is not None else 10.0
-        nearby_ids = _nearby_supermarket_ids(sb, lat, lng, radius)
-        if not nearby_ids:
-            return []
-        query = query.in_("supermarket_id", nearby_ids)
 
     flyers = query.execute().data
     if not flyers:

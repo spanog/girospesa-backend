@@ -8,30 +8,13 @@ from pydantic import BaseModel, Field
 
 from core.auth import managed_supermarket_ids, require_admin_or_manager
 from core.database import get_supabase
+from api.routers._nearby_supermarkets import nearby_supermarket_distances
 from services.extraction.normalizer import normalize_unit_price_measure
 from services.offer_visibility import apply_current_offer_window
 from services.product_format import ProductFormat
 from api.routers._offer_utils import build_offer_row, insert_and_fetch_offer
 
 router = APIRouter()
-
-
-def _nearby_supermarket_distances(
-    sb, lat: float, lng: float, max_distance_km: float
-) -> dict[str, float]:
-    response = sb.rpc(
-        "nearby_supermarkets",
-        {
-            "user_lat": lat,
-            "user_lng": lng,
-            "radius_m": max_distance_km * 1000,
-        },
-    ).execute()
-    return {
-        row["id"]: float(row["distance_km"])
-        for row in (response.data or [])
-        if row.get("id") is not None and row.get("distance_km") is not None
-    }
 
 
 def _offer_group_key(offer: dict) -> str:
@@ -131,7 +114,7 @@ async def list_public_offers(
     query = apply_current_offer_window(query)
     distances_by_supermarket_id: dict[str, float] | None = None
     if lat is not None and lng is not None:
-        distances_by_supermarket_id = _nearby_supermarket_distances(
+        distances_by_supermarket_id = nearby_supermarket_distances(
             sb, lat, lng, max_distance_km if max_distance_km is not None else 10.0
         )
         if not distances_by_supermarket_id:

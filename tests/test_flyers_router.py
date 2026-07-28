@@ -292,6 +292,54 @@ class TestUploadFlyerDuplicate:
 
 class TestPublicFlyersVisibility:
     @pytest.mark.asyncio
+    async def test_public_list_keeps_all_targets_when_location_is_provided(self):
+        sb = MagicMock()
+        flyers_table = MagicMock()
+        query = flyers_table.select.return_value
+        query.eq.return_value = query
+        query.order.return_value = query
+        query.execute.return_value = MagicMock(
+            data=[
+                {
+                    "id": "flyer-taurianova",
+                    "source_flyer_id": "source-conad",
+                    "supermarket_id": "taurianova",
+                },
+                {
+                    "id": "flyer-polistena",
+                    "source_flyer_id": "source-conad",
+                    "supermarket_id": "polistena",
+                },
+            ]
+        )
+        sb.table.return_value = flyers_table
+
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch(
+                "api.routers.flyers._confirmed_count_by_flyer",
+                return_value={"flyer-polistena": 306, "flyer-taurianova": 306},
+            ),
+        ):
+            resp = await _get("/flyers/public?lat=38.6&lng=16.0")
+
+        assert resp.status_code == 200
+        assert resp.json() == [
+            {
+                "id": "flyer-taurianova",
+                "source_flyer_id": "source-conad",
+                "supermarket_id": "taurianova",
+                "confirmed_count": 306,
+            },
+            {
+                "id": "flyer-polistena",
+                "source_flyer_id": "source-conad",
+                "supermarket_id": "polistena",
+                "confirmed_count": 306,
+            }
+        ]
+
+    @pytest.mark.asyncio
     async def test_public_list_excludes_unconfirmed_flyers(self):
         sb = MagicMock()
 
@@ -332,7 +380,7 @@ class TestPublicFlyersVisibility:
         ]
 
     @pytest.mark.asyncio
-    async def test_public_list_excludes_future_start_flyers(self):
+    async def test_public_list_keeps_future_public_flyers_downloadable(self):
         sb = MagicMock()
 
         flyers_table = MagicMock()
@@ -348,6 +396,7 @@ class TestPublicFlyersVisibility:
         offers_table = MagicMock()
         confirmed_result = MagicMock()
         confirmed_result.data = [
+            {"flyer_id": "flyer-future"},
             {"flyer_id": "flyer-visible"},
         ]
         offers_table.select.return_value.in_.return_value.eq.return_value.execute.return_value = confirmed_result
@@ -364,6 +413,13 @@ class TestPublicFlyersVisibility:
 
         assert resp.status_code == 200
         assert resp.json() == [
+            {
+                "id": "flyer-future",
+                "status": "done",
+                "is_public": True,
+                "flyer_kind": "published_target",
+                "confirmed_count": 1,
+            },
             {
                 "id": "flyer-visible",
                 "status": "done",

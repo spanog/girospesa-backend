@@ -14,7 +14,7 @@ Un'offerta contiene i propri dati, validità, prezzo, formato strutturato e `ima
 
 | Metodo | Path | Accesso | Descrizione |
 | --- | --- | --- | --- |
-| `GET` | `/flyers/public` | Pubblico | Volantini pubblici con offerte attive. |
+| `GET` | `/flyers/public` | Pubblico | Tutti i volantini pubblici con offerte confermate, indipendentemente dalla distanza dell'utente. |
 | `GET` | `/flyers` | Admin/manager | Elenco volantini in gestione. |
 | `GET` | `/flyers/{flyer_id}` | Admin/manager | Dettaglio e stato di estrazione. |
 | `POST` | `/flyers/upload-url` | Admin/manager | Crea upload firmato per il bucket privato `flyers`. |
