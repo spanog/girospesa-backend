@@ -119,6 +119,22 @@ async def list_supermarkets(
     return resp.data
 
 
+@router.get("/admin")
+async def list_admin_supermarkets(
+    _admin: Annotated[dict, Depends(require_admin)],
+) -> list[dict]:
+    """Return every active branch for the admin directory, without distance filters."""
+    response = (
+        get_supabase()
+        .table("supermarkets")
+        .select("*")
+        .eq("is_active", True)
+        .order("name")
+        .execute()
+    )
+    return response.data or []
+
+
 def _upload_logo(sb, sm_id: str, logo_content: bytes, content_type: str) -> str:
     """Upload logo to storage and return public URL. Raises HTTP 500 on failure."""
     ext = LOGO_EXT[content_type]
