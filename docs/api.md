@@ -14,7 +14,8 @@ Un'offerta contiene i propri dati, validità, prezzo, formato strutturato e `ima
 
 | Metodo | Path | Accesso | Descrizione |
 | --- | --- | --- | --- |
-| `GET` | `/flyers/public` | Pubblico | Tutti i volantini pubblici correnti con offerte confermate, indipendentemente dalla distanza dell'utente. |
+| `GET` | `/flyers/public` | Pubblico | Volantini pubblici correnti con offerte confermate nel raggio attivo. Per utenti autenticati usa il profilo; per ospiti usa `lat`, `lng` e `max_distance_km`. |
+| `GET` | `/supermarkets?with_active_offers=true` | Pubblico | Sedi nel raggio attivo che hanno offerte correnti, per il filtro della pagina Offerte. Per utenti autenticati usa il profilo; per ospiti usa `lat`, `lng` e `max_distance_km`. |
 | `GET` | `/flyers` | Admin/manager | Elenco volantini in gestione. |
 | `GET` | `/flyers/{flyer_id}` | Admin/manager | Dettaglio e stato di estrazione. |
 | `POST` | `/flyers/upload-url` | Admin/manager | Crea upload firmato per il bucket privato `flyers`. |

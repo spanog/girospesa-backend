@@ -38,6 +38,19 @@ def _decode_token(token: str) -> dict:
     try:
         header = jwt.get_unverified_header(token)
         algorithm = header.get("alg")
+        if algorithm == "HS256":
+            secret = settings.supabase_jwt_secret
+            if not secret:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or expired token",
+                )
+            return jwt.decode(
+                token,
+                secret,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
         if algorithm not in {"ES256", "RS256"}:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

@@ -75,7 +75,13 @@ def _managed_supermarket_ids_real(profile: dict) -> list[str]:
 
 _auth_mod.assert_flyer_access = _assert_flyer_access_real  # type: ignore[attr-defined]
 _auth_mod.managed_supermarket_ids = _managed_supermarket_ids_real  # type: ignore[attr-defined]
-_auth_mod.get_optional_user_id = MagicMock()  # type: ignore[attr-defined]
+
+
+async def _optional_user_id() -> str | None:
+    return None
+
+
+_auth_mod.get_optional_user_id = _optional_user_id  # type: ignore[attr-defined]
 
 
 def _require_admin_real(user: dict) -> dict:
@@ -328,6 +334,10 @@ class TestPublicFlyersVisibility:
         with (
             patch("api.routers.flyers.get_supabase", return_value=sb),
             patch(
+                "api.routers.flyers.nearby_supermarket_distances",
+                return_value={"taurianova": 7.3, "polistena": 1.1},
+            ),
+            patch(
                 "api.routers.flyers._confirmed_count_by_flyer",
                 return_value={"flyer-polistena": 306, "flyer-taurianova": 306},
             ),
@@ -357,8 +367,8 @@ class TestPublicFlyersVisibility:
         flyers_table = MagicMock()
         flyers_result = MagicMock()
         flyers_result.data = [
-            {"id": "flyer-hidden", "status": "done", "is_public": True, "flyer_kind": "published_target"},
-            {"id": "flyer-visible", "status": "done", "is_public": True, "flyer_kind": "published_target"},
+            {"id": "flyer-hidden", "supermarket_id": "sup-hidden", "status": "done", "is_public": True, "flyer_kind": "published_target"},
+            {"id": "flyer-visible", "supermarket_id": "sup-visible", "status": "done", "is_public": True, "flyer_kind": "published_target"},
         ]
         query = flyers_table.select.return_value
         query.eq.return_value = query
@@ -380,13 +390,20 @@ class TestPublicFlyersVisibility:
 
         sb.table.side_effect = _dispatch
 
-        with patch("api.routers.flyers.get_supabase", return_value=sb):
-            resp = await _get("/flyers/public")
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch(
+                "api.routers.flyers.nearby_supermarket_distances",
+                return_value={"sup-hidden": 1.0, "sup-visible": 1.5},
+            ),
+        ):
+            resp = await _get("/flyers/public?lat=38.6&lng=16.0")
 
         assert resp.status_code == 200
         assert resp.json() == [
             {
                 "id": "flyer-visible",
+                "supermarket_id": "sup-visible",
                 "status": "done",
                 "is_public": True,
                 "flyer_kind": "published_target",
@@ -403,12 +420,13 @@ class TestPublicFlyersVisibility:
         flyers_result.data = [
             {
                 "id": "flyer-future",
+                "supermarket_id": "sup-future",
                 "status": "done",
                 "is_public": True,
                 "flyer_kind": "published_target",
                 "valid_from": "2099-01-01",
             },
-            {"id": "flyer-visible", "status": "done", "is_public": True, "flyer_kind": "published_target"},
+            {"id": "flyer-visible", "supermarket_id": "sup-visible", "status": "done", "is_public": True, "flyer_kind": "published_target"},
         ]
         query = flyers_table.select.return_value
         query.eq.return_value = query
@@ -433,18 +451,62 @@ class TestPublicFlyersVisibility:
 
         sb.table.side_effect = _dispatch
 
-        with patch("api.routers.flyers.get_supabase", return_value=sb):
-            resp = await _get("/flyers/public")
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch(
+                "api.routers.flyers.nearby_supermarket_distances",
+                return_value={"sup-future": 1.0, "sup-visible": 1.5},
+            ),
+        ):
+            resp = await _get("/flyers/public?lat=38.6&lng=16.0")
 
         assert resp.status_code == 200
         assert resp.json() == [
             {
                 "id": "flyer-visible",
+                "supermarket_id": "sup-visible",
                 "status": "done",
                 "is_public": True,
                 "flyer_kind": "published_target",
                 "confirmed_count": 1,
             }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_public_list_excludes_flyers_outside_the_active_radius(self):
+        sb = MagicMock()
+        flyers_table = MagicMock()
+        query = flyers_table.select.return_value
+        query.eq.return_value = query
+        query.order.return_value = query
+        page = MagicMock()
+        page.execute.return_value = MagicMock(
+            data=[
+                {"id": "flyer-near", "supermarket_id": "sup-near"},
+                {"id": "flyer-far", "supermarket_id": "sup-far"},
+            ]
+        )
+        empty_page = MagicMock()
+        empty_page.execute.return_value = MagicMock(data=[])
+        query.range.side_effect = [page, empty_page]
+        sb.table.return_value = flyers_table
+
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch(
+                "api.routers.flyers.nearby_supermarket_distances",
+                return_value={"sup-near": 1.2},
+            ),
+            patch(
+                "api.routers.flyers._confirmed_count_by_flyer",
+                return_value={"flyer-near": 2},
+            ),
+        ):
+            resp = await _get("/flyers/public?lat=38.6&lng=16.0")
+
+        assert resp.status_code == 200
+        assert resp.json() == [
+            {"id": "flyer-near", "supermarket_id": "sup-near", "confirmed_count": 2}
         ]
 
     @pytest.mark.asyncio
