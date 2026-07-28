@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import uuid
 import hashlib
 from typing import Annotated
@@ -42,6 +42,7 @@ MAX_PRODUCT_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 OFFER_KIND_SOURCE_MASTER = "source_master"
 OFFER_KIND_PUBLISHED_TARGET = "published_target"
 PROCESSING_RESUME_STALE_AFTER = timedelta(minutes=5)
+PUBLIC_FLYER_PAGE_SIZE = 100
 
 
 class DraftOfferUpdate(BaseModel):
@@ -143,6 +144,38 @@ def _confirmed_count_by_flyer(sb, flyer_ids: list[str]) -> dict[str, int]:
         fid = row["flyer_id"]
         confirmed_by_flyer[fid] = confirmed_by_flyer.get(fid, 0) + 1
     return confirmed_by_flyer
+
+
+def _is_flyer_current(flyer: dict, today: date) -> bool:
+    valid_from = flyer.get("valid_from")
+    valid_to = flyer.get("valid_to")
+    if valid_from and date.fromisoformat(str(valid_from)) > today:
+        return False
+    if valid_to and date.fromisoformat(str(valid_to)) < today:
+        return False
+    return True
+
+
+def _public_flyers(sb) -> list[dict]:
+    flyers: list[dict] = []
+    offset = 0
+    while True:
+        response = (
+            sb.table("flyers")
+            .select("*", count="exact")
+            .eq("flyer_kind", "published_target")
+            .eq("status", "done")
+            .eq("is_public", True)
+            .order("created_at", desc=True)
+            .range(offset, offset + PUBLIC_FLYER_PAGE_SIZE - 1)
+            .execute()
+        )
+        page = response.data or []
+        flyers.extend(page)
+        total = response.count if isinstance(response.count, int) else None
+        if not page or total is None or len(flyers) >= total:
+            return flyers
+        offset += len(page)
 
 
 def _offer_count_by_flyer(
@@ -874,28 +907,22 @@ async def list_flyers(
 @router.get("/public")
 async def list_public_flyers(
 ) -> list[dict]:
-    """Return every public flyer that contains confirmed offers.
+    """Return every current public flyer that contains confirmed offers.
 
     Public flyers are deliberately independent from the user's location so every
     listed card remains downloadable.
     """
     sb = get_supabase()
-    query = (
-        sb.table("flyers")
-        .select("*")
-        .eq("flyer_kind", "published_target")
-        .eq("status", "done")
-        .eq("is_public", True)
-        .order("created_at", desc=True)
-    )
-
-    flyers = query.execute().data
+    flyers = _public_flyers(sb)
     if not flyers:
         return flyers
 
     confirmed_by_flyer = _confirmed_count_by_flyer(sb, [f["id"] for f in flyers])
     visible_flyers: list[dict] = []
+    today = datetime.now(timezone.utc).date()
     for flyer in flyers:
+        if not _is_flyer_current(flyer, today):
+            continue
         confirmed_count = confirmed_by_flyer.get(flyer["id"], 0)
         if confirmed_count <= 0:
             continue
