@@ -226,6 +226,30 @@ async def test_lat_lng_includes_deep_link_supermarket_outside_radius():
     assert resp.json() == [{"id": "sm-far", "name": "Conad", "is_active": True}]
 
 
+@pytest.mark.asyncio
+async def test_admin_directory_ignores_authenticated_profile_distance():
+    sb = MagicMock()
+    query = MagicMock()
+    query.select.return_value = query
+    query.eq.return_value = query
+    query.order.return_value = query
+    query.execute.return_value = MagicMock(
+        data=[
+            {"id": "sm-near", "name": "Diper", "city": "Polistena"},
+            {"id": "sm-far", "name": "Diper", "city": "Gioia Tauro"},
+        ]
+    )
+    sb.table.return_value = query
+    test_app.dependency_overrides = {_DEP_REQUIRE_ADMIN: _admin_dep}
+
+    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
+        resp = await _get("/supermarkets/admin")
+
+    assert resp.status_code == 200
+    assert [row["id"] for row in resp.json()] == ["sm-near", "sm-far"]
+    sb.rpc.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # POST /supermarkets tests
 # ---------------------------------------------------------------------------
