@@ -7,6 +7,8 @@ Il backend FastAPI è l'unica API applicativa. Le chiamate autenticate usano un 
 | Metodo | Path | Accesso | Descrizione |
 | --- | --- | --- | --- |
 | `GET` | `/offers` | Pubblico | Offerte confermate e attive, con ricerca, filtri e paginazione. |
+| `POST` | `/guest-location` | Pubblico | Valida una posizione guest e imposta il cookie tecnico firmato usato dalla discovery. |
+| `DELETE` | `/guest-location` | Pubblico | Rimuove il cookie tecnico di località guest. |
 
 Un'offerta contiene i propri dati, validità, prezzo, formato strutturato e `image_url`. Non esistono endpoint per catalogo prodotti, dettagli prodotto o preferiti prodotto.
 
@@ -14,8 +16,8 @@ Un'offerta contiene i propri dati, validità, prezzo, formato strutturato e `ima
 
 | Metodo | Path | Accesso | Descrizione |
 | --- | --- | --- | --- |
-| `GET` | `/flyers/public` | Pubblico | Volantini pubblici correnti con offerte confermate nel raggio attivo, ordinati per distanza della sede. Per utenti autenticati usa il profilo; per ospiti usa `lat`, `lng` e `max_distance_km`. |
-| `GET` | `/supermarkets?with_active_offers=true` | Pubblico | Sedi nel raggio attivo che hanno offerte correnti, ordinate per distanza e usate dal filtro della pagina Offerte. Per utenti autenticati usa il profilo; per ospiti usa `lat`, `lng` e `max_distance_km`. |
+| `GET` | `/flyers/public` | Pubblico | Volantini pubblici correnti nel raggio attivo. Per i guest richiede il cookie di località firmato; senza località restituisce `428 guest_location_required`. |
+| `GET` | `/supermarkets?with_active_offers=true` | Pubblico | Sedi nel raggio attivo. Per i guest richiede il cookie di località firmato; senza località restituisce `428 guest_location_required`. |
 | `GET` | `/supermarkets/admin` | Admin | Tutte le sedi attive, senza filtro di distanza; usato esclusivamente dalla gestione supermercati. |
 | `GET` | `/flyers` | Admin/manager | Elenco volantini in gestione. |
 | `GET` | `/flyers/{flyer_id}` | Admin/manager | Dettaglio e stato di estrazione. |

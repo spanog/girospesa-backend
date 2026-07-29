@@ -117,7 +117,7 @@ async def _patch_logo_denied(url: str) -> httpx.Response:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_lat_lng_returns_postgis_nearby_supermarkets():
+async def test_legacy_location_parameters_do_not_filter_guest_supermarkets():
     sb = MagicMock()
     sb.rpc.return_value.execute.return_value = MagicMock(
         data=[{"id": "sm-1", "distance_km": 1.2}]
@@ -126,25 +126,14 @@ async def test_lat_lng_returns_postgis_nearby_supermarkets():
         data=[{"id": "sm-1", "name": "Lidl", "is_active": True}]
     )
 
-    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
-        resp = await _get("/supermarkets?lat=45.464&lng=9.189&max_distance_km=10")
+    resp = await _get("/supermarkets?lat=45.464&lng=9.189&max_distance_km=10")
 
-    assert resp.status_code == 200
-    assert resp.json() == [
-        {"id": "sm-1", "name": "Lidl", "is_active": True, "distance_km": 1.2}
-    ]
-    sb.rpc.assert_called_once_with(
-        "nearby_supermarkets",
-        {
-            "user_lat": 45.464,
-            "user_lng": 9.189,
-            "radius_m": 10000.0,
-        },
-    )
+    assert resp.status_code == 428
+    sb.rpc.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_with_active_offers_keeps_only_nearby_supermarkets_with_current_offers():
+async def test_guest_supermarkets_require_signed_location():
     sb = MagicMock()
     sb.rpc.return_value.execute.return_value = MagicMock(
         data=[
@@ -163,19 +152,9 @@ async def test_with_active_offers_keeps_only_nearby_supermarkets_with_current_of
     )
     sb.table.return_value.select.return_value = query
 
-    with (
-        patch("api.routers.supermarkets.get_supabase", return_value=sb),
-        patch("api.routers.supermarkets.apply_current_offer_window", return_value=query),
-    ):
-        resp = await _get(
-            "/supermarkets?with_active_offers=true&lat=38.4&lng=16.1&max_distance_km=10"
-        )
+    resp = await _get("/supermarkets?with_active_offers=true&lat=38.4&lng=16.1&max_distance_km=10")
 
-    assert resp.status_code == 200
-    assert resp.json() == [
-        {"id": "sup-polistena", "name": "Conad", "distance_km": 1.1},
-        {"id": "sup-taurianova", "name": "Conad", "distance_km": 7.3},
-    ]
+    assert resp.status_code == 428
 
 
 @pytest.mark.asyncio
@@ -198,32 +177,27 @@ async def test_with_active_offers_uses_authenticated_profile_radius():
     ):
         result = await _sm_module.list_supermarkets(
             with_active_offers=True,
-            lat=None,
-            lng=None,
-            max_distance_km=None,
             include_ids=[],
             user_id="user-1",
         )
 
-    request_location.assert_called_once_with(sb, "user-1", None, None, None)
+    request_location.assert_called_once_with(sb, "user-1", None)
     assert result == [{"id": "sup-polistena", "name": "Conad", "distance_km": 1.1}]
 
 
 @pytest.mark.asyncio
-async def test_lat_lng_includes_deep_link_supermarket_outside_radius():
+async def test_legacy_location_parameters_cannot_include_deep_link_supermarket():
     sb = MagicMock()
     sb.rpc.return_value.execute.return_value = MagicMock(data=[])
     sb.table.return_value.select.return_value.in_.return_value.eq.return_value.execute.return_value = MagicMock(
         data=[{"id": "sm-far", "name": "Conad", "is_active": True}]
     )
 
-    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
-        resp = await _get(
-            "/supermarkets?lat=45.464&lng=9.189&max_distance_km=10&include_ids=sm-far"
-        )
+    resp = await _get(
+        "/supermarkets?lat=45.464&lng=9.189&max_distance_km=10&include_ids=sm-far"
+    )
 
-    assert resp.status_code == 200
-    assert resp.json() == [{"id": "sm-far", "name": "Conad", "is_active": True}]
+    assert resp.status_code == 428
 
 
 @pytest.mark.asyncio

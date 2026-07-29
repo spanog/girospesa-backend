@@ -21,6 +21,8 @@ for _sess_key in [k for k in list(sys.modules) if k.startswith("core.session")]:
     del sys.modules[_sess_key]
 
 import core.session as session
+import core.guest_location as guest_location
+from core.guest_location import GUEST_LOCATION_RADIUS_KM, create_guest_location_token, read_guest_location
 
 
 @pytest.fixture(autouse=True)
@@ -74,6 +76,27 @@ def test_expired_session_token_is_rejected(stub_session_settings) -> None:
 
 def test_invalid_session_token_is_rejected(stub_session_settings) -> None:
     assert session.read_session_token("not-a-token") is None
+
+
+def test_guest_location_token_is_signed_and_has_fixed_radius(stub_session_settings) -> None:
+    token = create_guest_location_token(45.4642, 9.19)
+
+    assert read_guest_location(token) == (45.4642, 9.19, GUEST_LOCATION_RADIUS_KM)
+    assert read_guest_location(f"{token}tampered") is None
+
+
+def test_guest_location_cookie_uses_lax_without_https(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(guest_location.settings, "environment", "development")
+
+    assert guest_location.cookie_secure() is False
+    assert guest_location.cookie_samesite() == "lax"
+
+
+def test_guest_location_cookie_uses_none_with_https(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(guest_location.settings, "environment", "production")
+
+    assert guest_location.cookie_secure() is True
+    assert guest_location.cookie_samesite() == "none"
 
 
 def test_session_settings_only_require_session_env(monkeypatch: pytest.MonkeyPatch) -> None:

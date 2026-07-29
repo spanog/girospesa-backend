@@ -27,6 +27,7 @@ def _import_main(monkeypatch):
         "contact_requests",
         "favorites",
         "flyers",
+        "guest_location",
         "invite",
         "lists",
         "notifications",

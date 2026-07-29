@@ -79,13 +79,13 @@ def test_authenticated_request_location_prefers_search_location_and_profile_radi
         }
     )
 
-    location = request_location(sb, "user-1", 99.0, 99.0, 20.0)
+    location = request_location(sb, "user-1", None)
 
     assert location == (38.4, 16.1, 7.0)
 
 
-def test_guest_request_location_uses_explicit_coordinates():
-    assert request_location(MagicMock(), None, 38.4, 16.1, 7.0) == (38.4, 16.1, 7.0)
+def test_guest_request_location_uses_signed_cookie_location():
+    assert request_location(MagicMock(), None, (38.4, 16.1, 10.0)) == (38.4, 16.1, 10.0)
 
 
 def _make_sb(supermarket_data: dict | None = None) -> MagicMock:
@@ -137,7 +137,7 @@ def _make_sb(supermarket_data: dict | None = None) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_list_public_offers_filters_by_nearby_supermarkets():
+async def test_list_public_offers_ignores_legacy_location_parameters():
     sb = MagicMock()
     sb.rpc.return_value.execute.return_value = MagicMock(
         data=[{"id": "sup-1", "distance_km": 1.2}]
@@ -145,29 +145,15 @@ async def test_list_public_offers_filters_by_nearby_supermarkets():
     query = sb.table.return_value.select.return_value.eq.return_value.eq.return_value
     query.in_.return_value.order.return_value.execute.return_value = MagicMock(data=[])
 
-    with patch("api.routers.offers.get_supabase", return_value=sb), patch(
-        "api.routers.offers.apply_current_offer_window", side_effect=lambda value: value
-    ):
-        resp = await _get("/offers?lat=45.464&lng=9.189&max_distance_km=10")
+    resp = await _get("/offers?lat=45.464&lng=9.189&max_distance_km=10")
 
-    assert resp.status_code == 200
-    assert resp.json() == {
-        "items": [],
-        "total": 0,
-        "supermarket_count": 0,
-        "counts_by_supermarket_id": {},
-        "counts_by_supermarket_slug": {},
-        "nextPage": None,
-    }
-    sb.rpc.assert_called_once_with(
-        "nearby_supermarkets",
-        {"user_lat": 45.464, "user_lng": 9.189, "radius_m": 10000.0},
-    )
-    query.in_.assert_called_once_with("supermarket_id", ["sup-1"])
+    assert resp.status_code == 428
+    assert resp.json()["detail"]["code"] == "guest_location_required"
+    sb.rpc.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_list_public_offers_keeps_clone_copies_without_location():
+async def test_list_public_offers_requires_guest_location():
     sb = MagicMock()
     query = sb.table.return_value.select.return_value.eq.return_value.eq.return_value
     query.order.return_value.range.return_value.execute.return_value = MagicMock(
@@ -178,13 +164,9 @@ async def test_list_public_offers_keeps_clone_copies_without_location():
         count=2,
     )
 
-    with patch("api.routers.offers.get_supabase", return_value=sb), patch(
-        "api.routers.offers.apply_current_offer_window", side_effect=lambda value: value
-    ):
-        response = await _get("/offers")
+    response = await _get("/offers")
 
-    assert response.status_code == 200
-    assert [offer["id"] for offer in response.json()["items"]] == ["one", "two"]
+    assert response.status_code == 428
 
 
 def _published_offer(
