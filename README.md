@@ -58,6 +58,7 @@ Guida completa: [docs/local-development.md](docs/local-development.md).
 | Scheduled jobs e cleanup | [docs/jobs.md](docs/jobs.md) |
 | Deploy produzione backend | [docs/deploy-production.md](docs/deploy-production.md) |
 | Deploy Render locale senza GitHub Actions | [docs/deploy-render-local.md](docs/deploy-render-local.md) |
+| Assessment sicurezza e follow-up staging | [docs/security-assessment-2026-07-29.md](docs/security-assessment-2026-07-29.md) |
 
 Use the workspace guide [../docs/deploy-production-guide.md](../docs/deploy-production-guide.md) only when coordinating multiple systems together: backend, frontend, DNS, Supabase, mobile apps, stores, and UAT.
 
