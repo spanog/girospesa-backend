@@ -19,6 +19,7 @@ from api.routers import (
     auth,
     contact_requests,
     flyers,
+    guest_location,
     lists,
     notifications,
     ops,
@@ -156,6 +157,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(guest_location.router, prefix="/guest-location", tags=["guest-location"])
 app.include_router(flyers.router, prefix="/flyers", tags=["flyers"])
 app.include_router(supermarkets.router, prefix="/supermarkets", tags=["supermarkets"])
 app.include_router(lists.router, prefix="/lists", tags=["lists"])

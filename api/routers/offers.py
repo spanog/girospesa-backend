@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from core.auth import get_optional_user_id, managed_supermarket_ids, require_admin_or_manager
 from core.database import get_supabase
+from core.guest_location import GUEST_LOCATION_COOKIE, guest_location_required, read_guest_location
 from api.routers._nearby_supermarkets import nearby_supermarket_distances, request_location
 from services.extraction.normalizer import normalize_unit_price_measure
 from services.offer_visibility import apply_current_offer_window
@@ -97,11 +98,9 @@ async def list_public_offers(
     category: str | None = Query(None),
     supermarket_id: str | None = Query(None),
     supermarket_ids: list[str] = Query(default=[]),
-    lat: float | None = Query(None),
-    lng: float | None = Query(None),
-    max_distance_km: float | None = Query(None, gt=0, le=20),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    request: Request = None,
     user_id: str | None = Depends(get_optional_user_id),
 ) -> dict:
     """Return currently visible offers; offer fields are self-contained."""
@@ -113,7 +112,11 @@ async def list_public_offers(
         .eq("offer_kind", "published_target")
     )
     query = apply_current_offer_window(query)
-    location = request_location(sb, user_id, lat, lng, max_distance_km)
+    guest_token = request.cookies.get(GUEST_LOCATION_COOKIE) if user_id is None else None
+    guest_location = read_guest_location(guest_token)
+    if user_id is None and guest_location is None:
+        raise guest_location_required(clear_cookie=guest_token is not None)
+    location = request_location(sb, user_id, guest_location)
     distances_by_supermarket_id: dict[str, float] | None = None
     if location is not None:
         user_lat, user_lng, radius = location

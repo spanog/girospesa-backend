@@ -1,12 +1,13 @@
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel
 
 from core.auth import get_optional_user_id, require_admin
 from core.config import settings
 from core.database import get_supabase
+from core.guest_location import GUEST_LOCATION_COOKIE, guest_location_required, read_guest_location
 from api.routers._nearby_supermarkets import request_location
 from services.geocoding import geocode_address
 from services.offer_visibility import apply_current_offer_window
@@ -79,15 +80,17 @@ def _supermarkets_with_active_offers(sb, ids: list[str] | None = None) -> list[d
 @router.get("")
 async def list_supermarkets(
     with_active_offers: bool = Query(False),
-    lat: float | None = Query(None),
-    lng: float | None = Query(None),
-    max_distance_km: float | None = Query(None, gt=0, le=20),
     include_ids: list[str] = Query(default=[]),
+    request: Request = None,
     user_id: str | None = Depends(get_optional_user_id),
 ) -> list[dict]:
     """Return active supermarkets, optionally limited to current offers."""
     sb = get_supabase()
-    location = request_location(sb, user_id, lat, lng, max_distance_km)
+    guest_token = request.cookies.get(GUEST_LOCATION_COOKIE) if user_id is None else None
+    guest_location = read_guest_location(guest_token)
+    if user_id is None and guest_location is None:
+        raise guest_location_required(clear_cookie=guest_token is not None)
+    location = request_location(sb, user_id, guest_location)
     if location is not None:
         user_lat, user_lng, radius = location
         nearby = _nearby_supermarkets(sb, user_lat, user_lng, radius)

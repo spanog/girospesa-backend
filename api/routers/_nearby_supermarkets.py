@@ -22,17 +22,11 @@ def nearby_supermarket_distances(
 
 
 def request_location(
-    sb,
-    user_id: str | None,
-    lat: float | None,
-    lng: float | None,
-    max_distance_km: float | None,
+    sb, user_id: str | None, guest_location: tuple[float, float, float] | None
 ) -> tuple[float, float, float] | None:
-    """Resolve profile location for members and explicit location for guests."""
+    """Resolve profile location for members and signed-cookie location for guests."""
     if user_id is None:
-        if lat is None or lng is None:
-            return None
-        return lat, lng, max_distance_km or 10.0
+        return guest_location
     profile = _location_profile(sb, user_id)
     resolved_lat = profile.get("search_lat")
     resolved_lng = profile.get("search_lng")

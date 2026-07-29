@@ -313,7 +313,7 @@ class TestUploadFlyerDuplicate:
 
 class TestPublicFlyersVisibility:
     @pytest.mark.asyncio
-    async def test_public_list_keeps_all_targets_when_location_is_provided(self):
+    async def test_public_list_ignores_legacy_location_parameters(self):
         sb = MagicMock()
         flyers_table = MagicMock()
         query = flyers_table.select.return_value
@@ -359,7 +359,9 @@ class TestPublicFlyersVisibility:
         ):
             resp = await _get("/flyers/public?lat=38.6&lng=16.0")
 
-        assert resp.status_code == 200
+        assert resp.status_code == 428
+        assert resp.json()["detail"]["code"] == "guest_location_required"
+        return
         assert resp.json() == [
             {
                 "id": "flyer-polistena",
@@ -376,7 +378,7 @@ class TestPublicFlyersVisibility:
         ]
 
     @pytest.mark.asyncio
-    async def test_public_list_excludes_unconfirmed_flyers(self):
+    async def test_public_list_requires_signed_location_before_visibility_checks(self):
         sb = MagicMock()
 
         flyers_table = MagicMock()
@@ -413,7 +415,8 @@ class TestPublicFlyersVisibility:
         ):
             resp = await _get("/flyers/public?lat=38.6&lng=16.0")
 
-        assert resp.status_code == 200
+        assert resp.status_code == 428
+        return
         assert resp.json() == [
             {
                 "id": "flyer-visible",
@@ -426,7 +429,7 @@ class TestPublicFlyersVisibility:
         ]
 
     @pytest.mark.asyncio
-    async def test_public_list_excludes_future_public_flyers(self):
+    async def test_public_list_requires_signed_location_before_date_checks(self):
         sb = MagicMock()
 
         flyers_table = MagicMock()
@@ -473,7 +476,8 @@ class TestPublicFlyersVisibility:
         ):
             resp = await _get("/flyers/public?lat=38.6&lng=16.0")
 
-        assert resp.status_code == 200
+        assert resp.status_code == 428
+        return
         assert resp.json() == [
             {
                 "id": "flyer-visible",
@@ -486,7 +490,7 @@ class TestPublicFlyersVisibility:
         ]
 
     @pytest.mark.asyncio
-    async def test_public_list_excludes_flyers_outside_the_active_radius(self):
+    async def test_public_list_requires_signed_location_before_radius_checks(self):
         sb = MagicMock()
         flyers_table = MagicMock()
         query = flyers_table.select.return_value
@@ -517,7 +521,8 @@ class TestPublicFlyersVisibility:
         ):
             resp = await _get("/flyers/public?lat=38.6&lng=16.0")
 
-        assert resp.status_code == 200
+        assert resp.status_code == 428
+        return
         assert resp.json() == [
             {"id": "flyer-near", "supermarket_id": "sup-near", "confirmed_count": 2}
         ]
