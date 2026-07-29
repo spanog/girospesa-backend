@@ -23,6 +23,14 @@ def _jwks_url() -> str:
     return f"{settings.supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
 
 
+def _jwt_issuer() -> str:
+    return f"{settings.supabase_url.rstrip('/')}/auth/v1"
+
+
+def _decode_options() -> dict[str, object]:
+    return {"audience": "authenticated", "issuer": _jwt_issuer()}
+
+
 def _load_jwks() -> dict:
     now = time.time()
     if now < float(_jwks_cache["expires_at"]) and _jwks_cache["value"]:
@@ -49,7 +57,7 @@ def _decode_token(token: str) -> dict:
                 token,
                 secret,
                 algorithms=["HS256"],
-                options={"verify_aud": False},
+                **_decode_options(),
             )
         if algorithm not in {"ES256", "RS256"}:
             raise HTTPException(
@@ -60,7 +68,7 @@ def _decode_token(token: str) -> dict:
             token,
             _load_jwks(),
             algorithms=[algorithm],
-            options={"verify_aud": False},
+            **_decode_options(),
         )
         return payload
     except HTTPException:

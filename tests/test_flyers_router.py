@@ -181,7 +181,6 @@ def test_confirmed_count_by_flyer_uses_database_aggregation():
     sb.rpc.return_value.execute.return_value = MagicMock(
         data=[{"flyer_id": "flyer-taurianova", "offer_count": 1_353}]
     )
-
     counts = _flyers_module._confirmed_count_by_flyer(sb, ["flyer-taurianova"])
 
     assert counts == {"flyer-taurianova": 1_353}
@@ -189,6 +188,42 @@ def test_confirmed_count_by_flyer_uses_database_aggregation():
         "count_offers_by_flyer",
         {"p_flyer_ids": ["flyer-taurianova"], "p_is_confirmed": True},
     )
+
+
+@pytest.mark.parametrize(
+    ("content_type", "content"),
+    [
+        ("application/pdf", b"%PDF-1.7 test"),
+        ("image/jpeg", b"\xff\xd8\xff\xe0 test"),
+        ("image/png", b"\x89PNG\r\n\x1a\n test"),
+        ("image/webp", b"RIFF\x00\x00\x00\x00WEBPtest"),
+        ("image/gif", b"GIF89atest"),
+    ],
+)
+def test_file_signature_accepts_declared_type(content_type: str, content: bytes):
+    assert _flyers_module._matches_file_signature(content, content_type) is True
+
+
+@pytest.mark.parametrize("content_type", ["application/pdf", "image/jpeg", "image/png"])
+def test_file_signature_rejects_mismatched_content_type(content_type: str):
+    with pytest.raises(HTTPException) as exc_info:
+        _flyers_module._assert_file_signature(b"<script>alert(1)</script>", content_type)
+
+    assert exc_info.value.status_code == 422
+
+
+def test_product_image_storage_extension_comes_from_verified_content_type():
+    sb = MagicMock()
+
+    _flyers_module._upload_product_image_to_storage(
+        sb,
+        storage_prefix="draft-offers/offer-1",
+        file_content=b"\x89PNG\r\n\x1a\n test",
+        content_type="image/png",
+    )
+
+    path = sb.storage.from_.return_value.upload.call_args.kwargs["path"]
+    assert path.endswith(".png")
 
 
 # ---------------------------------------------------------------------------

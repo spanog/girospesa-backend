@@ -660,13 +660,14 @@ def _replace_flyer_targets(
 
 
 def _file_ext(content_type: str) -> str:
-    if content_type == "application/pdf":
-        return "pdf"
-    if content_type == "image/png":
-        return "png"
-    if content_type == "image/webp":
-        return "webp"
-    return "jpg"
+    extensions = {
+        "application/pdf": "pdf",
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+        "image/gif": "gif",
+    }
+    return extensions[content_type]
 
 
 def _file_type(content_type: str) -> str:
@@ -700,6 +701,25 @@ def _assert_upload_file_type(content_type: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Unsupported file type: {content_type}",
+        )
+
+
+def _matches_file_signature(content: bytes, content_type: str) -> bool:
+    signatures = {
+        "application/pdf": lambda: content.startswith(b"%PDF-"),
+        "image/jpeg": lambda: content.startswith(b"\xff\xd8\xff"),
+        "image/png": lambda: content.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/webp": lambda: content[:4] == b"RIFF" and content[8:12] == b"WEBP",
+        "image/gif": lambda: content.startswith((b"GIF87a", b"GIF89a")),
+    }
+    return signatures[content_type]()
+
+
+def _assert_file_signature(content: bytes, content_type: str) -> None:
+    if not _matches_file_signature(content, content_type):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="File content does not match the declared content type",
         )
 
 
@@ -820,10 +840,8 @@ def _upload_product_image_to_storage(
     storage_prefix: str,
     file_content: bytes,
     content_type: str,
-    filename: str | None,
 ) -> str:
-    ext = (filename or "image").rsplit(".", 1)[-1].lower()
-    storage_path = f"{storage_prefix}/{uuid.uuid4()}.{ext}"
+    storage_path = f"{storage_prefix}/{uuid.uuid4()}.{_file_ext(content_type)}"
     sb.storage.from_("product-images").upload(
         path=storage_path,
         file=file_content,
@@ -1049,6 +1067,7 @@ async def complete_flyer_upload(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="File exceeds 50 MB limit",
         )
+    _assert_file_signature(content, payload.content_type)
 
     file_hash = hashlib.sha256(content).hexdigest()
     try:
@@ -1494,13 +1513,13 @@ async def upload_draft_offer_image(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Immagine troppo grande. Max 10 MB.",
         )
+    _assert_file_signature(content, file.content_type)
 
     public_url = _upload_product_image_to_storage(
         sb,
         storage_prefix=f"draft-offers/{offer_id}",
         file_content=content,
         content_type=file.content_type,
-        filename=file.filename,
     )
     sb.table("offers").update({"image_url": public_url}).eq("id", offer_id).execute()
 

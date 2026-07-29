@@ -15,7 +15,9 @@ for _mod in ("supabase", "jose", "jose.jwt", "geopy", "geopy.geocoders"):
         sys.modules[_mod] = MagicMock()
 
 _config_mod = types.ModuleType("core.config")
-_config_mod.settings = MagicMock()  # type: ignore[attr-defined]
+_config_mod.settings = MagicMock(  # type: ignore[attr-defined]
+    supabase_url="https://project.supabase.co",
+)
 sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
 
@@ -75,7 +77,8 @@ class TestDecodeToken:
             "token",
             "local-jwt-secret",
             algorithms=["HS256"],
-            options={"verify_aud": False},
+            audience="authenticated",
+            issuer="https://project.supabase.co/auth/v1",
         )
 
     def test_uses_jwks_for_es256(self, monkeypatch: pytest.MonkeyPatch):
@@ -92,7 +95,8 @@ class TestDecodeToken:
             "token",
             {"keys": [{"kid": "k1"}]},
             algorithms=["ES256"],
-            options={"verify_aud": False},
+            audience="authenticated",
+            issuer="https://project.supabase.co/auth/v1",
         )
 
     def test_uses_jwks_for_rs256(self, monkeypatch: pytest.MonkeyPatch):
@@ -109,7 +113,8 @@ class TestDecodeToken:
             "token",
             {"keys": [{"kid": "k2"}]},
             algorithms=["RS256"],
-            options={"verify_aud": False},
+            audience="authenticated",
+            issuer="https://project.supabase.co/auth/v1",
         )
 
 
