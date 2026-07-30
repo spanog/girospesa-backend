@@ -50,6 +50,7 @@
 - RLS-only helper functions that need `SECURITY DEFINER` privileges must live in a non-exposed schema such as `private`; do not publish them from `public` or document them as client-callable RPCs.
 - Public Storage buckets (`avatars`, `logos`, `product-images`) rely on signed-less `/storage/v1/object/public/...` URLs only. Do not depend on anonymous bucket listing via `storage.objects` policies.
 - Le anteprime dei volantini pubblici passano da `GET /flyers/{id}/preview`: restituire binario WebP con cache HTTP, mai URL Storage al browser. Conservare gli URL firmati brevi esclusivamente in endpoint separati per workflow admin privati.
+- `POST /flyers/preview-backfill` resta limitato agli admin e deve rigenerare solo i record elaborati senza `preview_path`; non eseguire backfill sincroni durante la navigazione pubblica.
 
 ## Deploy / CI conventions
 

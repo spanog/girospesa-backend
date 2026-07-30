@@ -104,6 +104,7 @@ from tests.snapshot_utils import assert_matches_json_snapshot
 
 _DEP_GET_USER_ID = _flyers_module.get_current_user_id
 _DEP_PROFILE = _flyers_module.require_admin_or_manager
+_DEP_ADMIN = _flyers_module.require_admin
 
 # ---------------------------------------------------------------------------
 # Build a minimal test app
@@ -315,6 +316,25 @@ class TestUploadFlyerValidation:
 
 
 class TestFlyerPreview:
+    @pytest.mark.asyncio
+    async def test_admin_backfill_generates_all_missing_previews(self):
+        sb = MagicMock()
+        sb.table.return_value.select.return_value.eq.return_value.is_.return_value.execute.return_value = MagicMock(
+            data=[{"id": "flyer-1"}, {"id": "flyer-2"}]
+        )
+        test_app.dependency_overrides = {_DEP_ADMIN: lambda: ADMIN_PROFILE}
+        transport = httpx.ASGITransport(app=test_app)
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb), patch(
+            "api.routers.flyers._ensure_flyer_preview",
+            side_effect=["previews/flyer-1.webp", None],
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.post("/flyers/preview-backfill")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"generated": 1, "unavailable": 1}
+
     @pytest.mark.asyncio
     async def test_public_flyer_preview_returns_cached_thumbnail(self):
         sb = MagicMock()
