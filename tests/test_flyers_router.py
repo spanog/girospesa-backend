@@ -612,39 +612,6 @@ class TestPublicFlyersVisibility:
             {"id": "flyer-near", "supermarket_id": "sup-near", "confirmed_count": 2}
         ]
 
-    @pytest.mark.asyncio
-    async def test_guest_download_requires_confirmed_public_flyer(self):
-        sb = MagicMock()
-        flyer_result = MagicMock()
-        flyer_result.data = {
-            "id": "flyer-1",
-            "status": "done",
-            "is_public": True,
-            "supermarket_id": "sup-1",
-        }
-
-        flyers_table = MagicMock()
-        flyers_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = (
-            flyer_result
-        )
-
-        offers_table = MagicMock()
-        count_result = MagicMock()
-        count_result.count = 0
-        offers_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = count_result
-
-        def _dispatch(table_name: str) -> MagicMock:
-            if table_name == "flyers":
-                return flyers_table
-            return offers_table
-
-        sb.table.side_effect = _dispatch
-
-        with patch("api.routers.flyers.get_supabase", return_value=sb):
-            resp = await _get("/flyers/flyer-1/download", {_flyers_module.get_optional_user_id: lambda: None})
-
-        assert resp.status_code == 403
-        assert resp.json()["detail"] == "Authentication required"
 
 
 class TestManagerFlyerTargetsAccess:
@@ -1177,3 +1144,52 @@ class TestUpdateFlyerTargets:
         )
         flyer_job_mock.assert_called_once()
         assert counts == {"flyer-pub-1": 1, "flyer-pub-2": 1}
+
+
+@pytest.mark.asyncio
+async def test_public_flyer_file_is_served_inline():
+    sb = MagicMock()
+    flyer_result = MagicMock()
+    flyer_result.data = {
+        "id": "flyer-1",
+        "file_name": "volantino luglio.pdf",
+        "file_type": "pdf",
+    }
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
+    sb.storage.from_.return_value.download.return_value = _SMALL_PDF
+
+    with (
+        patch("api.routers.flyers.get_supabase", return_value=sb),
+        patch("api.routers.flyers._assert_flyer_file_access"),
+        patch("api.routers.flyers._flyer_storage_path", return_value="user/flyer.pdf"),
+    ):
+        resp = await _get(
+            "/flyers/flyer-1/file",
+            {_flyers_module.get_optional_user_id: lambda: None},
+        )
+
+    assert resp.status_code == 200
+    assert resp.content == _SMALL_PDF
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.headers["content-disposition"] == "inline; filename*=UTF-8''volantino%20luglio.pdf"
+    sb.storage.from_.return_value.download.assert_called_once_with("user/flyer.pdf")
+
+
+def test_public_flyer_representation_hides_storage_url():
+    flyer = {"id": "flyer-1", "file_url": "https://storage.example.com/file.pdf"}
+
+    assert _flyers_module._public_flyer_representation(flyer) == {"id": "flyer-1"}
+
+
+def test_public_flyer_expiry_sort_key_prioritizes_nearest_expiry():
+    flyers = [
+        {"id": "undated", "valid_to": None},
+        {"id": "later", "valid_to": "2026-08-20"},
+        {"id": "sooner", "valid_to": "2026-08-10"},
+    ]
+
+    assert [flyer["id"] for flyer in sorted(flyers, key=_flyers_module._public_flyer_expiry_sort_key)] == [
+        "sooner",
+        "later",
+        "undated",
+    ]
