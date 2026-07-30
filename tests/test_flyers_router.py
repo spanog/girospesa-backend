@@ -316,7 +316,32 @@ class TestUploadFlyerValidation:
 
 class TestFlyerPreview:
     @pytest.mark.asyncio
-    async def test_public_flyer_preview_returns_signed_thumbnail_url(self, request):
+    async def test_public_flyer_preview_returns_cached_thumbnail(self):
+        sb = MagicMock()
+        sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+            data={
+                "id": "flyer-1",
+                "is_public": True,
+                "status": "done",
+                "preview_path": "previews/flyer-1.webp",
+            }
+        )
+        sb.storage.from_.return_value.download.return_value = b"webp"
+
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._has_confirmed_offers", return_value=True),
+        ):
+            resp = await _get("/flyers/flyer-1/preview")
+
+        assert resp.status_code == 200
+        assert resp.content == b"webp"
+        assert resp.headers["content-type"] == "image/webp"
+        assert "s-maxage=86400" in resp.headers["cache-control"]
+        sb.storage.from_.return_value.download.assert_called_once_with("previews/flyer-1.webp")
+
+    @pytest.mark.asyncio
+    async def test_private_preview_url_remains_signed_for_admin_workflows(self, request):
         sb = MagicMock()
         sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
             data={
@@ -334,11 +359,10 @@ class TestFlyerPreview:
             patch("api.routers.flyers.get_supabase", return_value=sb),
             patch("api.routers.flyers._has_confirmed_offers", return_value=True),
         ):
-            resp = await _get("/flyers/flyer-1/preview")
+            resp = await _get("/flyers/flyer-1/preview-url")
 
         assert resp.status_code == 200
         assert_matches_json_snapshot(request, "flyer_preview_response", resp.json())
-        sb.storage.from_.return_value.download.assert_not_called()
 
     def test_missing_preview_is_generated_and_persisted(self):
         sb = MagicMock()

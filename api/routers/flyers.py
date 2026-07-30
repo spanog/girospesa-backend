@@ -757,13 +757,16 @@ def _manager_supermarket_ids(sb, user_id: str) -> list[str]:
     return [row["supermarket_id"] for row in rows if row.get("supermarket_id")]
 
 
-def _assert_flyer_file_access(sb, flyer: dict, user_id: str | None) -> None:
-    is_public_done = (
+def _is_public_flyer_file(sb, flyer: dict) -> bool:
+    return bool(
         flyer.get("is_public")
         and flyer.get("status") == "done"
         and _has_confirmed_offers(sb, flyer["id"])
     )
-    if not is_public_done:
+
+
+def _assert_flyer_file_access(sb, flyer: dict, user_id: str | None) -> None:
+    if not _is_public_flyer_file(sb, flyer):
         _private_flyer_download_access(sb, flyer, user_id)
 
 
@@ -1040,6 +1043,8 @@ def _public_flyer_representation(flyer: dict) -> dict:
 
 
 _SIGNED_URL_TTL = 60  # seconds
+PUBLIC_PREVIEW_CACHE_CONTROL = "public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400"
+PRIVATE_PREVIEW_CACHE_CONTROL = "private, no-store"
 
 
 def _inline_flyer_response(flyer: dict, content: bytes, flyer_id: str) -> Response:
@@ -1049,6 +1054,17 @@ def _inline_flyer_response(flyer: dict, content: bytes, flyer_id: str) -> Respon
         content=content,
         media_type=media_type,
         headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+def _flyer_preview_response(content: bytes, is_public: bool) -> Response:
+    cache_control = (
+        PUBLIC_PREVIEW_CACHE_CONTROL if is_public else PRIVATE_PREVIEW_CACHE_CONTROL
+    )
+    return Response(
+        content=content,
+        media_type="image/webp",
+        headers={"Cache-Control": cache_control},
     )
 
 
@@ -1072,11 +1088,32 @@ async def get_flyer_file(
 
 
 @router.get("/{flyer_id}/preview")
+async def flyer_preview(
+    flyer_id: str,
+    user_id: str | None = Depends(get_optional_user_id),
+) -> Response:
+    """Return a compact flyer preview through the backend."""
+    sb = get_supabase()
+    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+    flyer = result.data
+    is_public = _is_public_flyer_file(sb, flyer)
+    if not is_public:
+        _private_flyer_download_access(sb, flyer, user_id)
+    preview_path = _ensure_flyer_preview(sb, flyer)
+    if preview_path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer preview unavailable")
+    content = bytes(sb.storage.from_("flyers").download(preview_path))
+    return _flyer_preview_response(content, is_public)
+
+
+@router.get("/{flyer_id}/preview-url")
 async def flyer_preview_url(
     flyer_id: str,
     user_id: str | None = Depends(get_optional_user_id),
 ) -> dict[str, str]:
-    """Return a signed URL for a compact server-rendered flyer preview."""
+    """Return a short-lived preview URL for authenticated private workflows."""
     sb = get_supabase()
     result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
     if not result or not result.data:
