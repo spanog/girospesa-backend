@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import mimetypes
 import uuid
+from urllib.parse import quote
 import hashlib
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import Response
 
 from pydantic import BaseModel, Field
 
@@ -144,6 +147,12 @@ def _is_flyer_current(flyer: dict, today: date) -> bool:
     if valid_to and date.fromisoformat(str(valid_to)) < today:
         return False
     return True
+
+
+def _public_flyer_expiry_sort_key(flyer: dict) -> date:
+    """Keep flyers without an expiry date after dated flyers."""
+    valid_to = flyer.get("valid_to")
+    return date.fromisoformat(str(valid_to)) if valid_to else date.max
 
 
 def _public_flyers(sb) -> list[dict]:
@@ -748,7 +757,7 @@ def _manager_supermarket_ids(sb, user_id: str) -> list[str]:
     return [row["supermarket_id"] for row in rows if row.get("supermarket_id")]
 
 
-def _assert_flyer_download_access(sb, flyer: dict, user_id: str | None) -> None:
+def _assert_flyer_file_access(sb, flyer: dict, user_id: str | None) -> None:
     is_public_done = (
         flyer.get("is_public")
         and flyer.get("status") == "done"
@@ -1013,42 +1022,53 @@ async def list_public_flyers(
         if confirmed_count <= 0:
             continue
         flyer["confirmed_count"] = confirmed_count
-        visible_flyers.append(flyer)
+        visible_flyers.append(_public_flyer_representation(flyer))
 
-    visible_flyers.sort(key=lambda flyer: distances[flyer["supermarket_id"]])
+    visible_flyers.sort(
+        key=lambda flyer: (
+            distances[flyer["supermarket_id"]],
+            _public_flyer_expiry_sort_key(flyer),
+            flyer["id"],
+        )
+    )
     return visible_flyers
+
+
+def _public_flyer_representation(flyer: dict) -> dict:
+    """Remove storage internals from the public flyer representation."""
+    return {key: value for key, value in flyer.items() if key != "file_url"}
 
 
 _SIGNED_URL_TTL = 60  # seconds
 
 
-@router.get("/{flyer_id}/download")
-async def download_flyer(
+def _inline_flyer_response(flyer: dict, content: bytes, flyer_id: str) -> Response:
+    filename = flyer.get("file_name") or f"{flyer_id}.pdf"
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.get("/{flyer_id}/file")
+async def get_flyer_file(
     flyer_id: str,
     user_id: str | None = Depends(get_optional_user_id),
-) -> dict[str, str]:
-    """Generate a short-lived signed download URL for a flyer file.
-
-    Public+done flyers with confirmed offers: accessible to anyone (guests included).
-    All other flyers: require a valid JWT with admin or supermarket_manager role.
-    """
+) -> Response:
+    """Return the flyer file as an inline representation."""
     sb = get_supabase()
     result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
     if not result or not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
     flyer = result.data
-
-    _assert_flyer_download_access(sb, flyer, user_id)
+    _assert_flyer_file_access(sb, flyer, user_id)
     storage_path = _flyer_storage_path(flyer)
     if storage_path is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Cannot resolve flyer storage path")
-
-    signed = sb.storage.from_("flyers").create_signed_url(
-        storage_path,
-        expires_in=_SIGNED_URL_TTL,
-        options={"download": flyer.get("file_name") or True},
-    )
-    return {"download_url": signed["signedURL"]}
+    content = bytes(sb.storage.from_("flyers").download(storage_path))
+    return _inline_flyer_response(flyer, content, flyer_id)
 
 
 @router.get("/{flyer_id}/preview")
@@ -1062,7 +1082,7 @@ async def flyer_preview_url(
     if not result or not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
     flyer = result.data
-    _assert_flyer_download_access(sb, flyer, user_id)
+    _assert_flyer_file_access(sb, flyer, user_id)
     preview_path = _ensure_flyer_preview(sb, flyer)
     if preview_path is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer preview unavailable")
