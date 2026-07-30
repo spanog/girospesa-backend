@@ -26,6 +26,7 @@ from services.notification_jobs import (
     enqueue_flyer_published,
 )
 from services.product_format import ProductFormat, build_format_bundle
+from services.flyer_preview import render_flyer_preview
 from api.routers._offer_utils import (
     _OFFER_PRODUCT_SELECT,
     _flatten_draft_offer,
@@ -489,6 +490,7 @@ def _upsert_published_target_flyer(
             "file_url": source_flyer.get("file_url"),
             "file_type": source_flyer.get("file_type"),
             "file_name": source_flyer.get("file_name"),
+            "preview_path": source_flyer.get("preview_path"),
             "products_count": 0,
             "pages_count": source_flyer.get("pages_count"),
             "extraction_metadata": source_flyer.get("extraction_metadata"),
@@ -683,6 +685,77 @@ def _remove_flyer_object(sb, storage_path: str) -> None:
         sb.storage.from_("flyers").remove([storage_path])
     except Exception:
         pass
+
+
+def _flyer_storage_path(flyer: dict) -> str | None:
+    prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/flyers/"
+    file_url = flyer.get("file_url") or ""
+    storage_path = file_url.removeprefix(prefix)
+    return storage_path if storage_path and storage_path != file_url else None
+
+
+def _save_flyer_preview(
+    sb, *, flyer_id: str, content: bytes, content_type: str
+) -> str | None:
+    preview = render_flyer_preview(content, content_type)
+    if preview is None:
+        return None
+    preview_path = f"previews/{flyer_id}.webp"
+    sb.storage.from_("flyers").upload(
+        path=preview_path,
+        file=preview,
+        file_options={"content-type": "image/webp", "upsert": "true"},
+    )
+    sb.table("flyers").update({"preview_path": preview_path}).eq("id", flyer_id).execute()
+    return preview_path
+
+
+def _ensure_flyer_preview(sb, flyer: dict) -> str | None:
+    if flyer.get("preview_path"):
+        return str(flyer["preview_path"])
+    storage_path = _flyer_storage_path(flyer)
+    if storage_path is None:
+        return None
+    content = bytes(sb.storage.from_("flyers").download(storage_path))
+    return _save_flyer_preview(
+        sb,
+        flyer_id=flyer["id"],
+        content=content,
+        content_type="application/pdf" if flyer.get("file_type") == "pdf" else "image/png",
+    )
+
+
+def _private_flyer_download_access(sb, flyer: dict, user_id: str | None) -> None:
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+    profile_result = (
+        sb.table("user_profiles").select("*").eq("id", user_id).maybe_single().execute()
+    )
+    if not profile_result or not profile_result.data:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    profile = profile_result.data
+    profile["managed_supermarket_ids"] = (
+        _profile_supermarket_ids(profile) or _manager_supermarket_ids(sb, user_id)
+    )
+    if profile.get("role") not in {"admin", "supermarket_manager"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    _assert_flyer_access(sb, profile, flyer)
+
+
+def _manager_supermarket_ids(sb, user_id: str) -> list[str]:
+    result = sb.table("manager_supermarkets").select("supermarket_id").eq("user_id", user_id).execute()
+    rows = result.data or []
+    return [row["supermarket_id"] for row in rows if row.get("supermarket_id")]
+
+
+def _assert_flyer_download_access(sb, flyer: dict, user_id: str | None) -> None:
+    is_public_done = (
+        flyer.get("is_public")
+        and flyer.get("status") == "done"
+        and _has_confirmed_offers(sb, flyer["id"])
+    )
+    if not is_public_done:
+        _private_flyer_download_access(sb, flyer, user_id)
 
 
 def _normalize_requested_supermarkets(
@@ -965,45 +1038,9 @@ async def download_flyer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
     flyer = result.data
 
-    is_public_done = (
-        flyer.get("is_public")
-        and flyer.get("status") == "done"
-        and _has_confirmed_offers(sb, flyer_id)
-    )
-
-    if not is_public_done:
-        if user_id is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
-        profile_result = (
-            sb.table("user_profiles")
-            .select("*")
-            .eq("id", user_id)
-            .maybe_single()
-            .execute()
-        )
-        if not profile_result or not profile_result.data:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-        profile = profile_result.data
-        profile["managed_supermarket_ids"] = _profile_supermarket_ids(profile) or [
-            row["supermarket_id"]
-            for row in (
-                sb.table("manager_supermarkets")
-                .select("supermarket_id")
-                .eq("user_id", user_id)
-                .execute()
-                .data
-                or []
-            )
-            if row.get("supermarket_id")
-        ]
-        if profile.get("role") not in {"admin", "supermarket_manager"}:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-        _assert_flyer_access(sb, profile, flyer)
-
-    prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/flyers/"
-    file_url = flyer.get("file_url", "")
-    storage_path = file_url.removeprefix(prefix)
-    if not storage_path or storage_path == file_url:
+    _assert_flyer_download_access(sb, flyer, user_id)
+    storage_path = _flyer_storage_path(flyer)
+    if storage_path is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Cannot resolve flyer storage path")
 
     signed = sb.storage.from_("flyers").create_signed_url(
@@ -1012,6 +1049,25 @@ async def download_flyer(
         options={"download": flyer.get("file_name") or True},
     )
     return {"download_url": signed["signedURL"]}
+
+
+@router.get("/{flyer_id}/preview")
+async def flyer_preview_url(
+    flyer_id: str,
+    user_id: str | None = Depends(get_optional_user_id),
+) -> dict[str, str]:
+    """Return a signed URL for a compact server-rendered flyer preview."""
+    sb = get_supabase()
+    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+    flyer = result.data
+    _assert_flyer_download_access(sb, flyer, user_id)
+    preview_path = _ensure_flyer_preview(sb, flyer)
+    if preview_path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer preview unavailable")
+    signed = sb.storage.from_("flyers").create_signed_url(preview_path, expires_in=_SIGNED_URL_TTL)
+    return {"preview_url": signed["signedURL"]}
 
 
 @router.post("/upload-url")
@@ -1071,7 +1127,7 @@ async def complete_flyer_upload(
 
     file_hash = hashlib.sha256(content).hexdigest()
     try:
-        return _create_uploaded_flyer(
+        flyer = _create_uploaded_flyer(
             sb,
             user_id=user_id,
             requested_ids=requested_ids,
@@ -1082,6 +1138,15 @@ async def complete_flyer_upload(
             valid_from=payload.valid_from,
             valid_to=payload.valid_to,
         )
+        preview_path = _save_flyer_preview(
+            sb,
+            flyer_id=flyer["id"],
+            content=content,
+            content_type=payload.content_type,
+        )
+        if preview_path is not None:
+            flyer["preview_path"] = preview_path
+        return flyer
     except HTTPException:
         _remove_flyer_object(sb, payload.storage_path)
         raise
@@ -1231,14 +1296,13 @@ async def delete_flyer(
     _source_flyer_required(flyer)
     _assert_flyer_access(sb, profile, flyer)
 
-    file_url = flyer.get("file_url") or ""
-    supabase_prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/flyers/"
-    storage_path = file_url.removeprefix(supabase_prefix)
-    if storage_path and storage_path != file_url:
-        try:
-            sb.storage.from_("flyers").remove([storage_path])
-        except Exception:
-            pass
+    storage_paths = [
+        value
+        for value in (_flyer_storage_path(flyer), flyer.get("preview_path"))
+        if value
+    ]
+    for storage_path in storage_paths:
+        _remove_flyer_object(sb, storage_path)
 
     sb.table("flyers").delete().eq("id", flyer_id).execute()
 
@@ -1653,6 +1717,7 @@ async def confirm_offers(
                         "file_url": flyer.get("file_url"),
                         "file_type": flyer.get("file_type"),
                         "file_name": flyer.get("file_name"),
+                        "preview_path": flyer.get("preview_path"),
                         "valid_from": flyer.get("valid_from"),
                         "valid_to": flyer.get("valid_to"),
                         "status": "done",
