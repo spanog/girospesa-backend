@@ -12,6 +12,16 @@ Il backend FastAPI è l'unica API applicativa. Le chiamate autenticate usano un 
 
 Un'offerta contiene i propri dati, validità, prezzo, formato strutturato e `image_url`. Non esistono endpoint per catalogo prodotti, dettagli prodotto o preferiti prodotto.
 
+## Geocoding
+
+| Metodo | Path | Accesso | Descrizione |
+| --- | --- | --- | --- |
+| `GET` | `/geocoding/addresses?query={query}` | Pubblico | Suggerimenti di indirizzi italiani per i form. |
+| `GET` | `/geocoding/locations?query={query}` | Pubblico | Località selezionabili per la discovery guest. |
+| `GET` | `/geocoding/locations/reverse?lat={lat}&lng={lng}` | Pubblico | Etichetta leggibile di coordinate geografiche. |
+
+I client non contattano il provider di geocoding: il backend ne mantiene configurazione, credenziali e migrazioni.
+
 ## Volantini
 
 | Metodo | Path | Accesso | Descrizione |

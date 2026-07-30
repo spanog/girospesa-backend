@@ -33,6 +33,7 @@
 
 - FastAPI is the only application layer allowed to touch database persistence details.
 - Frontend-facing features must expose backend endpoints instead of coupling UI code to Supabase tables/RPCs directly.
+- Client geocoding must use the public read-only `/geocoding` resources; provider-specific HTTP calls and credentials remain in `services/geocoding.py`.
 - Keep raw SQL, PostgREST, Supabase service-role access, and schema-specific branching inside backend repositories/services, never inside frontend code.
 - No endpoint may trust client-supplied `admin`, `manager`, `role`, or similar flags for privileges or data scope. Authorization must derive from validated server-side auth context.
 - Public contact flows (`/contact-requests`) are mail-first: do not reintroduce app tables or client-side inserts for bug reports, collaboration requests, or missing-flyer requests.
