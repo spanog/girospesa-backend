@@ -49,6 +49,7 @@
 - Local Supabase API exposure stays limited to `public` schema. `pg_graphql` is disabled; do not build or document `/graphql/v1` flows.
 - RLS-only helper functions that need `SECURITY DEFINER` privileges must live in a non-exposed schema such as `private`; do not publish them from `public` or document them as client-callable RPCs.
 - Public Storage buckets (`avatars`, `logos`, `product-images`) rely on signed-less `/storage/v1/object/public/...` URLs only. Do not depend on anonymous bucket listing via `storage.objects` policies.
+- Le anteprime dei volantini pubblici passano da `GET /flyers/{id}/preview`: restituire binario WebP con cache HTTP, mai URL Storage al browser. Conservare gli URL firmati brevi esclusivamente in endpoint separati per workflow admin privati.
 
 ## Deploy / CI conventions
 
