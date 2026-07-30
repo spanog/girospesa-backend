@@ -16,6 +16,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import MagicMock, patch
 
+import fitz
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -33,6 +34,14 @@ app.include_router(flyers_router, prefix="/flyers")
 def _unique_pdf() -> bytes:
     """Minimal PDF bytes with a random suffix to guarantee a unique SHA-256 hash."""
     return b"%PDF-1.4 test-content " + uuid.uuid4().bytes
+
+
+def _renderable_pdf() -> bytes:
+    document = fitz.open()
+    document.new_page(width=1_200, height=1_600).insert_text((72, 72), "Girospesa")
+    content = document.tobytes()
+    document.close()
+    return content
 
 
 def _make_supabase_real_db_mock_storage() -> object:
@@ -203,6 +212,26 @@ class TestFlyerUploadIntegration:
         assert db_row["supermarket_name"] == supermarket["name"]
         assert db_row["user_id"] == app.dependency_overrides[get_current_user_id]()
         assert db_row["file_type"] == "pdf"
+
+    async def test_pdf_upload_persists_server_generated_preview(self, supabase_client, clean_db, supermarket):
+        sb = _make_supabase_real_db_mock_storage()
+        sb.storage.from_.return_value.download.return_value = _renderable_pdf()
+        user_id = app.dependency_overrides[get_current_user_id]()
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            with patch("api.routers.flyers.get_supabase", return_value=sb):
+                response = await self._complete_upload(
+                    client,
+                    supermarket_id=supermarket["id"],
+                    storage_path=f"{user_id}/preview.pdf",
+                )
+
+        assert response.status_code == 201
+        preview_path = response.json()["preview_path"]
+        assert preview_path == f"previews/{response.json()['id']}.webp"
+        rows = supabase_client.table("flyers").select("preview_path").eq("id", response.json()["id"]).execute()
+        assert rows.data[0]["preview_path"] == preview_path
+        sb.storage.from_.return_value.upload.assert_called_once()
 
     async def test_image_upload_creates_pending_row(self, supabase_client, clean_db, supermarket):
         """Uploading a JPEG image creates a row with file_type='image'."""

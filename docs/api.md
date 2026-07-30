@@ -21,6 +21,7 @@ Un'offerta contiene i propri dati, validità, prezzo, formato strutturato e `ima
 | `GET` | `/supermarkets/admin` | Admin | Tutte le sedi attive, senza filtro di distanza; usato esclusivamente dalla gestione supermercati. |
 | `GET` | `/flyers` | Admin/manager | Elenco volantini in gestione. |
 | `GET` | `/flyers/{flyer_id}` | Admin/manager | Dettaglio e stato di estrazione. |
+| `GET` | `/flyers/{flyer_id}/preview` | Stesso accesso del download | Restituisce URL firmato breve della thumbnail WebP; per file storici la genera e persiste alla prima richiesta. |
 | `POST` | `/flyers/upload-url` | Admin/manager | Crea upload firmato per il bucket privato `flyers`. |
 | `POST` | `/flyers/upload/complete` | Admin/manager | Valida il file e crea il volantino `pending`. |
 | `POST` | `/flyers/{flyer_id}/extract` | Admin/manager | Avvia o riprende l'estrazione AI. |

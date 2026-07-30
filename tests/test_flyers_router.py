@@ -100,6 +100,7 @@ import pytest
 
 import api.routers.flyers as _flyers_module
 from api.routers.flyers import router
+from tests.snapshot_utils import assert_matches_json_snapshot
 
 _DEP_GET_USER_ID = _flyers_module.get_current_user_id
 _DEP_PROFILE = _flyers_module.require_admin_or_manager
@@ -311,6 +312,55 @@ class TestUploadFlyerValidation:
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post_upload({_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE})
         assert resp.status_code == 413
+
+
+class TestFlyerPreview:
+    @pytest.mark.asyncio
+    async def test_public_flyer_preview_returns_signed_thumbnail_url(self, request):
+        sb = MagicMock()
+        sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+            data={
+                "id": "flyer-1",
+                "is_public": True,
+                "status": "done",
+                "preview_path": "previews/flyer-1.webp",
+            }
+        )
+        sb.storage.from_.return_value.create_signed_url.return_value = {
+            "signedURL": "https://storage.example.com/preview.webp"
+        }
+
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._has_confirmed_offers", return_value=True),
+        ):
+            resp = await _get("/flyers/flyer-1/preview")
+
+        assert resp.status_code == 200
+        assert_matches_json_snapshot(request, "flyer_preview_response", resp.json())
+        sb.storage.from_.return_value.download.assert_not_called()
+
+    def test_missing_preview_is_generated_and_persisted(self):
+        sb = MagicMock()
+        flyer = {
+            "id": "flyer-1",
+            "file_url": "https://supabase.test/storage/v1/object/public/flyers/user/flyer.pdf",
+            "file_type": "pdf",
+            "preview_path": None,
+        }
+        sb.storage.from_.return_value.download.return_value = b"pdf"
+
+        with patch("api.routers.flyers.settings.supabase_url", "https://supabase.test"), patch(
+            "api.routers.flyers.render_flyer_preview", return_value=b"webp"
+        ):
+            preview_path = _flyers_module._ensure_flyer_preview(sb, flyer)
+
+        assert preview_path == "previews/flyer-1.webp"
+        sb.storage.from_.return_value.upload.assert_called_once_with(
+            path="previews/flyer-1.webp",
+            file=b"webp",
+            file_options={"content-type": "image/webp", "upsert": "true"},
+        )
 
 
 class TestUploadFlyerDuplicate:
