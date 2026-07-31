@@ -40,12 +40,14 @@ def _location_from_claims(claims: dict[str, Any]) -> tuple[float, float, float] 
     return float(lat), float(lng), float(radius)
 
 
-def cookie_secure() -> bool:
+def cookie_secure(origin: str | None = None) -> bool:
+    if origin:
+        return origin.startswith("https://")
     return settings.environment.lower() not in {"development", "test"}
 
 
-def cookie_samesite() -> str:
-    return "none" if cookie_secure() else "lax"
+def cookie_samesite(origin: str | None = None) -> str:
+    return "none" if cookie_secure(origin) else "lax"
 
 
 def guest_location_required(clear_cookie: bool) -> HTTPException:

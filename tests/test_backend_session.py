@@ -8,7 +8,9 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from fastapi import FastAPI
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -23,6 +25,11 @@ for _sess_key in [k for k in list(sys.modules) if k.startswith("core.session")]:
 import core.session as session
 import core.guest_location as guest_location
 from core.guest_location import GUEST_LOCATION_RADIUS_KM, create_guest_location_token, read_guest_location
+from api.routers.guest_location import router as guest_location_router
+
+
+guest_location_app = FastAPI()
+guest_location_app.include_router(guest_location_router, prefix="/guest-location")
 
 
 @pytest.fixture(autouse=True)
@@ -97,6 +104,31 @@ def test_guest_location_cookie_uses_none_with_https(monkeypatch: pytest.MonkeyPa
 
     assert guest_location.cookie_secure() is True
     assert guest_location.cookie_samesite() == "none"
+
+
+def test_guest_location_cookie_uses_none_for_https_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(guest_location.settings, "environment", "development")
+
+    assert guest_location.cookie_secure("https://app.girospesa.local") is True
+    assert guest_location.cookie_samesite("https://app.girospesa.local") == "none"
+
+
+@pytest.mark.asyncio
+async def test_guest_location_endpoint_sets_cross_site_cookie_for_capacitor() -> None:
+    transport = httpx.ASGITransport(app=guest_location_app)
+    async with httpx.AsyncClient(transport=transport, base_url="https://api.test") as client:
+        response = await client.post(
+            "/guest-location",
+            headers={"Origin": "https://app.girospesa.local"},
+            json={"lat": 38.4, "lng": 16.1},
+        )
+
+    cookie = response.headers["set-cookie"]
+    assert response.status_code == 204
+    assert "SameSite=none" in cookie
+    assert "Secure" in cookie
 
 
 def test_session_settings_only_require_session_env(monkeypatch: pytest.MonkeyPatch) -> None:

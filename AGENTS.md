@@ -16,6 +16,7 @@
 - Snapshot tests support, not replace, explicit assertions on permissions, ordering, lifecycle transitions, and domain invariants.
 - `GET /offers` deve applicare `lat`, `lng` e `max_distance_km` al filtro dei supermercati prima di paginare le offerte.
 - `append_list_item` deve incrementare atomically una riga attiva con lo stesso `pinned_offer_id`, senza unire righe già acquistate.
+- Cookie località guest: richieste da origin HTTPS Capacitor devono ricevere `SameSite=None; Secure`; mantenere test endpoint per questo contratto cross-site.
 
 ## Commands
 
