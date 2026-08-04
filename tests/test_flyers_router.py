@@ -1237,3 +1237,82 @@ def test_public_flyer_expiry_sort_key_prioritizes_nearest_expiry():
         "later",
         "undated",
     ]
+
+
+def test_published_offer_clone_keeps_packshot_localization():
+    source_offer = {
+        "id": "source-offer-1",
+        "name": "Latte",
+        "packshot_source_page": 2,
+        "packshot_bbox": [100, 200, 500, 600],
+    }
+
+    clone = _flyers_module._clone_offer_fields(
+        source_offer,
+        flyer_id="published-flyer-1",
+        supermarket_id="supermarket-1",
+        supermarket_name="Coop",
+    )
+
+    assert clone["packshot_source_page"] == 2
+    assert clone["packshot_bbox"] == [100, 200, 500, 600]
+
+
+@pytest.mark.asyncio
+async def test_interactive_offers_excludes_invalid_localizations_and_drafts():
+    sb = MagicMock()
+    flyer = {
+        "id": "flyer-1",
+        "status": "done",
+        "is_public": True,
+        "valid_from": "2026-08-01",
+        "valid_to": "2026-08-10",
+    }
+    flyer_query = MagicMock()
+    offers_query = MagicMock()
+    sb.table.side_effect = lambda table: {
+        "flyers": flyer_query,
+        "offers": offers_query,
+    }[table]
+    flyer_query.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=flyer)
+    active_offers_query = MagicMock()
+    active_offers_query.execute.return_value = MagicMock(data=[
+        {
+            "id": "offer-valid",
+            "name": "Latte",
+            "brand": "Coop",
+            "image_url": None,
+            "price_offer": 1.99,
+            "format_label": "1 L",
+            "packshot_source_page": 1,
+            "packshot_bbox": [100, 200, 500, 600],
+        },
+        {
+            "id": "offer-invalid",
+            "name": "Pane",
+            "packshot_source_page": 1,
+            "packshot_bbox": [600, 200, 500, 600],
+        },
+    ])
+
+    with (
+        patch("api.routers.flyers.get_supabase", return_value=sb),
+        patch("api.routers.flyers._is_public_flyer_file", return_value=True),
+        patch("api.routers.flyers.apply_current_offer_window", return_value=active_offers_query),
+    ):
+        response = await _flyers_module.list_interactive_offers("flyer-1")
+
+    assert response == {
+        "items": [
+            {
+                "id": "offer-valid",
+                "name": "Latte",
+                "brand": "Coop",
+                "image_url": None,
+                "price_offer": 1.99,
+                "format_label": "1 L",
+                "source_page": 1,
+                "packshot_bbox": [100.0, 200.0, 500.0, 600.0],
+            }
+        ]
+    }

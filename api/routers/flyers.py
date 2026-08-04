@@ -31,6 +31,7 @@ from services.notification_jobs import (
 )
 from services.product_format import ProductFormat, build_format_bundle
 from services.flyer_preview import render_flyer_preview
+from services.offer_visibility import apply_current_offer_window
 from api.routers._offer_utils import (
     _OFFER_PRODUCT_SELECT,
     _flatten_draft_offer,
@@ -355,6 +356,8 @@ def _clone_offer_fields(
         "subcategory": source_offer.get("subcategory"),
         "offer_key": source_offer.get("offer_key"),
         "image_url": source_offer.get("image_url"),
+        "packshot_source_page": source_offer.get("packshot_source_page"),
+        "packshot_bbox": source_offer.get("packshot_bbox"),
         "flyer_id": flyer_id,
         "supermarket_id": supermarket_id,
         "supermarket_name": supermarket_name,
@@ -1065,6 +1068,57 @@ async def backfill_flyer_previews(
 def _public_flyer_representation(flyer: dict) -> dict:
     """Remove storage internals from the public flyer representation."""
     return {key: value for key, value in flyer.items() if key != "file_url"}
+
+
+def _interactive_packshot_bbox(value: object) -> list[float] | None:
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    if not all(isinstance(coordinate, (int, float)) for coordinate in value):
+        return None
+    y_min, x_min, y_max, x_max = [float(coordinate) for coordinate in value]
+    if not (0 <= y_min < y_max <= 1000 and 0 <= x_min < x_max <= 1000):
+        return None
+    return [y_min, x_min, y_max, x_max]
+
+
+@router.get("/{flyer_id}/interactive-offers")
+async def list_interactive_offers(flyer_id: str) -> dict[str, list[dict]]:
+    """Return public, active offers with a valid image localization for a flyer."""
+    sb = get_supabase()
+    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    flyer = result.data if result else None
+    today = datetime.now(timezone.utc).date()
+    if not flyer or not _is_public_flyer_file(sb, flyer) or not _is_flyer_current(flyer, today):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+
+    query = (
+        sb.table("offers")
+        .select(
+            "id, name, brand, image_url, flyer_id, price_offer, format_label, "
+            "packshot_source_page, packshot_bbox"
+        )
+        .eq("flyer_id", flyer_id)
+        .eq("offer_kind", OFFER_KIND_PUBLISHED_TARGET)
+        .eq("is_confirmed", True)
+    )
+    rows = apply_current_offer_window(query).execute().data or []
+    items: list[dict] = []
+    for row in rows:
+        bbox = _interactive_packshot_bbox(row.get("packshot_bbox"))
+        page = row.get("packshot_source_page")
+        if bbox is None or not isinstance(page, int) or page < 1:
+            continue
+        items.append({
+            "id": row["id"],
+            "name": row.get("name") or "",
+            "brand": row.get("brand"),
+            "image_url": row.get("image_url"),
+            "price_offer": row.get("price_offer"),
+            "format_label": row.get("format_label") or "",
+            "source_page": page,
+            "packshot_bbox": bbox,
+        })
+    return {"items": items}
 
 
 _SIGNED_URL_TTL = 60  # seconds
