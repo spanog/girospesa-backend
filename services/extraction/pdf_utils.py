@@ -42,6 +42,16 @@ def split_pdf_into_chunks(pdf_bytes: bytes, chunk_size: int) -> list[PdfChunk]:
     return list(iter_pdf_chunks(pdf_bytes, chunk_size))
 
 
+def pdf_page_chunk(pdf_bytes: bytes, page_number: int) -> PdfChunk:
+    """Return one page as a standalone PDF chunk, preserving its source index."""
+    if page_number < 1:
+        raise ValueError("page_number must be >= 1")
+    for chunk in iter_pdf_chunks(pdf_bytes, chunk_size=1):
+        if chunk.start_page == page_number:
+            return chunk
+    raise ValueError(f"page_number {page_number} exceeds PDF length")
+
+
 def iter_pdf_chunks(pdf_bytes: bytes, chunk_size: int) -> Iterator[PdfChunk]:
     """Yield PDF chunks one at a time, keeping one generated chunk in memory."""
     if chunk_size < 1:

@@ -8,9 +8,10 @@ import multiprocessing
 import random
 import re
 import time
+from collections import Counter
 from typing import Callable
 
-from services.extraction.pdf_utils import PdfChunk, count_pdf_pages, iter_pdf_chunks
+from services.extraction.pdf_utils import PdfChunk, count_pdf_pages, iter_pdf_chunks, pdf_page_chunk
 from services.extraction.providers.base import PdfChunkExtractionError
 from services.extraction.providers.prompts import EXTRACTION_PROMPT
 
@@ -23,11 +24,19 @@ TRANSIENT_ERROR_BACKOFF_S = 10
 SERVER_OVERLOAD_BACKOFF_S = 20
 RETRY_JITTER_RATIO = 0.25
 PDF_CHUNK_SIZE_PAGES = 2
+LOW_COVERAGE_MAX_PRODUCTS = 1
+LOW_COVERAGE_MIN_SIBLING_PRODUCTS = 4
 GEMINI_REQUEST_TIMEOUT_MS = 8 * 60 * 1000
 GEMINI_REQUEST_TIMEOUT_S = GEMINI_REQUEST_TIMEOUT_MS / 1000
 _RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)s'")
 _UNAVAILABLE_RE = re.compile(r"503|UNAVAILABLE", re.IGNORECASE)
 _TRANSIENT_SERVER_ERROR_RE = re.compile(r"500|502|504|INTERNAL|BAD_GATEWAY|GATEWAY_TIMEOUT", re.IGNORECASE)
+LOW_COVERAGE_RETRY_PROMPT = (
+    "\n\nControllo qualità: questo PDF contiene una sola pagina. "
+    "Rileva in modo esaustivo ogni singola offerta acquistabile visibile, "
+    "anche quando più prodotti sono disposti nella stessa griglia. "
+    "Non omettere prodotti per raggrupparli o perché appartengono alla stessa categoria."
+)
 
 
 class GeminiRequestTimeoutError(TimeoutError):
@@ -318,6 +327,16 @@ class GeminiProvider:
                 chunk_index=chunk_index,
                 chunks_total=chunks_total,
             )
+            chunk_products, recovery_errors = self._recover_sparse_pages(
+                client=client,
+                gtypes=gtypes,
+                pdf_bytes=pdf_bytes,
+                chunk=chunk,
+                chunk_index=chunk_index,
+                chunks_total=chunks_total,
+                products=chunk_products,
+            )
+            chunk_errors.extend(recovery_errors)
             retry_errors.extend(chunk_errors)
             if chunk_errors and not chunk_products:
                 raise PdfChunkExtractionError(
@@ -361,6 +380,7 @@ class GeminiProvider:
         chunk: PdfChunk,
         chunk_index: int,
         chunks_total: int,
+        prompt: str = EXTRACTION_PROMPT,
     ) -> tuple[list[dict], list[str]]:
         retry_errors: list[str] = []
         label = (
@@ -374,7 +394,7 @@ class GeminiProvider:
                     gtypes=gtypes,
                     payload_bytes=chunk.pdf_bytes,
                     mime_type="application/pdf",
-                    prompt=EXTRACTION_PROMPT,
+                    prompt=prompt,
                 )
             except Exception as exc:
                 msg = (
@@ -392,6 +412,54 @@ class GeminiProvider:
             products = [p for p in data.get("products", []) if isinstance(p, dict)]
             return self._absolute_chunk_pages(products, chunk), retry_errors
         return [], retry_errors
+
+    def _recover_sparse_pages(
+        self,
+        *,
+        client: object,
+        gtypes: object,
+        pdf_bytes: bytes,
+        chunk: PdfChunk,
+        chunk_index: int,
+        chunks_total: int,
+        products: list[dict],
+    ) -> tuple[list[dict], list[str]]:
+        retry_errors: list[str] = []
+        for page in self._sparse_pages(products, chunk):
+            recovered, errors = self._extract_pdf_chunk(
+                client=client,
+                gtypes=gtypes,
+                chunk=pdf_page_chunk(pdf_bytes, page),
+                chunk_index=chunk_index,
+                chunks_total=chunks_total,
+                prompt=f"{EXTRACTION_PROMPT}{LOW_COVERAGE_RETRY_PROMPT}",
+            )
+            retry_errors.extend(errors)
+            products = self._replace_page_if_more_complete(products, page, recovered)
+        return products, retry_errors
+
+    def _sparse_pages(self, products: list[dict], chunk: PdfChunk) -> list[int]:
+        if chunk.start_page == chunk.end_page:
+            return []
+        counts = Counter(product.get("source_page") for product in products)
+        maximum = max(counts.values(), default=0)
+        if maximum < LOW_COVERAGE_MIN_SIBLING_PRODUCTS:
+            return []
+        return [
+            page for page in range(chunk.start_page, chunk.end_page + 1)
+            if counts[page] <= LOW_COVERAGE_MAX_PRODUCTS
+        ]
+
+    def _replace_page_if_more_complete(
+        self, products: list[dict], page: int, recovered: list[dict]
+    ) -> list[dict]:
+        previous = [product for product in products if product.get("source_page") == page]
+        if len(recovered) <= len(previous):
+            logger.warning("Low-coverage retry kept page %d (%d products)", page, len(previous))
+            return products
+        logger.info("Low-coverage retry recovered page %d (%d → %d products)", page, len(previous), len(recovered))
+        retained = [product for product in products if product.get("source_page") != page]
+        return retained + recovered
 
     def _absolute_chunk_pages(self, products: list[dict], chunk: PdfChunk) -> list[dict]:
         normalized: list[dict] = []

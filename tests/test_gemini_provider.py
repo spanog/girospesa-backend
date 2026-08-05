@@ -283,6 +283,45 @@ def test_extract_products_can_resume_from_specific_pdf_chunk() -> None:
     ]
 
 
+def test_extract_products_retries_a_sparse_pdf_page_in_isolation() -> None:
+    initial_products = [
+        {"name": f"Pagina uno {index}", "price_current": 1.0, "source_page": 1}
+        for index in range(6)
+    ] + [{"name": "Pagina due incompleta", "price_current": 1.0, "source_page": 2}]
+    recovered_products = [
+        {"name": f"Pagina due {index}", "price_current": 1.0, "source_page": 1}
+        for index in range(4)
+    ]
+    fake_client = _FakeClient(
+        responses=[
+            json.dumps({"products": initial_products}),
+            json.dumps({"products": recovered_products}),
+        ]
+    )
+    _install_google_stub(fake_client)
+
+    from services.extraction.pdf_utils import PdfChunk
+    from services.extraction.providers.gemini import GeminiProvider
+
+    chunks = [PdfChunk(start_page=1, end_page=2, pdf_bytes=b"chunk-1-2")]
+    with (
+        patch("services.extraction.providers.gemini.count_pdf_pages", return_value=2),
+        patch("services.extraction.providers.gemini.iter_pdf_chunks", return_value=iter(chunks)),
+        patch(
+            "services.extraction.providers.gemini.pdf_page_chunk",
+            return_value=PdfChunk(start_page=2, end_page=2, pdf_bytes=b"page-2"),
+        ),
+    ):
+        provider = GeminiProvider(api_key="test-key", request_executor=_direct_request_executor)
+        products, retry_errors = provider.extract_products(b"%PDF-fake", "application/pdf")
+
+    assert retry_errors == []
+    assert [product["source_page"] for product in products].count(1) == 6
+    assert [product["source_page"] for product in products].count(2) == 4
+    assert b"page-2" == fake_client.models.calls[1]["contents"][0]["data"]
+    assert "Controllo qualit" in fake_client.models.calls[1]["contents"][1]["text"]
+
+
 def test_extract_products_keeps_single_request_for_non_pdf_images() -> None:
     fake_client = _FakeClient(
         responses=[json.dumps({"products": [{"name": "Latte", "price_current": 1.49}]})]

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import fitz
 
-from services.extraction.pdf_utils import count_pdf_pages, iter_pdf_chunks, split_pdf_into_chunks
+from services.extraction.pdf_utils import (
+    count_pdf_pages,
+    iter_pdf_chunks,
+    pdf_page_chunk,
+    split_pdf_into_chunks,
+)
 
 
 def _make_pdf_bytes(pages: int) -> bytes:
@@ -36,3 +41,12 @@ def test_iter_pdf_chunks_yields_fixed_groups_without_materializing_list() -> Non
 
     assert (first.start_page, first.end_page) == (1, 3)
     assert (second.start_page, second.end_page) == (4, 4)
+
+
+def test_pdf_page_chunk_returns_the_requested_single_page() -> None:
+    pdf_bytes = _make_pdf_bytes(4)
+
+    chunk = pdf_page_chunk(pdf_bytes, 3)
+
+    assert (chunk.start_page, chunk.end_page) == (3, 3)
+    assert count_pdf_pages(chunk.pdf_bytes) == 1
