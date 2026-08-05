@@ -34,7 +34,6 @@ I client non contattano il provider di geocoding: il backend ne mantiene configu
 | `GET` | `/flyers/{flyer_id}/file` | Pubblico se volantino pubblico e confermato; altrimenti admin/manager | Restituisce la rappresentazione binaria del volantino con disposition `inline`; il client non riceve URL Supabase. |
 | `GET` | `/flyers/{flyer_id}/preview` | Stesso accesso del download | Restituisce la thumbnail WebP tramite backend; le preview pubbliche sono cacheabili, senza URL Supabase esposto. Per file storici la genera e persiste alla prima richiesta. |
 | `GET` | `/flyers/{flyer_id}/preview-url` | Stesso accesso del download | Restituisce URL firmato breve della thumbnail WebP per workflow amministrativi privati. |
-| `POST` | `/flyers/preview-backfill` | Solo admin | Genera e persiste le preview mancanti dei volantini storici elaborati. |
 | `POST` | `/flyers/upload-url` | Admin/manager | Crea upload firmato per il bucket privato `flyers`. |
 | `POST` | `/flyers/upload/complete` | Admin/manager | Valida il file e crea il volantino `pending`. |
 | `POST` | `/flyers/{flyer_id}/extract` | Admin/manager | Avvia o riprende l'estrazione AI. |

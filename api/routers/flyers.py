@@ -17,7 +17,6 @@ from core.auth import (
     get_current_user_id,
     get_optional_user_id,
     managed_supermarket_ids,
-    require_admin,
     require_admin_or_manager,
 )
 from api.routers._nearby_supermarkets import nearby_supermarket_distances, request_location
@@ -1039,30 +1038,6 @@ async def list_public_flyers(
         )
     )
     return visible_flyers
-
-
-@router.post("/preview-backfill")
-async def backfill_flyer_previews(
-    profile: dict = Depends(require_admin),
-) -> dict[str, int]:
-    """Generate persisted previews missing from historical flyer records."""
-    del profile
-    sb = get_supabase()
-    result = (
-        sb.table("flyers")
-        .select("*")
-        .eq("status", "done")
-        .is_("preview_path", "null")
-        .execute()
-    )
-    generated = 0
-    unavailable = 0
-    for flyer in result.data or []:
-        if _ensure_flyer_preview(sb, flyer) is None:
-            unavailable += 1
-        else:
-            generated += 1
-    return {"generated": generated, "unavailable": unavailable}
 
 
 def _public_flyer_representation(flyer: dict) -> dict:
