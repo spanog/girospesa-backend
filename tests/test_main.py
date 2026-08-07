@@ -27,6 +27,7 @@ def _import_main(monkeypatch):
         "contact_requests",
         "favorites",
         "flyers",
+        "geocoding",
         "guest_location",
         "invite",
         "lists",
@@ -121,7 +122,7 @@ def test_dev_allow_origins_include_loopback_variants(monkeypatch):
             environment="development",
             frontend_url="http://127.0.0.1:3000",
             cors_extra_origins=(
-                "https://app.girospesa.local, capacitor://app.girospesa.local"
+                "https://girospesa.localhost, https://app.girospesa.local, capacitor://app.girospesa.local"
             ),
         ),
     )
@@ -130,6 +131,7 @@ def test_dev_allow_origins_include_loopback_variants(monkeypatch):
 
     assert "http://localhost:3000" in origins
     assert "http://127.0.0.1:3000" in origins
+    assert "https://girospesa.localhost" in origins
     assert "https://app.girospesa.local" in origins
     assert "capacitor://app.girospesa.local" in origins
 
@@ -143,13 +145,14 @@ def test_production_allow_origins_include_frontend_and_capacitor(monkeypatch):
             environment="production",
             frontend_url="https://app.girospesa.it",
             cors_extra_origins=(
-                "https://app.girospesa.local, capacitor://app.girospesa.local"
+                "https://girospesa.localhost, https://app.girospesa.local, capacitor://app.girospesa.local"
             ),
         ),
     )
 
     assert main._allow_origins() == [
         "https://app.girospesa.it",
+        "https://girospesa.localhost",
         "https://app.girospesa.local",
         "capacitor://app.girospesa.local",
     ]

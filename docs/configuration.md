@@ -9,6 +9,8 @@ SUPABASE_SECRET_KEY=<local-secret-key>
 FRONTEND_URL=http://localhost:3000
 # `127.0.0.1:3000` resta supportato in sviluppo per compatibilita' loopback
 CORS_EXTRA_ORIGINS=
+# Production mobile origins: https://girospesa.localhost,https://app.girospesa.local,capacitor://app.girospesa.local
+# Keep exact origins only; never use a wildcard or http://localhost in production.
 
 # ── Gemini extraction (solo se usi estrazione AI) ---------------------------
 LLM_PROVIDER=gemini
