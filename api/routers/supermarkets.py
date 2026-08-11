@@ -77,6 +77,26 @@ def _supermarkets_with_active_offers(sb, ids: list[str] | None = None) -> list[d
     return [{key: value for key, value in row.items() if key != "offers"} for row in rows]
 
 
+def _is_admin(sb, user_id: str | None) -> bool:
+    if user_id is None:
+        return False
+    profile = (
+        sb.table("user_profiles")
+        .select("role")
+        .eq("id", user_id)
+        .maybe_single()
+        .execute()
+        .data
+        or {}
+    )
+    return profile.get("role") == "admin"
+
+
+def _all_active_supermarkets(sb) -> list[dict]:
+    response = sb.table("supermarkets").select("*").eq("is_active", True).order("name").execute()
+    return response.data or []
+
+
 @router.get("")
 async def list_supermarkets(
     with_active_offers: bool = Query(False),
@@ -84,8 +104,10 @@ async def list_supermarkets(
     request: Request = None,
     user_id: str | None = Depends(get_optional_user_id),
 ) -> list[dict]:
-    """Return active supermarkets, optionally limited to current offers."""
+    """Return active supermarkets; admins receive every active branch."""
     sb = get_supabase()
+    if _is_admin(sb, user_id):
+        return _all_active_supermarkets(sb)
     guest_token = request.cookies.get(GUEST_LOCATION_COOKIE) if user_id is None else None
     guest_location = read_guest_location(guest_token)
     if user_id is None and guest_location is None:
@@ -118,24 +140,7 @@ async def list_supermarkets(
 
     if with_active_offers:
         return _supermarkets_with_active_offers(sb)
-    resp = sb.table("supermarkets").select("*").eq("is_active", True).order("name").execute()
-    return resp.data
-
-
-@router.get("/admin")
-async def list_admin_supermarkets(
-    _admin: Annotated[dict, Depends(require_admin)],
-) -> list[dict]:
-    """Return every active branch for the admin directory, without distance filters."""
-    response = (
-        get_supabase()
-        .table("supermarkets")
-        .select("*")
-        .eq("is_active", True)
-        .order("name")
-        .execute()
-    )
-    return response.data or []
+    return _all_active_supermarkets(sb)
 
 
 def _upload_logo(sb, sm_id: str, logo_content: bytes, content_type: str) -> str:

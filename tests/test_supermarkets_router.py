@@ -116,6 +116,15 @@ async def _patch_logo_denied(url: str) -> httpx.Response:
 # GET tests
 # ---------------------------------------------------------------------------
 
+def test_admin_role_is_resolved_from_the_authenticated_users_profile():
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+        data={"role": "admin"}
+    )
+
+    assert _sm_module._is_admin(sb, "admin-1") is True
+
+
 @pytest.mark.asyncio
 async def test_legacy_location_parameters_do_not_filter_guest_supermarkets():
     sb = MagicMock()
@@ -201,7 +210,7 @@ async def test_legacy_location_parameters_cannot_include_deep_link_supermarket()
 
 
 @pytest.mark.asyncio
-async def test_admin_directory_ignores_authenticated_profile_distance():
+async def test_admin_supermarkets_ignore_authenticated_profile_distance():
     sb = MagicMock()
     query = MagicMock()
     query.select.return_value = query
@@ -214,13 +223,19 @@ async def test_admin_directory_ignores_authenticated_profile_distance():
         ]
     )
     sb.table.return_value = query
-    test_app.dependency_overrides = {_DEP_REQUIRE_ADMIN: _admin_dep}
 
-    with patch("api.routers.supermarkets.get_supabase", return_value=sb):
-        resp = await _get("/supermarkets/admin")
+    with (
+        patch("api.routers.supermarkets.get_supabase", return_value=sb),
+        patch("api.routers.supermarkets._is_admin", return_value=True),
+    ):
+        result = await _sm_module.list_supermarkets(
+            with_active_offers=False,
+            include_ids=[],
+            user_id="admin-1",
+            request=MagicMock(),
+        )
 
-    assert resp.status_code == 200
-    assert [row["id"] for row in resp.json()] == ["sm-near", "sm-far"]
+    assert [row["id"] for row in result] == ["sm-near", "sm-far"]
     sb.rpc.assert_not_called()
 
 
