@@ -44,6 +44,10 @@ Il tag annotato `v.0.1-product-catalog` conserva l'architettura precedente basat
 
 Guida completa: [docs/local-development.md](docs/local-development.md).
 
+## Template email Auth
+
+I template di conferma account e recupero password sono in `supabase/templates/`. Usano il logo raster pubblico ufficiale per compatibilità con i client email. In Supabase hosted vanno pubblicati manualmente da **Authentication → Emails → Templates** dopo ogni modifica; `config.toml` applica questi file soltanto allo stack locale.
+
 ## Documentation
 
 | Tema | File |

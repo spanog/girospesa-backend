@@ -1246,7 +1246,7 @@ async def test_interactive_offers_excludes_invalid_localizations_and_drafts():
         "status": "done",
         "is_public": True,
         "valid_from": "2026-08-01",
-        "valid_to": "2026-08-10",
+        "valid_to": "2099-08-10",
     }
     flyer_query = MagicMock()
     offers_query = MagicMock()
