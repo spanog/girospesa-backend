@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 
@@ -60,5 +61,5 @@ async def trigger_notification_jobs(
     x_ops_secret: str | None = Header(default=None),
 ) -> dict[str, int | str]:
     _require_ops_secret(x_ops_secret)
-    result = NotificationJobWorker().run_pending()
+    result = await asyncio.to_thread(NotificationJobWorker().run_pending)
     return {"status": "ok", **result}

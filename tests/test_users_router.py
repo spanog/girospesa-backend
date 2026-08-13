@@ -65,15 +65,9 @@ class TestUpdateProfileBody:
         dumped = body.model_dump(exclude_none=True)
         assert dumped == {"display_name": "Mario Rossi"}
 
-    def test_preferred_supermarkets_list(self):
-        body = UpdateProfileBody(preferred_supermarkets=["esselunga", "coop", "lidl"])
-        dumped = body.model_dump(exclude_none=True)
-        assert dumped["preferred_supermarkets"] == ["esselunga", "coop", "lidl"]
-
-    def test_preferred_supermarkets_empty_list(self):
-        body = UpdateProfileBody(preferred_supermarkets=[])
-        dumped = body.model_dump(exclude_none=True)
-        assert dumped["preferred_supermarkets"] == []
+    def test_preferred_supermarkets_are_rejected(self):
+        with pytest.raises(ValidationError):
+            UpdateProfileBody(preferred_supermarkets=["coop"])
 
     def test_search_custom_point(self):
         body = UpdateProfileBody(search_label="Ufficio", search_lat=45.4654, search_lng=9.1859)

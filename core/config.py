@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     fcm_private_key: str = ""
 
     ops_cron_secret: str = ""
+    notification_delivery_workers: int = Field(default=8, ge=1, le=16)
 
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"

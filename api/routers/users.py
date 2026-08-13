@@ -5,7 +5,7 @@ import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.auth import get_current_user_id
 from core.config import settings
@@ -22,6 +22,8 @@ _AVATAR_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 class UpdateProfileBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     display_name: str | None = None
     home_address: str | None = None
     home_city: str | None = None
@@ -29,7 +31,6 @@ class UpdateProfileBody(BaseModel):
     home_postal_code: str | None = None
     max_distance_km: int | None = Field(default=None, ge=1, le=20)
     notifications_enabled: bool | None = None
-    preferred_supermarkets: list[str] | None = None
     search_label: str | None = None
     search_lat: float | None = None
     search_lng: float | None = None

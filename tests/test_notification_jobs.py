@@ -2,83 +2,83 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from services.notification_jobs import (
-    NotificationJobWorker,
-    enqueue_flyer_published,
-)
+from services.notification_jobs import NotificationJobWorker, enqueue_flyer_published
 
 
-def test_enqueue_flyer_published_is_idempotent_by_flyer():
+def test_enqueue_flyer_published_preserves_completed_jobs():
     sb = MagicMock()
-
     enqueue_flyer_published(
-        sb,
-        flyer_id="flyer-1",
-        supermarket_id="sup-1",
-        supermarket_name="Conad",
-        products_count=12,
+        sb, flyer_id="flyer-1", supermarket_id="sup-1", supermarket_name="Conad", products_count=12,
     )
-
     row = sb.table.return_value.upsert.call_args.args[0]
-    assert row["kind"] == "flyer_published"
     assert row["idempotency_key"] == "flyer-published:flyer-1"
-    assert row["payload"]["supermarket_name"] == "Conad"
     sb.table.return_value.upsert.assert_called_once_with(
-        row,
-        on_conflict="idempotency_key",
+        row, on_conflict="idempotency_key", ignore_duplicates=True,
     )
 
 
-def test_worker_processes_flyer_published_job_from_queue():
+def test_parent_materializes_one_idempotent_job_per_recipient():
     sb = MagicMock()
-    jobs_table = MagicMock()
-    payload = {
-        "flyer_id": "flyer-1",
-        "supermarket_id": "sup-1",
-        "supermarket_name": "Conad",
-        "products_count": 3,
-    }
-    jobs_table.select.return_value.in_.return_value.lte.return_value.order.return_value.limit.return_value.execute.return_value.data = [
-        _job("flyer_published", payload)
-    ]
-    sb.table.return_value = jobs_table
+    payload = _payload()
+    sb.rpc.return_value.execute.return_value.data = [{"user_id": "user-1"}, {"user_id": "user-2"}]
+
+    NotificationJobWorker(sb)._materialize_recipients(sb, payload)
+
+    assert sb.rpc.call_args.args[0] == "flyer_notification_recipients"
+    keys = [call.args[0]["idempotency_key"] for call in sb.table.return_value.upsert.call_args_list]
+    assert keys == ["flyer-published:flyer-1:user-1", "flyer-published:flyer-1:user-2"]
+
+
+def test_recipient_jobs_use_independent_clients_and_run_in_parallel():
+    sb = MagicMock()
+    clients = [MagicMock(), MagicMock()]
+    issued_clients: list[MagicMock] = []
+
+    def client_factory() -> MagicMock:
+        client = clients.pop()
+        issued_clients.append(client)
+        return client
+
+    worker = NotificationJobWorker(sb, client_factory=client_factory)
+    jobs = [_job("job-1", "user-1"), _job("job-2", "user-2")]
 
     with (
-        patch("services.notification_jobs.has_direct_postgres", return_value=False),
-        patch("services.notification_jobs.notify_public_flyer_published") as notify_mock,
+        patch("services.notification_jobs.settings.notification_delivery_workers", 2),
+        patch("services.notification_jobs.deliver_public_flyer_published_to_recipient") as deliver,
     ):
-        result = NotificationJobWorker(sb).run_pending(limit=1)
+        results = worker._run_recipients(jobs)
 
-    assert result == {"claimed": 1, "processed": 1, "failed": 0}
-    notify_mock.assert_called_once_with(sb, **payload)
+    assert results == [True, True]
+    assert deliver.call_count == 2
+    assert {call.args[0] for call in deliver.call_args_list} == set(issued_clients)
 
 
-def test_worker_skips_jobs_without_attempts_left_in_supabase_fallback():
+def test_failed_recipient_is_retried_without_reprocessing_parent():
     sb = MagicMock()
-    jobs_table = MagicMock()
-    jobs_table.select.return_value.in_.return_value.lte.return_value.order.return_value.limit.return_value.execute.return_value.data = [
-        _job("flyer_published", {}, attempts=5, max_attempts=5)
-    ]
-    sb.table.return_value = jobs_table
+    job = _job("recipient-job", "user-1", attempts=1)
+    recipient_sb = MagicMock()
+    worker = NotificationJobWorker(sb, client_factory=lambda: recipient_sb)
 
-    with patch("services.notification_jobs.has_direct_postgres", return_value=False):
-        result = NotificationJobWorker(sb).run_pending(limit=1)
+    with patch(
+        "services.notification_jobs.deliver_public_flyer_published_to_recipient",
+        side_effect=RuntimeError("push unavailable"),
+    ):
+        assert worker._run_recipient_job(job) is False
 
-    assert result == {"claimed": 0, "processed": 0, "failed": 0}
-    jobs_table.update.assert_not_called()
+    update = recipient_sb.table.return_value.update.call_args.args[0]
+    assert update["status"] == "failed"
 
 
-def _job(
-    kind: str,
-    payload: dict,
-    *,
-    attempts: int = 1,
-    max_attempts: int = 5,
-) -> dict:
+def _payload() -> dict:
     return {
-        "id": "job-1",
-        "kind": kind,
-        "payload": payload,
-        "attempts": attempts,
-        "max_attempts": max_attempts,
+        "flyer_id": "flyer-1", "supermarket_id": "sup-1",
+        "supermarket_name": "Conad", "products_count": 3,
+    }
+
+
+def _job(job_id: str, user_id: str, attempts: int = 1) -> dict:
+    return {
+        "id": job_id, "kind": "flyer_published_recipient",
+        "payload": {**_payload(), "user_id": user_id},
+        "attempts": attempts, "max_attempts": 5,
     }
