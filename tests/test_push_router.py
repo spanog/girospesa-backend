@@ -489,3 +489,6 @@ class TestDeliverPublicFlyerPublished:
             )
 
         send.assert_called_once()
+        payload = send.call_args.kwargs["data"]
+        assert payload["url"] == "/volantini?supermarket_id=super-1"
+        assert payload["flyer_id"] == "flyer-1"

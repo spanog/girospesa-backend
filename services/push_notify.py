@@ -163,15 +163,10 @@ def _offer_is_currently_active(record: dict) -> bool:
     return True
 
 
-def _offers_url(*, supermarket_id: str | None) -> str:
-    params = ["sort=published_at", "scroll=offers"]
-    if supermarket_id:
-        params.append(f"supermarket_id={supermarket_id}")
-    return f"/offerte?{'&'.join(params)}"
-
-
 def _flyer_published_url(*, supermarket_id: str | None) -> str:
-    return _offers_url(supermarket_id=supermarket_id)
+    if not supermarket_id:
+        return "/volantini"
+    return f"/volantini?supermarket_id={supermarket_id}"
 
 
 def _find_existing_notification(
