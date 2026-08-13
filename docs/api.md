@@ -6,7 +6,7 @@ Il backend FastAPI è l'unica API applicativa. Le chiamate autenticate usano un 
 
 | Metodo | Path | Accesso | Descrizione |
 | --- | --- | --- | --- |
-| `GET` | `/offers` | Pubblico | Offerte confermate e attive, con ricerca, filtri e paginazione. |
+| `GET` | `/offers` | Pubblico | Offerte confermate e attive, con ricerca, filtri e paginazione; non espone un parametro di ordinamento. |
 | `POST` | `/guest-location` | Pubblico | Valida una posizione guest e imposta il cookie tecnico firmato usato dalla discovery. |
 | `DELETE` | `/guest-location` | Pubblico | Rimuove il cookie tecnico di località guest. |
 

@@ -169,6 +169,12 @@ async def test_list_public_offers_requires_guest_location():
     assert response.status_code == 428
 
 
+def test_list_public_offers_does_not_expose_a_sort_query_parameter():
+    parameters = test_app.openapi()["paths"]["/offers"]["get"]["parameters"]
+
+    assert "sort" not in {parameter["name"] for parameter in parameters}
+
+
 def _published_offer(
     *,
     offer_id: str,
