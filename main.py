@@ -51,6 +51,10 @@ def _resume_processing_flyer(flyer_id: str) -> None:
     ExtractionService().run(flyer_id)
 
 
+async def _drain_notification_jobs() -> None:
+    await asyncio.to_thread(NotificationJobWorker().run_pending)
+
+
 def _frontend_origin() -> str:
     value = getattr(settings, "frontend_url", "http://localhost:3000")
     return value if isinstance(value, str) and value else "http://localhost:3000"
@@ -129,7 +133,7 @@ async def lifespan(app: FastAPI):
         misfire_grace_time=None,
     )
     scheduler.add_job(
-        NotificationJobWorker().run_pending,
+        _drain_notification_jobs,
         IntervalTrigger(minutes=1),
         id="notification_jobs",
         replace_existing=True,

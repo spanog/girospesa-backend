@@ -63,7 +63,7 @@ from services.push_notify import (
     PushEndpointGoneError,
     PushSubscription,
     notify_extraction_complete,
-    notify_public_flyer_published,
+    deliver_public_flyer_published_to_recipient,
     send_native_push_notification,
     send_push_notification,
 )
@@ -458,279 +458,34 @@ class TestNotifyFavoritesVisibility:
         mock_send.assert_not_called()
 
 
-class TestNotifyPublicFlyerPublished:
-    def test_notifies_only_nearby_customers_with_push_subscription(self):
-        tables: dict[str, MagicMock] = {}
-
-        def table(name: str) -> MagicMock:
-            return tables[name]
-
-        supermarket_table = MagicMock()
-        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
-            "id": "super-1",
-            "slug": "coop",
-            "lat": 45.4642,
-            "lng": 9.19,
-        }
-        tables["supermarkets"] = supermarket_table
-
-        profiles_table = MagicMock()
-        profiles_table.select.return_value.execute.return_value.data = [
-            {
-                "id": "nearby-customer",
-                "role": "customer",
-                "home_lat": 45.465,
-                "home_lng": 9.191,
-                "search_lat": None,
-                "search_lng": None,
-                "max_distance_km": 10,
-                "preferred_supermarkets": [],
-            },
-            {
-                "id": "far-customer",
-                "role": "customer",
-                "home_lat": 41.9028,
-                "home_lng": 12.4964,
-                "search_lat": None,
-                "search_lng": None,
-                "max_distance_km": 10,
-                "preferred_supermarkets": [],
-            },
-        ]
-        tables["user_profiles"] = profiles_table
-
-        notifications_table = MagicMock()
-        notifications_table.insert.return_value.execute.return_value.data = [{"id": "notif-1"}]
-        tables["app_notifications"] = notifications_table
-
-        subscriptions_table = MagicMock()
-        subscriptions_table.select.return_value.eq.return_value.execute.side_effect = [
-            MagicMock(data=[_SAMPLE_SUB]),
-        ]
-        subscriptions_table.delete.return_value.eq.return_value.execute.return_value = MagicMock()
-        tables["push_subscriptions"] = subscriptions_table
-
+class TestDeliverPublicFlyerPublished:
+    def test_persists_inbox_without_push_when_notifications_disabled(self):
         sb = MagicMock()
-        sb.table.side_effect = table
+        profile = sb.table.return_value.select.return_value.eq.return_value
+        profile.maybe_single.return_value.execute.return_value.data = {
+            "id": "customer-1", "notifications_enabled": False,
+        }
 
-        with patch("services.push_notify.send_push_notification") as mock_send:
-            notify_public_flyer_published(
-                sb,
-                flyer_id="flyer-1",
-                supermarket_id="super-1",
-                supermarket_name="Coop",
-                products_count=12,
+        with patch("services.push_notify._send_push_to_user") as send:
+            deliver_public_flyer_published_to_recipient(
+                sb, flyer_id="flyer-1", supermarket_id="super-1",
+                supermarket_name="Coop", products_count=12, user_id="customer-1",
             )
 
-        notifications_table.insert.assert_called_once_with(
-            {
-                "user_id": "nearby-customer",
-                "kind": "flyer_published",
-                "title": "Nuovo volantino da Coop",
-                "body": "12 nuove offerte disponibili",
-                "data": {
-                    "kind": "flyer_published",
-                    "flyer_id": "flyer-1",
-                    "supermarket_id": "super-1",
-                    "aggregation_key": "flyer-published:flyer-1",
-                    "products_count": 12,
-                    "url": "/offerte?sort=published_at&scroll=offers&supermarket_id=super-1",
-                },
-            }
-        )
-        mock_send.assert_called_once()
+        sb.table.return_value.insert.assert_called_once()
+        send.assert_not_called()
 
-    def test_skips_when_supermarket_coordinates_missing(self):
-        tables: dict[str, MagicMock] = {}
-
-        def table(name: str) -> MagicMock:
-            return tables[name]
-
-        supermarket_table = MagicMock()
-        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
-            "id": "super-1",
-            "slug": "coop",
-            "lat": None,
-            "lng": None,
-        }
-        tables["supermarkets"] = supermarket_table
-
+    def test_sends_push_when_notifications_are_enabled(self):
         sb = MagicMock()
-        sb.table.side_effect = table
+        profile = sb.table.return_value.select.return_value.eq.return_value
+        profile.maybe_single.return_value.execute.return_value.data = {
+            "id": "customer-1", "notifications_enabled": True,
+        }
 
-        with patch("services.push_notify.send_push_notification") as mock_send:
-            notify_public_flyer_published(
-                sb,
-                flyer_id="flyer-1",
-                supermarket_id="super-1",
-                supermarket_name="Coop",
-                products_count=12,
+        with patch("services.push_notify._send_push_to_user") as send:
+            deliver_public_flyer_published_to_recipient(
+                sb, flyer_id="flyer-1", supermarket_id="super-1",
+                supermarket_name="Coop", products_count=1, user_id="customer-1",
             )
 
-        mock_send.assert_not_called()
-
-    def test_keeps_inbox_when_customer_has_no_push_subscription(self):
-        tables: dict[str, MagicMock] = {}
-
-        def table(name: str) -> MagicMock:
-            return tables[name]
-
-        supermarket_table = MagicMock()
-        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
-            "id": "super-1",
-            "slug": "coop",
-            "lat": 45.4642,
-            "lng": 9.19,
-        }
-        tables["supermarkets"] = supermarket_table
-
-        profiles_table = MagicMock()
-        profiles_table.select.return_value.execute.return_value.data = [
-            {
-                "id": "disabled-customer",
-                "role": "customer",
-                "home_lat": 45.465,
-                "home_lng": 9.191,
-                "search_lat": None,
-                "search_lng": None,
-                "max_distance_km": 10,
-                "preferred_supermarkets": [],
-            },
-        ]
-        tables["user_profiles"] = profiles_table
-
-        notifications_table = MagicMock()
-        notifications_table.insert.return_value.execute.return_value.data = [{"id": "notif-1"}]
-        tables["app_notifications"] = notifications_table
-
-        subscriptions_table = MagicMock()
-        subscriptions_table.select.return_value.eq.return_value.execute.return_value.data = []
-        tables["push_subscriptions"] = subscriptions_table
-
-        sb = MagicMock()
-        sb.table.side_effect = table
-
-        with patch("services.push_notify.send_push_notification") as mock_send:
-            notify_public_flyer_published(
-                sb,
-                flyer_id="flyer-1",
-                supermarket_id="super-1",
-                supermarket_name="Coop",
-                products_count=12,
-            )
-
-        notifications_table.insert.assert_called_once()
-        subscriptions_table.select.assert_called_once()
-        mock_send.assert_not_called()
-
-    def test_notifies_admin_when_supermarket_is_preferred(self):
-        tables: dict[str, MagicMock] = {}
-
-        def table(name: str) -> MagicMock:
-            return tables[name]
-
-        supermarket_table = MagicMock()
-        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
-            "id": "super-1",
-            "slug": "coop",
-            "lat": 45.4642,
-            "lng": 9.19,
-        }
-        tables["supermarkets"] = supermarket_table
-
-        profiles_table = MagicMock()
-        profiles_table.select.return_value.execute.return_value.data = [
-            {
-                "id": "admin-user",
-                "role": "admin",
-                "home_lat": 45.465,
-                "home_lng": 9.191,
-                "search_lat": None,
-                "search_lng": None,
-                "max_distance_km": 10,
-                "preferred_supermarkets": ["coop"],
-            },
-        ]
-        tables["user_profiles"] = profiles_table
-
-        notifications_table = MagicMock()
-        notifications_table.insert.return_value.execute.return_value.data = [{"id": "notif-1"}]
-        tables["app_notifications"] = notifications_table
-
-        subscriptions_table = MagicMock()
-        subscriptions_table.select.return_value.eq.return_value.execute.return_value.data = []
-        tables["push_subscriptions"] = subscriptions_table
-
-        sb = MagicMock()
-        sb.table.side_effect = table
-
-        notify_public_flyer_published(
-            sb,
-            flyer_id="flyer-1",
-            supermarket_id="super-1",
-            supermarket_name="Coop",
-            products_count=12,
-        )
-
-        notifications_table.insert.assert_called_once_with(
-            {
-                "user_id": "admin-user",
-                "kind": "flyer_published",
-                "title": "Nuovo volantino da Coop",
-                "body": "12 nuove offerte disponibili",
-                "data": {
-                    "kind": "flyer_published",
-                    "flyer_id": "flyer-1",
-                    "supermarket_id": "super-1",
-                    "aggregation_key": "flyer-published:flyer-1",
-                    "products_count": 12,
-                    "url": "/offerte?sort=published_at&scroll=offers&supermarket_id=super-1",
-                },
-            }
-        )
-
-    def test_skips_preferred_supermarket_outside_visible_radius(self):
-        tables: dict[str, MagicMock] = {}
-
-        def table(name: str) -> MagicMock:
-            return tables[name]
-
-        supermarket_table = MagicMock()
-        supermarket_table.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value.data = {
-            "id": "super-1",
-            "slug": "coop",
-            "lat": 45.4642,
-            "lng": 9.19,
-        }
-        tables["supermarkets"] = supermarket_table
-
-        profiles_table = MagicMock()
-        profiles_table.select.return_value.execute.return_value.data = [
-            {
-                "id": "admin-user",
-                "role": "admin",
-                "home_lat": 41.9028,
-                "home_lng": 12.4964,
-                "search_lat": None,
-                "search_lng": None,
-                "max_distance_km": 10,
-                "preferred_supermarkets": ["coop"],
-            },
-        ]
-        tables["user_profiles"] = profiles_table
-
-        notifications_table = MagicMock()
-        tables["app_notifications"] = notifications_table
-
-        sb = MagicMock()
-        sb.table.side_effect = table
-
-        notify_public_flyer_published(
-            sb,
-            flyer_id="flyer-1",
-            supermarket_id="super-1",
-            supermarket_name="Coop",
-            products_count=12,
-        )
-
-        notifications_table.insert.assert_not_called()
+        send.assert_called_once()

@@ -70,11 +70,11 @@ Frontend
   Backend accoda notification_jobs idempotenti
                          │
                          ▼
-  Worker notifiche raggiunge utenti nel raggio del supermercato
-    Per ogni utente:
+  Worker notifiche trova solo customer nel raggio del supermercato
+    Per ogni customer, in job figlio parallelo:
       → insert app_notifications.flyer_published
-      → fetch push_subscriptions esistenti
-      → per ogni subscription:
+      → se notifications_enabled=true, fetch push_subscriptions
+      → per ogni subscription registrata:
             send_push_notification (VAPID, pywebpush)
             se 410 Gone → cancella subscription stale
 ```

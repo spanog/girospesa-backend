@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
@@ -14,7 +13,6 @@ from pywebpush import WebPushException, webpush  # type: ignore[import-untyped]
 from core.config import settings
 
 logger = logging.getLogger(__name__)
-_EARTH_RADIUS_KM = 6371.0088
 _FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 _FCM_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
@@ -28,26 +26,6 @@ class PushSubscription:
 
 class PushEndpointGoneError(Exception):
     """Raised when a push endpoint returns 410 Gone (subscription revoked by browser)."""
-
-
-def _haversine_km(
-    origin_lat: float,
-    origin_lng: float,
-    target_lat: float,
-    target_lng: float,
-) -> float:
-    origin_lat_rad = math.radians(origin_lat)
-    target_lat_rad = math.radians(target_lat)
-    delta_lat = math.radians(target_lat - origin_lat)
-    delta_lng = math.radians(target_lng - origin_lng)
-
-    sin_lat = math.sin(delta_lat / 2)
-    sin_lng = math.sin(delta_lng / 2)
-    arc = (
-        sin_lat * sin_lat
-        + math.cos(origin_lat_rad) * math.cos(target_lat_rad) * sin_lng * sin_lng
-    )
-    return _EARTH_RADIUS_KM * 2 * math.atan2(math.sqrt(arc), math.sqrt(1 - arc))
 
 
 def _persist_notification(
@@ -172,40 +150,6 @@ def send_push_to_user(
     data: dict,
 ) -> None:
     _send_push_to_user(sb, user_id=user_id, title=title, body=body, data=data)
-
-
-def _profile_reference_point(profile: dict) -> tuple[float | None, float | None]:
-    lat = profile.get("search_lat")
-    lng = profile.get("search_lng")
-    if lat is not None and lng is not None:
-        return float(lat), float(lng)
-    home_lat = profile.get("home_lat")
-    home_lng = profile.get("home_lng")
-    if home_lat is None or home_lng is None:
-        return None, None
-    return float(home_lat), float(home_lng)
-
-
-def _profile_prefers_supermarket(profile: dict, supermarket: dict) -> bool:
-    preferred = profile.get("preferred_supermarkets") or []
-    if not isinstance(preferred, list):
-        return False
-    keys = {str(supermarket.get("id") or ""), str(supermarket.get("slug") or "")}
-    return any(str(value) in keys for value in preferred)
-
-
-def _profile_is_within_radius(profile: dict, supermarket: dict) -> bool:
-    user_lat, user_lng = _profile_reference_point(profile)
-    if user_lat is None or user_lng is None:
-        return False
-    max_distance_km = float(profile.get("max_distance_km") or 10)
-    distance = _haversine_km(
-        user_lat,
-        user_lng,
-        float(supermarket["lat"]),
-        float(supermarket["lng"]),
-    )
-    return distance <= max_distance_km
 
 
 def _offer_is_currently_active(record: dict) -> bool:
@@ -447,42 +391,53 @@ def notify_extraction_complete(
     _send_push_to_user(sb, user_id=user_id, title=title, body=body, data=data)
 
 
-def notify_public_flyer_published(
+def deliver_public_flyer_published_to_recipient(
     sb: object,
     *,
     flyer_id: str,
     supermarket_id: str,
     supermarket_name: str,
     products_count: int,
+    user_id: str,
 ) -> None:
-    supermarket_resp = (
-        sb.table("supermarkets")  # type: ignore[union-attr]
-        .select("id, slug, lat, lng")
-        .eq("id", supermarket_id)
+    profile = _notification_profile(sb, user_id)
+    if not profile:
+        return
+    title = f"Nuovo volantino da {supermarket_name}"
+    body = _flyer_published_body(products_count)
+    should_push = _persist_idempotent_notification(
+        sb,
+        user_id=user_id,
+        kind="flyer_published",
+        title=title,
+        body=body,
+        data=_flyer_notification_data(flyer_id, supermarket_id, products_count),
+    )
+    if should_push and profile.get("notifications_enabled", True):
+        _send_push_to_user(
+            sb,
+            user_id=user_id,
+            title=title,
+            body=body,
+            data=_flyer_notification_data(flyer_id, supermarket_id, products_count),
+        )
+
+
+def _notification_profile(sb: object, user_id: str) -> dict | None:
+    response = (
+        sb.table("user_profiles")  # type: ignore[union-attr]
+        .select("id, notifications_enabled")
+        .eq("id", user_id)
         .maybe_single()
         .execute()
     )
-    supermarket = supermarket_resp.data if supermarket_resp is not None else None
-    if not supermarket or supermarket.get("lat") is None or supermarket.get("lng") is None:
-        logger.warning(
-            "Skipping flyer publication notifications for %s: missing supermarket coordinates",
-            flyer_id,
-        )
-        return
+    return response.data if response is not None else None
 
-    profiles_resp = (
-        sb.table("user_profiles")  # type: ignore[union-attr]
-        .select(
-            "id, role, home_lat, home_lng, search_lat, search_lng, "
-            "max_distance_km, preferred_supermarkets"
-        )
-        .execute()
-    )
-    profiles = profiles_resp.data or []
-    if not profiles:
-        return
 
-    data = {
+def _flyer_notification_data(
+    flyer_id: str, supermarket_id: str, products_count: int
+) -> dict:
+    return {
         "kind": "flyer_published",
         "flyer_id": flyer_id,
         "supermarket_id": supermarket_id,
@@ -490,29 +445,3 @@ def notify_public_flyer_published(
         "products_count": products_count,
         "url": _flyer_published_url(supermarket_id=supermarket_id),
     }
-
-    for profile in profiles:
-        is_preferred = _profile_prefers_supermarket(profile, supermarket)
-        is_visible = _profile_is_within_radius(profile, supermarket)
-        is_nearby_customer = profile.get("role") == "customer" and is_visible
-        if not (is_preferred and is_visible) and not is_nearby_customer:
-            continue
-        title = f"Nuovo volantino da {supermarket_name}"
-        body = _flyer_published_body(products_count)
-        should_push = _persist_idempotent_notification(
-            sb,
-            user_id=profile["id"],
-            kind="flyer_published",
-            title=title,
-            body=body,
-            data=data,
-        )
-        if not should_push:
-            continue
-        _send_push_to_user(
-            sb,
-            user_id=profile["id"],
-            title=title,
-            body=body,
-            data=data,
-        )

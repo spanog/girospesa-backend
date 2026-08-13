@@ -24,10 +24,7 @@ from core.config import settings
 from core.database import get_supabase
 from core.guest_location import GUEST_LOCATION_COOKIE, guest_location_required, read_guest_location
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
-from services.notification_jobs import (
-    NotificationJobWorker,
-    enqueue_flyer_published,
-)
+from services.notification_jobs import enqueue_flyer_published
 from services.product_format import ProductFormat, build_format_bundle
 from services.flyer_preview import render_flyer_preview
 from services.offer_visibility import apply_current_offer_window
@@ -1743,7 +1740,6 @@ async def delete_draft_offer(
 @router.post("/{flyer_id}/offers/confirm")
 async def confirm_offers(
     flyer_id: str,
-    background_tasks: BackgroundTasks,
     profile: dict = Depends(require_admin_or_manager),
 ) -> dict:
     """Confirm source flyer offers and publish one derived flyer per target."""
@@ -1883,9 +1879,6 @@ async def confirm_offers(
         sb.table("flyers").update(
             {"products_count": published_counts.get(published_flyer_id, 0)}
         ).eq("id", published_flyer_id).execute()
-    if confirmed_count > 0:
-        background_tasks.add_task(NotificationJobWorker(sb).run_pending)
-
     return {
         "confirmed": confirmed_count,
         "flyer_id": flyer_id,
