@@ -27,7 +27,8 @@ I client non contattano il provider di geocoding: il backend ne mantiene configu
 | Metodo | Path | Accesso | Descrizione |
 | --- | --- | --- | --- |
 | `GET` | `/flyers/public` | Pubblico | Volantini pubblici correnti nel raggio attivo. Per i guest richiede il cookie di località firmato; senza località restituisce `428 guest_location_required`. |
-| `GET` | `/supermarkets?with_active_offers=true` | Pubblico | Sedi nel raggio attivo. Per i guest richiede il cookie di località firmato; senza località restituisce `428 guest_location_required`. Un token admin riceve tutte le sedi attive, senza filtro di distanza. |
+| `GET` | `/supermarkets?with_active_offers=true` | Pubblico | Sedi nel raggio attivo, anche per admin e gestori. Per i guest richiede il cookie di località firmato; senza località restituisce `428 guest_location_required`. |
+| `GET` | `/flyers/targets` | Admin/manager | Sedi selezionabili nella gestione volantini: tutte le sedi attive per admin, solo sedi assegnate per gestore. |
 | `GET` | `/flyers` | Admin/manager | Elenco volantini in gestione. |
 | `GET` | `/flyers/{flyer_id}` | Admin/manager | Dettaglio e stato di estrazione. |
 | `GET` | `/flyers/{flyer_id}/file` | Pubblico se volantino pubblico e confermato; altrimenti admin/manager | Restituisce la rappresentazione binaria del volantino con disposition `inline`; il client non riceve URL Supabase. |

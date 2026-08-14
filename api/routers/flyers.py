@@ -962,6 +962,28 @@ def _assert_flyer_access(sb, profile: dict, flyer: dict) -> None:
         assert_flyer_access(profile, flyer)
 
 
+def _flyer_target_supermarkets(sb, supermarket_ids: list[str] | None) -> list[dict]:
+    if supermarket_ids == []:
+        return []
+    query = sb.table("supermarkets").select("*").eq("is_active", True)
+    if supermarket_ids is not None:
+        query = query.in_("id", supermarket_ids)
+    return query.order("name").execute().data or []
+
+
+@router.get("/targets")
+async def list_flyer_targets(
+    profile: dict = Depends(require_admin_or_manager),
+) -> list[dict]:
+    """Return active supermarket branches eligible as flyer targets."""
+    ids = (
+        None
+        if profile.get("role") == "admin"
+        else _profile_supermarket_ids(profile)
+    )
+    return _flyer_target_supermarkets(get_supabase(), ids)
+
+
 @router.get("")
 async def list_flyers(
     profile: dict = Depends(require_admin_or_manager),

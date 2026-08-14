@@ -77,37 +77,14 @@ def _supermarkets_with_active_offers(sb, ids: list[str] | None = None) -> list[d
     return [{key: value for key, value in row.items() if key != "offers"} for row in rows]
 
 
-def _is_admin(sb, user_id: str | None) -> bool:
-    if user_id is None:
-        return False
-    profile = (
-        sb.table("user_profiles")
-        .select("role")
-        .eq("id", user_id)
-        .maybe_single()
-        .execute()
-        .data
-        or {}
-    )
-    return profile.get("role") == "admin"
-
-
-def _all_active_supermarkets(sb) -> list[dict]:
-    response = sb.table("supermarkets").select("*").eq("is_active", True).order("name").execute()
-    return response.data or []
-
-
 @router.get("")
 async def list_supermarkets(
     with_active_offers: bool = Query(False),
-    include_ids: list[str] = Query(default=[]),
     request: Request = None,
     user_id: str | None = Depends(get_optional_user_id),
 ) -> list[dict]:
-    """Return active supermarkets; admins receive every active branch."""
+    """Return active supermarkets inside caller's active radius."""
     sb = get_supabase()
-    if _is_admin(sb, user_id):
-        return _all_active_supermarkets(sb)
     guest_token = request.cookies.get(GUEST_LOCATION_COOKIE) if user_id is None else None
     guest_location = read_guest_location(guest_token)
     if user_id is None and guest_location is None:
@@ -117,7 +94,7 @@ async def list_supermarkets(
         user_lat, user_lng, radius = location
         nearby = _nearby_supermarkets(sb, user_lat, user_lng, radius)
         ids = [row["id"] for row in nearby]
-        if not ids and not include_ids:
+        if not ids:
             return []
         if with_active_offers:
             active_rows = _supermarkets_with_active_offers(sb, ids)
@@ -126,21 +103,8 @@ async def list_supermarkets(
         if ids:
             resp = sb.table("supermarkets").select("*").in_("id", ids).execute()
             nearby_rows = _merge_distances(resp.data or [], nearby)
-        missing_ids = [store_id for store_id in include_ids if store_id not in ids]
-        if not missing_ids:
-            return nearby_rows
-        included = (
-            sb.table("supermarkets")
-            .select("*")
-            .in_("id", missing_ids)
-            .eq("is_active", True)
-            .execute()
-        )
-        return [*nearby_rows, *(included.data or [])]
-
-    if with_active_offers:
-        return _supermarkets_with_active_offers(sb)
-    return _all_active_supermarkets(sb)
+        return nearby_rows
+    return []
 
 
 def _upload_logo(sb, sm_id: str, logo_content: bytes, content_type: str) -> str:

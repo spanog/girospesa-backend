@@ -191,6 +191,44 @@ def test_confirmed_count_by_flyer_uses_database_aggregation():
     )
 
 
+@pytest.mark.asyncio
+async def test_flyer_targets_returns_all_active_branches_for_admin():
+    sb = MagicMock()
+    query = MagicMock()
+    query.select.return_value = query
+    query.eq.return_value = query
+    query.order.return_value = query
+    query.execute.return_value = MagicMock(
+        data=[{"id": "sup-near"}, {"id": "sup-far"}]
+    )
+    sb.table.return_value = query
+
+    with patch("api.routers.flyers.get_supabase", return_value=sb):
+        response = await _get("/flyers/targets", {_DEP_PROFILE: lambda: ADMIN_PROFILE})
+
+    assert response.status_code == 200
+    assert response.json() == [{"id": "sup-near"}, {"id": "sup-far"}]
+
+
+@pytest.mark.asyncio
+async def test_flyer_targets_returns_only_managed_branches_for_manager():
+    sb = MagicMock()
+    query = MagicMock()
+    query.select.return_value = query
+    query.eq.return_value = query
+    query.in_.return_value = query
+    query.order.return_value = query
+    query.execute.return_value = MagicMock(data=[{"id": "sup-1"}])
+    sb.table.return_value = query
+
+    with patch("api.routers.flyers.get_supabase", return_value=sb):
+        response = await _get("/flyers/targets", {_DEP_PROFILE: lambda: MANAGER_PROFILE})
+
+    assert response.status_code == 200
+    assert response.json() == [{"id": "sup-1"}]
+    query.in_.assert_called_once_with("id", ["sup-1"])
+
+
 @pytest.mark.parametrize(
     ("content_type", "content"),
     [
