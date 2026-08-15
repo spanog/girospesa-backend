@@ -210,6 +210,41 @@ def test_extract_products_chunks_pdf_in_fixed_groups_of_three_pages() -> None:
     ]
 
 
+def test_extract_products_chunks_pdf_larger_than_inline_limit() -> None:
+    fake_client = _FakeClient(responses=[json.dumps({"products": []})])
+    _install_google_stub(fake_client)
+
+    from services.extraction.pdf_utils import PdfChunk
+    from services.extraction.providers.gemini import GeminiProvider
+
+    chunks = [PdfChunk(start_page=1, end_page=1, pdf_bytes=b"page")]
+    with (
+        patch("services.extraction.providers.gemini.MAX_INLINE_BYTES", 4),
+        patch("services.extraction.providers.gemini.count_pdf_pages", return_value=1),
+        patch("services.extraction.providers.gemini.iter_pdf_chunks", return_value=iter(chunks)),
+    ):
+        products, retry_errors = GeminiProvider(
+            api_key="test-key", request_executor=_direct_request_executor
+        ).extract_products(b"large-pdf", "application/pdf")
+
+    assert products == []
+    assert retry_errors == []
+    assert fake_client.models.calls[0]["contents"][0]["data"] == b"page"
+
+
+def test_extract_products_rejects_large_non_pdf_inline_payload() -> None:
+    fake_client = _FakeClient(responses=[])
+    _install_google_stub(fake_client)
+
+    from services.extraction.providers.gemini import GeminiProvider
+
+    with (
+        patch("services.extraction.providers.gemini.MAX_INLINE_BYTES", 4),
+        pytest.raises(ValueError, match="File too large for inline upload"),
+    ):
+        GeminiProvider(api_key="test-key").extract_products(b"large-image", "image/jpeg")
+
+
 def test_extract_products_aborts_when_one_pdf_chunk_keeps_failing() -> None:
     fake_client = _FakeClient(
         responses=[

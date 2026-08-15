@@ -193,7 +193,7 @@ class GeminiProvider:
         """Send file bytes to Gemini; return (products, retry_errors).
 
         Raises:
-            ValueError: file exceeds 20 MB inline limit.
+            ValueError: a non-PDF file exceeds the 20 MB inline limit.
             ImportError: google-genai not installed.
         """
         try:
@@ -204,7 +204,7 @@ class GeminiProvider:
                 "google-genai is required. Install with: pip install google-genai"
             ) from exc
 
-        if len(file_bytes) > MAX_INLINE_BYTES:
+        if mime_type != "application/pdf" and len(file_bytes) > MAX_INLINE_BYTES:
             raise ValueError(
                 f"File too large for inline upload "
                 f"({len(file_bytes) / 1_048_576:.1f} MB > 20 MB). "
