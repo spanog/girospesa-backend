@@ -811,7 +811,7 @@ async def test_member_can_leave_shared_list_and_notify_owner():
         "owner-1",
         kind="list_member_left",
         title="Membro uscito dalla lista",
-        body="Mario (mario@example.com) ha lasciato la lista Weekend",
+        body="Mario ha lasciato la lista",
         data={
             "list_id": "list-1",
             "list_name": "Weekend",

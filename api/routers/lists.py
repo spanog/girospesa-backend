@@ -1660,9 +1660,9 @@ async def remove_member(
             member_auth = _auth_user_by_id(user_id) or {}
             member_name = member_profile.get("display_name")
             member_email = member_auth.get("email")
-            member_label = _format_notification_actor(member_name, member_email)
+            member_label = _format_notification_actor(member_name, None)
             title = "Membro uscito dalla lista"
-            body = f"{member_label} ha lasciato la lista {list_row['name']}"
+            body = f"{member_label} ha lasciato la lista"
             payload = {
                 **_list_member_left_payload(list_row["name"], member_name, list_id),
                 "left_by_email": member_email,
