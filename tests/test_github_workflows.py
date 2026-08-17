@@ -25,24 +25,12 @@ def test_ci_workflow_runs_backend_tests_manually_only():
     assert "docker compose -f docker-compose.integration.yml -p girospesa-itest logs --no-color --tail=200" in workflow
 
 
-def test_daily_maintenance_workflow_calls_production_cleanup_endpoint():
-    workflow = _read(".github/workflows/daily-maintenance.yml")
-
-    assert 'cron: "5 4 * * *"' in workflow
-    assert "BACKEND_DAILY_MAINTENANCE_URL" in workflow
-    assert "OPS_CRON_SECRET" in workflow
-    assert "--fail-with-body" in workflow
+def test_daily_maintenance_workflow_is_not_configured():
+    assert not (BACKEND_ROOT / ".github/workflows/daily-maintenance.yml").exists()
 
 
-def test_render_keepalive_workflow_pings_healthcheck_every_five_minutes():
-    workflow = _read(".github/workflows/render-keepalive.yml")
-
-    assert 'cron: "2/5 * * * *"' in workflow
-    assert "BACKEND_HEALTHCHECK_URL" in workflow
-    assert "Validate healthcheck secret" in workflow
-    assert "curl --fail-with-body --silent --show-error" in workflow
-    assert "--max-time 90" in workflow
-    assert "--retry 2" in workflow
+def test_render_keepalive_workflow_is_not_configured():
+    assert not (BACKEND_ROOT / ".github/workflows/render-keepalive.yml").exists()
 
 
 def test_supabase_production_workflow_pushes_migrations_from_main():

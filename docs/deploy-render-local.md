@@ -122,29 +122,6 @@ curl -fsS https://api.girospesa.it/health
 curl -fsS "https://api.girospesa.it/offers?lat=38.4116708&lng=16.0742832&max_distance_km=10" >/dev/null
 ```
 
-## GitHub Actions Replacements
-
-Keepalive:
-
-```bash
-curl --fail-with-body --silent --show-error \
-  --connect-timeout 10 \
-  --max-time 90 \
-  --retry 2 \
-  --retry-delay 10 \
-  https://api.girospesa.it/health
-```
-
-Daily maintenance:
-
-```bash
-OPS_CRON_SECRET="<secret>"
-curl --fail-with-body --silent --show-error \
-  -X POST \
-  -H "x-ops-secret: $OPS_CRON_SECRET" \
-  https://api.girospesa.it/ops/cron/daily-maintenance
-```
-
 ## Post Deploy Record
 
 After production deploys, update the workspace status file:

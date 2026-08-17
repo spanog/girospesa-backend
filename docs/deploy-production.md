@@ -8,8 +8,6 @@ The backend deploys to Render from GitHub.
 
 - `render.yaml` describes the FastAPI web service.
 - `.github/workflows/ci.yml` runs backend CI only when started manually with `workflow_dispatch`, so pushes to `main` do not consume GitHub Actions minutes.
-- `.github/workflows/render-keepalive.yml` pings `/health` every 5 minutes.
-- `.github/workflows/daily-maintenance.yml` calls daily maintenance remotely.
 - `.github/workflows/supabase-db-production.yml` applies Supabase migrations when `supabase/**` changes on `main`.
 - Render service auto-deploy is set to `On Commit` (`autoDeployTrigger: commit`) so it does not wait for GitHub checks.
 
@@ -18,7 +16,7 @@ The backend deploys to Render from GitHub.
 - Code changes on `main` trigger Render auto-deploy.
 - Supabase migration changes use workflow `Supabase DB Production`.
 - Render env changes require manual deploy/redeploy, then `/health` check.
-- `OPS_CRON_SECRET` must match in Render and GitHub Secrets.
+- `OPS_CRON_SECRET` is required only if an authorized external scheduler calls protected operations endpoints.
 - `VAPID_PUBLIC_KEY` also affects frontend Vercel/GitHub mobile builds.
 
 ## Deploy From Scratch
@@ -86,7 +84,7 @@ Set these in Render Dashboard: service `girospesa-backend` → `Environment`.
 | `VAPID_PRIVATE_KEY` | Web Push | Private VAPID key used to sign browser push notifications. | Generate VAPID keypair with `pywebpush`/`web-push`; keep private key only in Render. |
 | `VAPID_PUBLIC_KEY` | Web Push | Public VAPID key used by frontend/browser subscription. | Same generated VAPID keypair; also copy to frontend/mobile config where subscription is created. |
 | `VAPID_MAILTO` | Web Push | Contact claim sent with VAPID requests. | `mailto:info@girospesa.it`, fixed in `render.yaml`. |
-| `OPS_CRON_SECRET` | Scheduled maintenance | Shared secret for GitHub Actions daily maintenance → `POST /ops/cron/daily-maintenance`. | Generate once with `openssl rand -hex 32`; copy same value to GitHub Secret `OPS_CRON_SECRET`. |
+| `OPS_CRON_SECRET` | Protected operations endpoints | Shared secret for authorized external scheduler calls. | Generate once with `openssl rand -hex 32`. |
 
 Optional production integrations:
 
@@ -113,21 +111,11 @@ Configure in `spanog/girospesa-backend`.
 
 | Secret | Purpose |
 |---|---|
-| `BACKEND_DAILY_MAINTENANCE_URL` | Daily maintenance workflow |
-| `BACKEND_HEALTHCHECK_URL` | Render keepalive workflow |
-| `OPS_CRON_SECRET` | Authenticates daily maintenance |
 | `SUPABASE_ACCESS_TOKEN` | Supabase migration workflow |
 | `SUPABASE_DB_PASSWORD` | Supabase migration workflow |
 | `SUPABASE_PROJECT_ID` | Supabase migration workflow |
 
 Verified on 2026-07-16. No backend GitHub Actions variables were configured at that time.
-
-Example:
-
-```text
-BACKEND_HEALTHCHECK_URL=https://api.girospesa.it/health
-BACKEND_DAILY_MAINTENANCE_URL=https://api.girospesa.it/ops/cron/daily-maintenance
-```
 
 ## Database Deploy Notes
 
@@ -153,8 +141,4 @@ If Gemini changed, run extraction on a test flyer.
 
 ## Render Free Notes
 
-Render Free is not designed for stable production. It can spin down after inactivity and restart unexpectedly. The backend keeps local APScheduler, but production cleanup is also called by GitHub Actions through `POST /ops/cron/daily-maintenance`. Publication notifications are queued in `notification_jobs`; APScheduler drains them every minute, and external cron can call `POST /ops/cron/notifications` with the same `OPS_CRON_SECRET` if an additional production heartbeat is needed.
-
-`render-keepalive.yml` pings `BACKEND_HEALTHCHECK_URL` every 5 minutes with retries and timeout. This mitigates cold starts, but it is not equivalent to a paid plan.
-
-`daily-maintenance.yml` uses `curl --fail-with-body`, so HTTP failures preserve response bodies in GitHub logs. `/ops/cron/daily-maintenance` is best-effort: if one internal step fails, response reports `status=partial_error` and failed step names in `errors`, while other cleanup steps continue.
+Render Free is not designed for stable production. It can spin down after inactivity and restart unexpectedly. The backend keeps local APScheduler; publication notifications are queued in `notification_jobs` and drained every minute. An authorized external scheduler can call protected operations endpoints with `OPS_CRON_SECRET` when needed.
