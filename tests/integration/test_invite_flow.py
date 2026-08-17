@@ -88,6 +88,12 @@ class TestInviteFlowIntegration:
             .eq("id", users["owner"]["id"])
             .execute()
         )
+        (
+            supabase_client.table("user_profiles")
+            .update({"display_name": "Giulia"})
+            .eq("id", users["member"]["id"])
+            .execute()
+        )
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             current_user["id"] = users["owner"]["id"]
             create_resp = await client.post(
@@ -146,3 +152,24 @@ class TestInviteFlowIntegration:
             .execute()
         ).data
         assert notification["read_at"] is not None
+
+        accepted_notification = (
+            supabase_client.table("app_notifications")
+            .select("user_id, kind, title, body, data")
+            .eq("user_id", users["owner"]["id"])
+            .eq("kind", "list_invite_accepted")
+            .single()
+            .execute()
+        ).data
+        assert accepted_notification == {
+            "user_id": users["owner"]["id"],
+            "kind": "list_invite_accepted",
+            "title": "Invito accettato",
+            "body": "Giulia ha accettato il tuo invito: adesso condivide la tua lista",
+            "data": {
+                "list_id": owner_list["id"],
+                "list_name": "Lista weekend",
+                "accepted_by": "Giulia",
+                "url": "/lista",
+            },
+        }

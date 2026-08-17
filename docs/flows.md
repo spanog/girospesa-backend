@@ -89,6 +89,7 @@ Frontend
   Destinatario: POST /lists/invites/{invite_id}/accept
     Backend: inserisce list_members {role: 'member'}
     Backend: segna invite → accepted
+    Backend: invia al proprietario notifica di accettazione con nome membro
                     │
   Ora entrambi vedono la lista in tempo reale
   (SSE backend su /lists/{id}/events, alimentato da Postgres NOTIFY)

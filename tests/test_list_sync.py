@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -136,12 +136,23 @@ async def test_accept_invite_publishes_members_and_invites_updates():
     }
 
     with patch.object(_lists_module, "get_supabase", return_value=MagicMock()), \
-         patch.object(_lists_module, "_invite_for_user", return_value=invite), \
-         patch.object(_lists_module, "_existing_member", return_value=False), \
-         patch.object(_lists_module, "_insert_member"), \
-         patch.object(_lists_module, "_set_invite_status"), \
-         patch.object(_lists_module, "_mark_invite_notifications_read"), \
-         patch.object(_lists_module, "_publish_list_sync_event") as publish_mock:
+        patch.object(_lists_module, "_invite_for_user", return_value=invite), \
+        patch.object(_lists_module, "_existing_member", return_value=False), \
+        patch.object(_lists_module, "_insert_member"), \
+        patch.object(
+            _lists_module,
+            "_shopping_list_row",
+            return_value={"id": "list-1", "name": "Weekend"},
+        ), \
+        patch.object(
+            _lists_module,
+            "_profile_row",
+            return_value={"display_name": "Giulia"},
+        ), \
+        patch.object(_lists_module, "_set_invite_status"), \
+        patch.object(_lists_module, "_mark_invite_notifications_read"), \
+        patch.object(_lists_module, "_notify_shared_list_event") as notification_mock, \
+        patch.object(_lists_module, "_publish_list_sync_event") as publish_mock:
         resp = await _post(
             "/lists/invites/invite-1/accept",
             json={},
@@ -149,6 +160,19 @@ async def test_accept_invite_publishes_members_and_invites_updates():
         )
 
     assert resp.status_code == 200
+    notification_mock.assert_called_once_with(
+        ANY,
+        "owner-1",
+        kind="list_invite_accepted",
+        title="Invito accettato",
+        body="Giulia ha accettato il tuo invito: adesso condivide la tua lista",
+        data={
+            "list_id": "list-1",
+            "list_name": "Weekend",
+            "accepted_by": "Giulia",
+            "url": "/lista",
+        },
+    )
     assert publish_mock.call_args_list == [
         (("list-1", "members_updated", "member_joined"),),
         (("list-1", "invites_updated", "invite_accepted"),),

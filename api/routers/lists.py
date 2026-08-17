@@ -668,6 +668,19 @@ def _invite_payload(list_name: str, inviter_name: str | None, invite_id: str, li
     }
 
 
+def _list_invite_accepted_payload(
+    list_name: str,
+    accepted_by: str,
+    list_id: str,
+) -> dict:
+    return {
+        "list_id": list_id,
+        "list_name": list_name,
+        "accepted_by": accepted_by,
+        "url": "/lista",
+    }
+
+
 def _list_member_removed_payload(list_name: str, removed_by: str | None, list_id: str) -> dict:
     return {
         "list_id": list_id,
@@ -1006,9 +1019,24 @@ async def accept_pending_invite(
         raise HTTPException(status_code=410, detail="Invite has expired")
     if not _existing_member(invite["list_id"], user_id):
         _insert_member(invite["list_id"], user_id, "member", invite.get("invited_by"))
+    list_row = _shopping_list_row(invite["list_id"])
+    member_profile = _profile_row(sb, user_id)
+    member_name = member_profile.get("display_name") or "Un utente"
     _set_active_list_id(user_id, invite["list_id"])
     _set_invite_status(invite_id, status="accepted", accepted_by=user_id)
     _mark_invite_notifications_read(sb, invite_id, user_id)
+    _notify_shared_list_event(
+        sb,
+        invite["invited_by"],
+        kind="list_invite_accepted",
+        title="Invito accettato",
+        body=f"{member_name} ha accettato il tuo invito: adesso condivide la tua lista",
+        data=_list_invite_accepted_payload(
+            list_row["name"],
+            member_name,
+            invite["list_id"],
+        ),
+    )
     _publish_list_sync_event(invite["list_id"], "members_updated", "member_joined")
     _publish_list_sync_event(invite["list_id"], "invites_updated", "invite_accepted")
     return {"list_id": invite["list_id"]}
