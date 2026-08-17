@@ -70,8 +70,8 @@ Frontend
   Backend accoda notification_jobs idempotenti
                          │
                          ▼
-  Worker notifiche trova solo customer nel raggio del supermercato
-    Per ogni customer, in job figlio parallelo:
+  Worker notifiche trova tutti gli admin, manager della sede e customer nel raggio del supermercato
+    Per ogni destinatario, in job figlio parallelo:
       → insert app_notifications.flyer_published
       → se notifications_enabled=true, fetch push_subscriptions
       → per ogni subscription registrata:

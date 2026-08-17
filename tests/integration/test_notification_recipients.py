@@ -38,12 +38,14 @@ def notification_geo_context():
         conn.close()
 
 
-def test_flyer_notification_recipients_obeys_radius_location_and_role(notification_geo_context):
+def test_flyer_notification_recipients_include_staff_and_nearby_customers(notification_geo_context):
     conn, supermarket_id, user_ids = notification_geo_context
     with conn.cursor() as cur:
         cur.execute("SELECT user_id FROM public.flyer_notification_recipients(%s)", (supermarket_id,))
         recipients = {str(row[0]) for row in cur.fetchall()}
-    assert recipients == {user_ids["near"], user_ids["search_near"]}
+    assert recipients == {
+        user_ids["near"], user_ids["search_near"], user_ids["manager"], user_ids["admin"],
+    }
 
 
 def test_flyer_notification_jobs_persist_inbox_without_push(
@@ -52,7 +54,7 @@ def test_flyer_notification_jobs_persist_inbox_without_push(
 ):
     _, supermarket_id, user_ids = notification_geo_context
     supabase_client.table("user_profiles").update({"notifications_enabled": False}).in_(
-        "id", [user_ids["near"], user_ids["search_near"]]
+        "id", [user_ids["near"], user_ids["search_near"], user_ids["manager"], user_ids["admin"]]
     ).execute()
     enqueue_flyer_published(
         supabase_client,
@@ -63,8 +65,10 @@ def test_flyer_notification_jobs_persist_inbox_without_push(
     )
     result = NotificationJobWorker(supabase_client).run_pending()
     inbox = supabase_client.table("app_notifications").select("user_id").execute().data
-    assert result == {"claimed": 3, "processed": 3, "failed": 0}
-    assert {row["user_id"] for row in inbox} == {user_ids["near"], user_ids["search_near"]}
+    assert result == {"claimed": 5, "processed": 5, "failed": 0}
+    assert {row["user_id"] for row in inbox} == {
+        user_ids["near"], user_ids["search_near"], user_ids["manager"], user_ids["admin"],
+    }
 
 
 def _insert_supermarket(cur, supermarket_id: str) -> None:
@@ -108,12 +112,12 @@ def _configure_profiles(cur, supermarket_id: str, user_ids: dict[str, str]) -> N
     )
     cur.execute(
         """UPDATE public.user_profiles SET role = 'supermarket_manager',
-               managed_supermarket_id = %s, home_lat = 45.4645, home_lng = 9.1905
+               managed_supermarket_id = %s, home_lat = NULL, home_lng = NULL
            WHERE id = %s""",
         (supermarket_id, user_ids["manager"]),
     )
     cur.execute(
-        """UPDATE public.user_profiles SET role = 'admin', home_lat = 45.4645, home_lng = 9.1905
+        """UPDATE public.user_profiles SET role = 'admin', home_lat = NULL, home_lng = NULL
            WHERE id = %s""",
         (user_ids["admin"],),
     )
