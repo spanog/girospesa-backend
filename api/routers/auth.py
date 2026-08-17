@@ -92,6 +92,25 @@ def _signup_user_id(response: object) -> str | None:
     return user_id if isinstance(user_id, str) and user_id else None
 
 
+def _signup_credentials(body: SignupBody) -> dict:
+    display_name = f"{body.first_name.strip()} {body.last_name.strip()}".strip()
+    return {
+        "email": body.email,
+        "password": body.password,
+        "options": {
+            "data": {
+                "display_name": display_name,
+                "first_name": body.first_name,
+                "last_name": body.last_name,
+                "home_address": body.home_address,
+                "home_city": body.home_city,
+                "home_province": body.home_province,
+                "home_postal_code": body.home_postal_code,
+            }
+        },
+    }
+
+
 def _persist_signup_coordinates(sb: object, user_id: str, body: SignupBody) -> None:
     try:
         coords = geocode_address(_signup_address(body))
@@ -111,22 +130,7 @@ def signup_user(body: SignupBody) -> None:
     """Register a new user and persist the initial home coordinates server-side."""
     sb = get_supabase()
     try:
-        response = sb.auth.sign_up(
-            {
-                "email": body.email,
-                "password": body.password,
-                "options": {
-                    "data": {
-                        "first_name": body.first_name,
-                        "last_name": body.last_name,
-                        "home_address": body.home_address,
-                        "home_city": body.home_city,
-                        "home_province": body.home_province,
-                        "home_postal_code": body.home_postal_code,
-                    }
-                },
-            }
-        )
+        response = sb.auth.sign_up(_signup_credentials(body))
     except Exception as exc:
         status_code, detail = _signup_error_response(exc)
         logger.exception("Signup failed for %s", body.email)

@@ -107,6 +107,8 @@ def test_signup_persists_home_coordinates_before_email_confirmation(monkeypatch)
 
     _auth_router.signup_user(_auth_router.SignupBody(**_SIGNUP_BODY))
 
+    signup_data = fake_sb.auth.sign_up.call_args.args[0]["options"]["data"]
+    assert signup_data["display_name"] == "Mario Rossi"
     fake_sb.table.assert_called_once_with("user_profiles")
     fake_sb.table.return_value.update.assert_called_once_with({
         "home_lat": 45.4642,

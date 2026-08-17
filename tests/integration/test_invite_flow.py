@@ -82,6 +82,12 @@ class TestInviteFlowIntegration:
         owner_list,
         current_user,
     ):
+        (
+            supabase_client.table("user_profiles")
+            .update({"display_name": "Mario"})
+            .eq("id", users["owner"]["id"])
+            .execute()
+        )
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             current_user["id"] = users["owner"]["id"]
             create_resp = await client.post(
@@ -101,6 +107,7 @@ class TestInviteFlowIntegration:
         assert invite["status"] == "pending"
         assert invite["invited_user_id"] == users["member"]["id"]
         assert invite["notification"]["kind"] == "list_invite"
+        assert invite["notification"]["body"] == "Mario ti ha invitato a condividere la sua lista"
 
         assert pending_resp.status_code == 200
         assert [row["id"] for row in pending_resp.json()] == [invite["id"]]

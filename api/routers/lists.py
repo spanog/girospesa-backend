@@ -1356,7 +1356,7 @@ async def invite_member_by_email(
     inviter_name = inviter_profile.get("display_name") or "Un utente"
     invite = _insert_list_invite(list_id, user_id, invited_user_id, email)
     title = "Invito lista spesa"
-    body_text = f"{inviter_name} ti ha invitato in {list_row['name']}"
+    body_text = f"{inviter_name} ti ha invitato a condividere la sua lista"
     payload = _invite_payload(list_row["name"], inviter_name, invite["id"], list_id)
     notification = _notify_shared_list_event(
         sb,
