@@ -98,6 +98,50 @@ def test_signup_returns_upstream_error_detail(client, monkeypatch):
     assert response.json() == {"detail": "Password non valida"}
 
 
+def test_signup_persists_home_coordinates_before_email_confirmation(monkeypatch):
+    fake_sb = MagicMock()
+    fake_sb.auth.sign_up.return_value.user.id = "user-1"
+    fake_sb.auth.sign_up.return_value.user.identities = [MagicMock()]
+    monkeypatch.setattr(_auth_router, "get_supabase", lambda: fake_sb)
+    monkeypatch.setattr(_auth_router, "geocode_address", lambda address: (45.4642, 9.1900))
+
+    _auth_router.signup_user(_auth_router.SignupBody(**_SIGNUP_BODY))
+
+    fake_sb.table.assert_called_once_with("user_profiles")
+    fake_sb.table.return_value.update.assert_called_once_with({
+        "home_lat": 45.4642,
+        "home_lng": 9.1900,
+    })
+    fake_sb.table.return_value.update.return_value.eq.assert_called_once_with("id", "user-1")
+
+
+def test_signup_keeps_account_when_geocoding_is_unavailable(monkeypatch):
+    fake_sb = MagicMock()
+    fake_sb.auth.sign_up.return_value.user.id = "user-1"
+    fake_sb.auth.sign_up.return_value.user.identities = [MagicMock()]
+    monkeypatch.setattr(_auth_router, "get_supabase", lambda: fake_sb)
+    monkeypatch.setattr(_auth_router, "geocode_address", lambda address: None)
+
+    _auth_router.signup_user(_auth_router.SignupBody(**_SIGNUP_BODY))
+
+    fake_sb.auth.sign_up.assert_called_once()
+    fake_sb.table.assert_not_called()
+
+
+def test_signup_does_not_update_a_masked_duplicate_account(monkeypatch):
+    fake_sb = MagicMock()
+    fake_sb.auth.sign_up.return_value.user.id = "masked-user"
+    fake_sb.auth.sign_up.return_value.user.identities = []
+    monkeypatch.setattr(_auth_router, "get_supabase", lambda: fake_sb)
+    geocode = MagicMock(return_value=(45.4642, 9.1900))
+    monkeypatch.setattr(_auth_router, "geocode_address", geocode)
+
+    _auth_router.signup_user(_auth_router.SignupBody(**_SIGNUP_BODY))
+
+    geocode.assert_not_called()
+    fake_sb.table.assert_not_called()
+
+
 def test_forgot_password_uses_secret_key_client(client, monkeypatch):
     fake_sb = MagicMock()
     monkeypatch.setattr(_auth_router, "_fresh_supabase_client", lambda: fake_sb)

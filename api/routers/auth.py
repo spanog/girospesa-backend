@@ -13,6 +13,7 @@ from core.config import settings
 from core.database import get_supabase
 from core.session import create_session_token, read_session_token
 from core.supabase_client import create_supabase_client as create_client
+from services.geocoding import geocode_address
 
 _PASSWORD_RESET_TTL_SECONDS = 60 * 60  # 1-hour recovery window
 
@@ -75,11 +76,42 @@ def _signup_error_response(exc: Exception) -> tuple[int, str]:
     return 400, "Registrazione non riuscita. Riprova più tardi."
 
 
+def _signup_address(body: SignupBody) -> str:
+    return (
+        f"{body.home_address}, {body.home_postal_code} "
+        f"{body.home_city} {body.home_province}"
+    )
+
+
+def _signup_user_id(response: object) -> str | None:
+    user = getattr(response, "user", None)
+    user_id = getattr(user, "id", None)
+    identities = getattr(user, "identities", None)
+    if not identities:
+        return None
+    return user_id if isinstance(user_id, str) and user_id else None
+
+
+def _persist_signup_coordinates(sb: object, user_id: str, body: SignupBody) -> None:
+    try:
+        coords = geocode_address(_signup_address(body))
+        if not coords:
+            logger.warning("Signup geocoding returned no location for user %s", user_id)
+            return
+        lat, lng = coords
+        sb.table("user_profiles").update({
+            "home_lat": lat,
+            "home_lng": lng,
+        }).eq("id", user_id).execute()
+    except Exception:
+        logger.exception("Signup geocoding failed for user %s", user_id)
+
+
 def signup_user(body: SignupBody) -> None:
-    """Register a new user via Supabase Auth and trigger profile DB setup."""
+    """Register a new user and persist the initial home coordinates server-side."""
     sb = get_supabase()
     try:
-        sb.auth.sign_up(
+        response = sb.auth.sign_up(
             {
                 "email": body.email,
                 "password": body.password,
@@ -99,6 +131,11 @@ def signup_user(body: SignupBody) -> None:
         status_code, detail = _signup_error_response(exc)
         logger.exception("Signup failed for %s", body.email)
         raise HTTPException(status_code=status_code, detail=detail) from exc
+    user_id = _signup_user_id(response)
+    if user_id:
+        _persist_signup_coordinates(sb, user_id, body)
+    else:
+        logger.info("Signup returned no new user for %s", body.email)
 
 
 @router.post("/signup", status_code=201)
