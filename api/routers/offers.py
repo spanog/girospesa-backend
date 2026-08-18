@@ -96,6 +96,7 @@ def _supermarket_address(supermarket: dict, fallback_name: str | None) -> str | 
 async def list_public_offers(
     q: str | None = Query(None),
     category: str | None = Query(None),
+    subcategory: str | None = Query(None),
     supermarket_id: str | None = Query(None),
     supermarket_ids: list[str] = Query(default=[]),
     limit: int = Query(20, ge=1, le=100),
@@ -130,6 +131,8 @@ async def list_public_offers(
         query = query.ilike("name", f"%{q.strip()}%")
     if category:
         query = query.eq("category", category)
+    if subcategory:
+        query = query.eq("subcategory", subcategory)
     if supermarket_id:
         query = query.eq("supermarket_id", supermarket_id)
     if supermarket_ids:

@@ -175,6 +175,30 @@ def test_list_public_offers_does_not_expose_a_sort_query_parameter():
     assert "sort" not in {parameter["name"] for parameter in parameters}
 
 
+@pytest.mark.asyncio
+async def test_list_public_offers_filters_by_subcategory():
+    sb = MagicMock()
+    query = sb.table.return_value.select.return_value.eq.return_value.eq.return_value
+    query.in_.return_value.eq.return_value.order.return_value.execute.return_value = (
+        MagicMock(data=[])
+    )
+
+    with (
+        patch("api.routers.offers.get_supabase", return_value=sb),
+        patch("api.routers.offers.read_guest_location", return_value=(38.4, 16.1, 10)),
+        patch(
+            "api.routers.offers.nearby_supermarket_distances",
+            return_value={"sup-1": 1.2},
+        ),
+    ):
+        response = await _get("/offers?subcategory=Acqua%20e%20Bibite")
+
+    assert response.status_code == 200
+    query.in_.return_value.eq.assert_called_once_with(
+        "subcategory", "Acqua e Bibite"
+    )
+
+
 def _published_offer(
     *,
     offer_id: str,
