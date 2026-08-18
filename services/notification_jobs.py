@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from core.config import settings
 from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
@@ -23,6 +24,8 @@ STATUS_PENDING = "pending"
 STATUS_PROCESSING = "processing"
 DEFAULT_LIMIT = 50
 RETRY_DELAY_MINUTES = 5
+_ROME_TZ = ZoneInfo("Europe/Rome")
+_FLYER_NOTIFICATION_TIME = time(hour=10)
 
 
 def enqueue_flyer_published(
@@ -32,6 +35,7 @@ def enqueue_flyer_published(
     supermarket_id: str,
     supermarket_name: str,
     products_count: int,
+    valid_from: str | None = None,
 ) -> None:
     _enqueue(
         sb,
@@ -43,6 +47,7 @@ def enqueue_flyer_published(
             "supermarket_name": supermarket_name,
             "products_count": products_count,
         },
+        available_at=_flyer_notification_available_at(valid_from),
     )
 
 
@@ -52,7 +57,22 @@ def _enqueue_recipient(sb: object, payload: dict[str, Any], user_id: str) -> Non
         kind=JOB_FLYER_PUBLISHED_RECIPIENT,
         idempotency_key=f"flyer-published:{payload['flyer_id']}:{user_id}",
         payload={**payload, "user_id": user_id},
+        available_at=datetime.now(UTC),
     )
+
+
+def _supermarket_notification_location(sb: object, supermarket_id: str) -> str | None:
+    response = sb.table("supermarkets").select(  # type: ignore[union-attr]
+        "address, city"
+    ).eq("id", supermarket_id).maybe_single().execute()
+    supermarket = response.data if response else None
+    if not isinstance(supermarket, dict):
+        return None
+    address = str(supermarket.get("address") or "").strip()
+    city = str(supermarket.get("city") or "").strip()
+    if address and city:
+        return f"{address}, {city}"
+    return address or city or None
 
 
 def _enqueue(
@@ -61,6 +81,7 @@ def _enqueue(
     kind: str,
     idempotency_key: str,
     payload: dict[str, Any],
+    available_at: datetime,
 ) -> None:
     sb.table("notification_jobs").upsert(  # type: ignore[union-attr]
         {
@@ -68,12 +89,43 @@ def _enqueue(
             "idempotency_key": idempotency_key,
             "payload": payload,
             "status": STATUS_PENDING,
-            "available_at": _now_iso(),
+            "available_at": available_at.astimezone(UTC).isoformat(),
             "updated_at": _now_iso(),
         },
         on_conflict="idempotency_key",
         ignore_duplicates=True,
     ).execute()
+
+
+def reschedule_flyer_published(
+    sb: object,
+    *,
+    flyer_id: str,
+    valid_from: str | None,
+) -> None:
+    update = {
+        "available_at": _flyer_notification_available_at(valid_from).isoformat(),
+        "updated_at": _now_iso(),
+    }
+    sb.table("notification_jobs").update(  # type: ignore[union-attr]
+        update
+    ).eq("kind", JOB_FLYER_PUBLISHED).eq(
+        "idempotency_key", f"flyer-published:{flyer_id}"
+    ).in_("status", [STATUS_PENDING, STATUS_FAILED]).execute()
+
+
+def _flyer_notification_available_at(
+    valid_from: str | None,
+    now: datetime | None = None,
+) -> datetime:
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    if valid_from is None:
+        return current
+    start = date.fromisoformat(valid_from)
+    scheduled = datetime.combine(
+        start, _FLYER_NOTIFICATION_TIME, _ROME_TZ
+    ).astimezone(UTC)
+    return max(current, scheduled)
 
 
 class NotificationJobWorker:
@@ -119,6 +171,8 @@ class NotificationJobWorker:
 
     def _dispatch(self, job: dict[str, Any], sb: object) -> None:
         payload = job.get("payload") or {}
+        if not _flyer_is_notification_eligible(sb, str(payload.get("flyer_id", ""))):
+            return
         if job.get("kind") == JOB_FLYER_PUBLISHED:
             self._materialize_recipients(sb, payload)
             return
@@ -128,6 +182,12 @@ class NotificationJobWorker:
         raise ValueError(f"Unsupported notification job kind: {job.get('kind')}")
 
     def _materialize_recipients(self, sb: object, payload: dict[str, Any]) -> None:
+        recipient_payload = {
+            **payload,
+            "supermarket_location": _supermarket_notification_location(
+                sb, str(payload["supermarket_id"])
+            ),
+        }
         response = sb.rpc(  # type: ignore[union-attr]
             "flyer_notification_recipients",
             {"target_supermarket_id": payload["supermarket_id"]},
@@ -135,7 +195,7 @@ class NotificationJobWorker:
         for recipient in response.data or []:
             user_id = recipient.get("user_id")
             if user_id:
-                _enqueue_recipient(sb, payload, str(user_id))
+                _enqueue_recipient(sb, recipient_payload, str(user_id))
 
     def _claim_jobs(self, kind: str, limit: int) -> list[dict[str, Any]]:
         if has_direct_postgres():
@@ -228,6 +288,23 @@ def _new_service_client() -> object:
 
 def _attempts_left(job: dict[str, Any]) -> bool:
     return int(job.get("attempts") or 0) < int(job.get("max_attempts") or 5)
+
+
+def _flyer_is_notification_eligible(sb: object, flyer_id: str) -> bool:
+    response = sb.table("flyers").select(  # type: ignore[union-attr]
+        "status, is_public, valid_from, valid_to"
+    ).eq("id", flyer_id).maybe_single().execute()
+    flyer = response.data if response else None
+    if not isinstance(flyer, dict):
+        return False
+    if flyer.get("status") != "done" or not flyer.get("is_public"):
+        return False
+    today = datetime.now(_ROME_TZ).date()
+    valid_from = flyer.get("valid_from")
+    valid_to = flyer.get("valid_to")
+    return (not valid_from or date.fromisoformat(str(valid_from)) <= today) and (
+        not valid_to or date.fromisoformat(str(valid_to)) >= today
+    )
 
 
 def _now_iso() -> str:

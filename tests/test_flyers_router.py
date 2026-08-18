@@ -999,6 +999,10 @@ class TestUpdateFlyerValidity:
         flyer_targets_table.select.return_value.eq.return_value.execute.return_value = MagicMock(
             data=[]
         )
+        notification_jobs_table = MagicMock()
+        notification_jobs_table.update.return_value.eq.return_value.eq.return_value.in_.return_value.execute.return_value = (
+            MagicMock(data=[])
+        )
 
         def _dispatch(table_name: str) -> MagicMock:
             if table_name == "flyers":
@@ -1007,6 +1011,8 @@ class TestUpdateFlyerValidity:
                 return offers_table
             if table_name == "flyer_targets":
                 return flyer_targets_table
+            if table_name == "notification_jobs":
+                return notification_jobs_table
             raise AssertionError(f"unexpected table {table_name}")
 
         sb.table.side_effect = _dispatch
@@ -1023,6 +1029,7 @@ class TestUpdateFlyerValidity:
         assert resp.json()["valid_to"] == "2026-05-10"
         assert flyers_table.update.call_count == 2
         assert offers_table.update.call_count == 2
+        assert notification_jobs_table.update.call_count == 1
         assert all(
             call.args[0] == {"valid_from": "2026-05-01", "valid_to": "2026-05-10"}
             for call in flyers_table.update.call_args_list + offers_table.update.call_args_list

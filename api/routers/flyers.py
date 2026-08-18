@@ -24,7 +24,7 @@ from core.config import settings
 from core.database import get_supabase
 from core.guest_location import GUEST_LOCATION_COOKIE, guest_location_required, read_guest_location
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
-from services.notification_jobs import enqueue_flyer_published
+from services.notification_jobs import enqueue_flyer_published, reschedule_flyer_published
 from services.product_format import ProductFormat, build_format_bundle
 from services.flyer_preview import render_flyer_preview
 from services.offer_visibility import apply_current_offer_window
@@ -517,6 +517,7 @@ def _upsert_published_target_flyer(
             supermarket_id=target_supermarket_id,
             supermarket_name=target_supermarket_name,
             products_count=products_count,
+            valid_from=source_flyer.get("valid_from"),
         )
     return flyer_id
 
@@ -917,6 +918,11 @@ def _sync_flyer_validity(
             continue
         sb.table("flyers").update(flyer_update).eq("id", published_flyer_id).execute()
         sb.table("offers").update(flyer_update).eq("flyer_id", published_flyer_id).execute()
+        reschedule_flyer_published(
+            sb,
+            flyer_id=published_flyer_id,
+            valid_from=valid_from,
+        )
 
 
 def _upload_product_image_to_storage(
@@ -1870,6 +1876,7 @@ async def confirm_offers(
                     supermarket_id=target_supermarket_id,
                     supermarket_name=target_supermarket_name,
                     products_count=source_offer_count,
+                    valid_from=flyer.get("valid_from"),
                 )
         else:
             sb.table("flyers").update(

@@ -6,7 +6,7 @@ The backend runs scheduled background jobs via APScheduler (`AsyncIOScheduler`),
 
 - `flyer_cleanup` runs daily at 00:00 Europe/Rome and deletes offers linked to expired flyers, while keeping flyer rows/files for admin history.
 - `purchased_items_cleanup` runs daily at 00:00 Europe/Rome and removes purchased list items from previous Rome days, resetting the "Acquistati oggi" section automatically without touching purchase history.
-- `notification_jobs` runs every minute and drains queued publication notifications created by offer confirmation or target-publication sync. Parent jobs materialize every admin, the manager assigned to the published supermarket, and nearby customers; child deliveries run in a bounded thread pool and are retried independently before moving to `dead`.
+- `notification_jobs` runs every minute and drains queued publication notifications created by offer confirmation or target-publication sync. For a future flyer, the parent job waits until 10:00 `Europe/Rome` on its `valid_from`; changing that date reschedules only jobs not yet delivered. Parent jobs materialize every admin, the manager assigned to the published supermarket, and nearby customers; child deliveries run in a bounded thread pool and are retried independently before moving to `dead`.
 
 ### Note storico acquisti
 

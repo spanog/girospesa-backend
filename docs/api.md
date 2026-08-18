@@ -65,7 +65,7 @@ L'estrazione salva subito le bozze di ogni chunk riuscito. In caso di errore, `e
 | `POST` | `/push/native/subscribe` | Autenticato | Registra token FCM. |
 | `POST` | `/ops/cron/notifications` | Ops secret | Drena i job di notifica. |
 
-La conferma di un volantino accoda un job idempotente `flyer_published` e risponde senza attendere consegne. Il worker materializza job figli per tutti gli admin, per il manager della sede pubblicata e per i customer nel raggio della loro posizione di ricerca o casa, crea lo storico in `app_notifications`, invia Web Push/FCM solo con notifiche account abilitate e collega il tap a `/offerte` con il supermercato nel query string.
+La conferma di un volantino accoda un job idempotente `flyer_published` e risponde senza attendere consegne. Se `valid_from` è futura, il job viene eseguito alle 10:00 `Europe/Rome` di quel giorno; senza data, viene eseguito subito. Il worker ricontrolla che il volantino sia ancora pubblico e valido, poi materializza job figli per tutti gli admin, per il manager della sede pubblicata e per i customer nel raggio della loro posizione di ricerca o casa, crea lo storico in `app_notifications`, invia Web Push/FCM solo con notifiche account abilitate e collega il tap a `/volantini?supermarket_id=<UUID-sede>`.
 
 ## Altri endpoint
 

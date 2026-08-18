@@ -214,10 +214,13 @@ def _persist_idempotent_notification(
     return False
 
 
-def _flyer_published_body(products_count: int) -> str:
-    if products_count == 1:
-        return "1 nuova offerta disponibile"
-    return f"{products_count} nuove offerte disponibili"
+def _flyer_published_body(
+    products_count: int,
+    supermarket_name: str,
+    supermarket_location: str | None,
+) -> str:
+    location = f", {supermarket_location}" if supermarket_location else ""
+    return f"{products_count} nuove offerte presso {supermarket_name}{location}"
 
 
 def send_push_notification(
@@ -394,12 +397,15 @@ def deliver_public_flyer_published_to_recipient(
     supermarket_name: str,
     products_count: int,
     user_id: str,
+    supermarket_location: str | None = None,
 ) -> None:
     profile = _notification_profile(sb, user_id)
     if not profile:
         return
-    title = f"Nuovo volantino da {supermarket_name}"
-    body = _flyer_published_body(products_count)
+    title = "Nuovo volantino"
+    body = _flyer_published_body(
+        products_count, supermarket_name, supermarket_location
+    )
     should_push = _persist_idempotent_notification(
         sb,
         user_id=user_id,

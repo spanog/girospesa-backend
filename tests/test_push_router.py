@@ -470,9 +470,13 @@ class TestDeliverPublicFlyerPublished:
             deliver_public_flyer_published_to_recipient(
                 sb, flyer_id="flyer-1", supermarket_id="super-1",
                 supermarket_name="Coop", products_count=12, user_id="customer-1",
+                supermarket_location="Via Roma 1, Milano",
             )
 
         sb.table.return_value.insert.assert_called_once()
+        notification = sb.table.return_value.insert.call_args.args[0]
+        assert notification["title"] == "Nuovo volantino"
+        assert notification["body"] == "12 nuove offerte presso Coop, Via Roma 1, Milano"
         send.assert_not_called()
 
     def test_sends_push_when_notifications_are_enabled(self):
@@ -486,9 +490,12 @@ class TestDeliverPublicFlyerPublished:
             deliver_public_flyer_published_to_recipient(
                 sb, flyer_id="flyer-1", supermarket_id="super-1",
                 supermarket_name="Coop", products_count=1, user_id="customer-1",
+                supermarket_location="Milano",
             )
 
         send.assert_called_once()
+        assert send.call_args.kwargs["title"] == "Nuovo volantino"
+        assert send.call_args.kwargs["body"] == "1 nuove offerte presso Coop, Milano"
         payload = send.call_args.kwargs["data"]
         assert payload["url"] == "/volantini?supermarket_id=super-1"
         assert payload["flyer_id"] == "flyer-1"
