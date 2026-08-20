@@ -8,6 +8,8 @@ from __future__ import annotations
 import argparse
 from typing import Iterable
 
+from storage3.utils import StorageException
+
 from core.database import get_supabase
 
 
@@ -31,8 +33,11 @@ def supermarket_logos(sb) -> Iterable[dict]:
     return sb.table("supermarkets").select("id, logo_url").execute().data or []
 
 
-def refresh_logo(bucket, path: str, mime_type: str) -> None:
-    content = bytes(bucket.download(path))
+def refresh_logo(bucket, path: str, mime_type: str) -> bool:
+    try:
+        content = bytes(bucket.download(path))
+    except StorageException:
+        return False
     if not content:
         raise RuntimeError(f"Logo is empty: {path}")
     bucket.update(
@@ -43,6 +48,7 @@ def refresh_logo(bucket, path: str, mime_type: str) -> None:
             "cache-control": LOGO_CACHE_CONTROL,
         },
     )
+    return True
 
 
 def main() -> None:
@@ -58,8 +64,8 @@ def main() -> None:
         if not path or not mime_type:
             continue
         print(f"{supermarket['id']}: {path}")
-        if args.apply:
-            refresh_logo(bucket, path, mime_type)
+        if args.apply and not refresh_logo(bucket, path, mime_type):
+            print(f"{supermarket['id']}: skipped missing object")
 
 
 if __name__ == "__main__":
