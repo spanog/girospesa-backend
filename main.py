@@ -32,6 +32,7 @@ from api.routers import (
 )
 from core.config import settings
 from core.logging_setup import configure_logging
+from core.request_timing import RequestTimingMiddleware
 from services.flyer_cleanup import FlyerCleanupService
 from services.extraction_startup_recovery import ExtractionStartupRecoveryService
 from services.notification_jobs import NotificationJobWorker
@@ -160,6 +161,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestTimingMiddleware)
 
 app.include_router(auth.router)
 app.include_router(guest_location.router, prefix="/guest-location", tags=["guest-location"])

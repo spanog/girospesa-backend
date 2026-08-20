@@ -9,6 +9,8 @@ from PIL import Image
 
 _BOX_GRID_SIZE = 1000
 _PACKSHOT_RENDER_SCALE = 2
+_PACKSHOT_MAX_SIDE = 640
+_PACKSHOT_WEBP_QUALITY = 82
 
 
 def normalized_box(value: object) -> tuple[int, int, int, int] | None:
@@ -47,7 +49,7 @@ def _render_crops(image: Image.Image, boxes: Mapping[str, object]) -> dict[str, 
             continue
         crop = image.crop(_pixel_box(image.size, expanded_box(coordinates)))
         try:
-            rendered[key] = _png_bytes(crop)
+            rendered[key] = _webp_bytes(crop)
         finally:
             crop.close()
     return rendered
@@ -88,7 +90,8 @@ def expanded_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     return max(0, y1 - vertical), max(0, x1 - horizontal), min(1000, y2 + vertical), min(1000, x2 + horizontal)
 
 
-def _png_bytes(image: Image.Image) -> bytes:
+def _webp_bytes(image: Image.Image) -> bytes:
+    image.thumbnail((_PACKSHOT_MAX_SIDE, _PACKSHOT_MAX_SIDE), Image.Resampling.LANCZOS)
     output = BytesIO()
-    image.save(output, format="PNG", optimize=True)
+    image.save(output, format="WEBP", quality=_PACKSHOT_WEBP_QUALITY, method=6)
     return output.getvalue()

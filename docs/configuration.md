@@ -93,6 +93,7 @@ Flow identica in locale, test, prod: cambia solo valore env.
 
 - In locale e ambienti non-production, il backend logga a livello `INFO`.
 - In produzione (`ENVIRONMENT=production`), il root logger sale a `WARNING`, mentre `uvicorn.access` viene ridotto per evitare rumore nei log applicativi.
+- Il middleware di timing aggiunge sempre `X-Request-ID` e `Server-Timing: app;dur=...` alla risposta. Logga solo richieste oltre 1000 ms con route parametrica, status, durata, dimensione dichiarata e request-id; non registra query string, JWT, email, coordinate o URL Storage.
 - Gli errori dei contact form (`POST /contact-requests`) vengono loggati esplicitamente come `warning` per misconfigurazioni e `exception` per failure SMTP, cosi' i log `Render` mostrano la causa reale del `500`.
 
 ---

@@ -17,7 +17,7 @@
 |--------|-------------|-------|----------------|---------|
 | `avatars` | `{user_id}.{jpg\|png\|webp}` | Foto profilo utente | 5 MB | URL pubblico |
 | `flyers` | `{user_id}/{uuid}.{pdf\|jpg}` e `previews/{flyer_id}.webp` | Volantini caricati e thumbnail WebP server-side | 50 MB per file sorgente | Privato, accesso backend/service role |
-| `product-images` | `draft-offers/{offer_id}/auto-packshot.png` o `draft-offers/{offer_id}/{uuid}.{ext}` | Crop estratti dal volantino e immagini caricate in review | — | URL pubblico |
+| `product-images` | `draft-offers/{offer_id}/{uuid}.webp`, `migrated-offers/{offer_id}/{sha256}.webp` o `draft-offers/{offer_id}/{uuid}.{ext}` | Crop estratti dal volantino e immagini caricate in review | `max-age=31536000, immutable` per i nuovi asset | URL pubblico |
 
 I bucket pubblici non espongono listing anonimo via `storage.objects`: client e frontend devono usare solo URL diretti `/storage/v1/object/public/...`.
 

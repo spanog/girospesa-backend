@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-import mimetypes
 import uuid
-from urllib.parse import quote
 import hashlib
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from pydantic import BaseModel, Field
 
@@ -686,8 +684,9 @@ def _file_type(content_type: str) -> str:
     return "pdf" if content_type == "application/pdf" else "image"
 
 
-def _public_flyer_url(sb, storage_path: str) -> str:
-    return sb.storage.from_("flyers").get_public_url(storage_path)
+def _flyer_storage_reference(storage_path: str) -> str:
+    """Persist a bucket-relative reference; the flyers bucket is private."""
+    return storage_path
 
 
 def _remove_flyer_object(sb, storage_path: str) -> None:
@@ -698,10 +697,17 @@ def _remove_flyer_object(sb, storage_path: str) -> None:
 
 
 def _flyer_storage_path(flyer: dict) -> str | None:
-    prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/flyers/"
-    file_url = flyer.get("file_url") or ""
-    storage_path = file_url.removeprefix(prefix)
-    return storage_path if storage_path and storage_path != file_url else None
+    file_reference = str(flyer.get("file_url") or "")
+    if file_reference and "://" not in file_reference:
+        return file_reference
+    markers = (
+        "/storage/v1/object/public/flyers/",
+        "/storage/v1/object/sign/flyers/",
+    )
+    for marker in markers:
+        if marker in file_reference:
+            return file_reference.split(marker, maxsplit=1)[1].split("?", maxsplit=1)[0]
+    return None
 
 
 def _save_flyer_preview(
@@ -936,7 +942,11 @@ def _upload_product_image_to_storage(
     sb.storage.from_("product-images").upload(
         path=storage_path,
         file=file_content,
-        file_options={"content-type": content_type, "upsert": "true"},
+        file_options={
+            "content-type": content_type,
+            "cache-control": "31536000",
+            "upsert": "false",
+        },
     )
     return sb.storage.from_("product-images").get_public_url(storage_path)
 
@@ -1122,18 +1132,9 @@ async def list_interactive_offers(flyer_id: str) -> dict[str, list[dict]]:
 
 
 _SIGNED_URL_TTL = 60  # seconds
+_FLYER_FILE_URL_TTL = 15 * 60
 PUBLIC_PREVIEW_CACHE_CONTROL = "public, max-age=86400, s-maxage=86400, stale-while-revalidate=86400"
 PRIVATE_PREVIEW_CACHE_CONTROL = "private, no-store"
-
-
-def _inline_flyer_response(flyer: dict, content: bytes, flyer_id: str) -> Response:
-    filename = flyer.get("file_name") or f"{flyer_id}.pdf"
-    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    return Response(
-        content=content,
-        media_type=media_type,
-        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(filename)}"},
-    )
 
 
 def _flyer_preview_response(content: bytes, is_public: bool) -> Response:
@@ -1147,23 +1148,64 @@ def _flyer_preview_response(content: bytes, is_public: bool) -> Response:
     )
 
 
+def _assert_flyer_file_url_access(sb, flyer: dict, user_id: str | None) -> None:
+    if _is_public_flyer_file(sb, flyer):
+        if _is_flyer_current(flyer, datetime.now(timezone.utc).date()):
+            return
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+    _private_flyer_download_access(sb, flyer, user_id)
+
+
+def _signed_flyer_file_url(sb, flyer: dict) -> str:
+    storage_path = _flyer_storage_path(flyer)
+    if storage_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Cannot resolve flyer storage path",
+        )
+    signed = sb.storage.from_("flyers").create_signed_url(
+        storage_path,
+        expires_in=_FLYER_FILE_URL_TTL,
+    )
+    return signed["signedURL"]
+
+
+def _find_flyer_or_404(sb, flyer_id: str) -> dict:
+    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
+    return result.data
+
+
 @router.get("/{flyer_id}/file")
 async def get_flyer_file(
     flyer_id: str,
     user_id: str | None = Depends(get_optional_user_id),
 ) -> Response:
-    """Return the flyer file as an inline representation."""
+    """Redirect legacy callers to Storage; never stream a file through the API."""
     sb = get_supabase()
-    result = sb.table("flyers").select("*").eq("id", flyer_id).maybe_single().execute()
-    if not result or not result.data:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
-    flyer = result.data
-    _assert_flyer_file_access(sb, flyer, user_id)
-    storage_path = _flyer_storage_path(flyer)
-    if storage_path is None:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Cannot resolve flyer storage path")
-    content = bytes(sb.storage.from_("flyers").download(storage_path))
-    return _inline_flyer_response(flyer, content, flyer_id)
+    flyer = _find_flyer_or_404(sb, flyer_id)
+    _assert_flyer_file_url_access(sb, flyer, user_id)
+    return RedirectResponse(
+        _signed_flyer_file_url(sb, flyer),
+        status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/{flyer_id}/file-url")
+async def get_flyer_file_url(
+    flyer_id: str,
+    user_id: str | None = Depends(get_optional_user_id),
+) -> JSONResponse:
+    """Issue a short-lived direct Storage URL after checking flyer visibility."""
+    sb = get_supabase()
+    flyer = _find_flyer_or_404(sb, flyer_id)
+    _assert_flyer_file_url_access(sb, flyer, user_id)
+    return JSONResponse(
+        {"file_url": _signed_flyer_file_url(sb, flyer), "expires_in": _FLYER_FILE_URL_TTL},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/{flyer_id}/preview")
@@ -1268,7 +1310,7 @@ async def complete_flyer_upload(
             user_id=user_id,
             requested_ids=requested_ids,
             file_hash=file_hash,
-            file_url=_public_flyer_url(sb, payload.storage_path),
+            file_url=_flyer_storage_reference(payload.storage_path),
             file_type=_file_type(payload.content_type),
             file_name=payload.file_name,
             valid_from=payload.valid_from,

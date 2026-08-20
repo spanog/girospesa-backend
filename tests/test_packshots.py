@@ -52,6 +52,11 @@ def test_packshot_upload_populates_empty_draft_image() -> None:
     ExtractionService()._upload_packshot(sb, {"id": "offer-1"}, b"png")
 
     sb.storage.from_.return_value.upload.assert_called_once()
+    assert sb.storage.from_.return_value.upload.call_args.kwargs["file_options"] == {
+        "content-type": "image/webp",
+        "cache-control": "31536000",
+        "upsert": "false",
+    }
     sb.table.return_value.update.assert_called_once_with({"image_url": "https://storage.test/packshot.png"})
 
 
@@ -81,3 +86,14 @@ def test_page_packshots_render_page_once_for_multiple_crops() -> None:
 
     assert render.call_count == 1
     assert set(crops) == {"one", "two"}
+
+
+def test_packshot_bytes_are_webp_and_bounded_to_640_pixels() -> None:
+    page = Image.new("RGB", (2_000, 1_000), color="green")
+
+    with patch("services.extraction.packshots._render_page", return_value=page):
+        image_bytes = render_page_packshots(b"%PDF", 1, {"one": [0, 0, 1000, 1000]})["one"]
+
+    with Image.open(__import__("io").BytesIO(image_bytes)) as rendered:
+        assert rendered.format == "WEBP"
+        assert max(rendered.size) == 640

@@ -22,6 +22,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 import time
+import uuid
 from typing import Callable
 
 import requests
@@ -49,6 +50,16 @@ _FLYER_SELECT = (
     "id, file_url, file_name, supermarket_id, supermarket_name, valid_from, valid_to, "
     "user_id, status, extraction_metadata"
 )
+
+
+def _flyer_storage_path(file_reference: str) -> str | None:
+    if file_reference and "://" not in file_reference:
+        return file_reference
+    marker = "/storage/v1/object/public/flyers/"
+    if marker not in file_reference:
+        return None
+    return file_reference.split(marker, maxsplit=1)[1].split("?", maxsplit=1)[0]
+
 
 class ExtractionService:
     def __init__(
@@ -518,9 +529,15 @@ class ExtractionService:
         if not image:
             return
         try:
-            path = f"draft-offers/{offer['id']}/auto-packshot.png"
+            path = f"draft-offers/{offer['id']}/{uuid.uuid4()}.webp"
             sb.storage.from_("product-images").upload(
-                path=path, file=image, file_options={"content-type": "image/png", "upsert": "true"}
+                path=path,
+                file=image,
+                file_options={
+                    "content-type": "image/webp",
+                    "cache-control": "31536000",
+                    "upsert": "false",
+                },
             )
             url = sb.storage.from_("product-images").get_public_url(path)
             sb.table("offers").update({"image_url": url}).eq("id", offer["id"]).execute()
@@ -857,9 +874,8 @@ class ExtractionService:
 
     def _download_file(self, sb: object, file_url: str) -> bytes:
         # flyers bucket is private — use storage SDK (service role) instead of HTTP GET
-        prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/flyers/"
-        storage_path = file_url.removeprefix(prefix)
-        if storage_path == file_url:
+        storage_path = _flyer_storage_path(file_url)
+        if storage_path is None:
             # fallback: signed-URL path or unknown format — try HTTP
             resp = requests.get(file_url, timeout=30)
             resp.raise_for_status()

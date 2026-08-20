@@ -1216,32 +1216,82 @@ class TestUpdateFlyerTargets:
 
 
 @pytest.mark.asyncio
-async def test_public_flyer_file_is_served_inline():
+async def test_public_flyer_file_url_is_direct_storage_and_never_downloaded_by_api():
     sb = MagicMock()
     flyer_result = MagicMock()
     flyer_result.data = {
         "id": "flyer-1",
-        "file_name": "volantino luglio.pdf",
-        "file_type": "pdf",
+        "is_public": True,
+        "status": "done",
+        "valid_from": "2020-01-01",
+        "valid_to": "2099-12-31",
+        "file_url": "user/flyer.pdf",
     }
     sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = flyer_result
-    sb.storage.from_.return_value.download.return_value = _SMALL_PDF
+    sb.storage.from_.return_value.create_signed_url.return_value = {
+        "signedURL": "https://storage.example.com/signed/flyer.pdf"
+    }
 
     with (
         patch("api.routers.flyers.get_supabase", return_value=sb),
-        patch("api.routers.flyers._assert_flyer_file_access"),
-        patch("api.routers.flyers._flyer_storage_path", return_value="user/flyer.pdf"),
+        patch("api.routers.flyers._has_confirmed_offers", return_value=True),
     ):
         resp = await _get(
-            "/flyers/flyer-1/file",
+            "/flyers/flyer-1/file-url",
             {_flyers_module.get_optional_user_id: lambda: None},
         )
 
     assert resp.status_code == 200
-    assert resp.content == _SMALL_PDF
-    assert resp.headers["content-type"] == "application/pdf"
-    assert resp.headers["content-disposition"] == "inline; filename*=UTF-8''volantino%20luglio.pdf"
-    sb.storage.from_.return_value.download.assert_called_once_with("user/flyer.pdf")
+    assert resp.json() == {
+        "file_url": "https://storage.example.com/signed/flyer.pdf",
+        "expires_in": 900,
+    }
+    assert resp.headers["cache-control"] == "no-store"
+    sb.storage.from_.return_value.create_signed_url.assert_called_once_with(
+        "user/flyer.pdf", expires_in=900
+    )
+    sb.storage.from_.return_value.download.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_expired_public_flyer_file_url_is_not_issued():
+    sb = MagicMock()
+    result = MagicMock(data={
+        "id": "flyer-1",
+        "is_public": True,
+        "status": "done",
+        "valid_from": "2000-01-01",
+        "valid_to": "2000-01-02",
+        "file_url": "user/flyer.pdf",
+    })
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = result
+
+    with (
+        patch("api.routers.flyers.get_supabase", return_value=sb),
+        patch("api.routers.flyers._has_confirmed_offers", return_value=True),
+    ):
+        resp = await _get("/flyers/flyer-1/file-url")
+
+    assert resp.status_code == 404
+    sb.storage.from_.return_value.create_signed_url.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_draft_flyer_file_url_is_denied_to_anonymous_users():
+    sb = MagicMock()
+    result = MagicMock(data={
+        "id": "flyer-1",
+        "is_public": False,
+        "status": "done",
+        "file_url": "user/flyer.pdf",
+    })
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = result
+
+    with patch("api.routers.flyers.get_supabase", return_value=sb):
+        resp = await _get("/flyers/flyer-1/file-url")
+
+    assert resp.status_code == 403
+    sb.storage.from_.return_value.create_signed_url.assert_not_called()
 
 
 def test_public_flyer_representation_hides_storage_url():

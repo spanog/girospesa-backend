@@ -31,7 +31,8 @@ I client non contattano il provider di geocoding: il backend ne mantiene configu
 | `GET` | `/flyers/targets` | Admin/manager | Sedi selezionabili nella gestione volantini: tutte le sedi attive per admin, solo sedi assegnate per gestore. |
 | `GET` | `/flyers` | Admin/manager | Elenco volantini in gestione. |
 | `GET` | `/flyers/{flyer_id}` | Admin/manager | Dettaglio e stato di estrazione. |
-| `GET` | `/flyers/{flyer_id}/file` | Pubblico se volantino pubblico e confermato; altrimenti admin/manager | Restituisce la rappresentazione binaria del volantino con disposition `inline`; il client non riceve URL Supabase. |
+| `GET` | `/flyers/{flyer_id}/file-url` | Pubblico se volantino pubblico, corrente e confermato; altrimenti admin/manager autorizzato | Restituisce `{ file_url, expires_in }` con URL Storage firmato per 15 minuti e `Cache-Control: no-store`; il PDF non passa dal backend. |
+| `GET` | `/flyers/{flyer_id}/file` | Stesso accesso di `/file-url` | Redirect di compatibilità all'URL Storage firmato; non restituisce byte PDF dal backend. |
 | `GET` | `/flyers/{flyer_id}/preview` | Stesso accesso del download | Restituisce la thumbnail WebP tramite backend; le preview pubbliche sono cacheabili, senza URL Supabase esposto. Per file storici la genera e persiste alla prima richiesta. |
 | `GET` | `/flyers/{flyer_id}/preview-url` | Stesso accesso del download | Restituisce URL firmato breve della thumbnail WebP per workflow amministrativi privati. |
 | `POST` | `/flyers/upload-url` | Admin/manager | Crea upload firmato per il bucket privato `flyers`. |
