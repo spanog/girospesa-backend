@@ -1,3 +1,4 @@
+import hashlib
 import re
 from typing import Annotated
 
@@ -27,6 +28,7 @@ class SupermarketUpdate(BaseModel):
 ALLOWED_LOGO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_LOGO_SIZE = 2 * 1024 * 1024  # 2 MB
 LOGO_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+LOGO_CACHE_CONTROL = "31536000"
 
 
 def _nearby_supermarkets(sb, lat: float, lng: float, max_distance_km: float) -> list[dict]:
@@ -107,15 +109,23 @@ async def list_supermarkets(
     return []
 
 
+def _logo_storage_path(sm_id: str, logo_content: bytes, content_type: str) -> str:
+    digest = hashlib.sha256(logo_content).hexdigest()
+    return f"{sm_id}/{digest}.{LOGO_EXT[content_type]}"
+
+
 def _upload_logo(sb, sm_id: str, logo_content: bytes, content_type: str) -> str:
-    """Upload logo to storage and return public URL. Raises HTTP 500 on failure."""
-    ext = LOGO_EXT[content_type]
-    storage_path = f"{sm_id}.{ext}"
+    """Upload an immutable logo asset and return its public URL."""
+    storage_path = _logo_storage_path(sm_id, logo_content, content_type)
     try:
         sb.storage.from_("logos").upload(
             path=storage_path,
             file=logo_content,
-            file_options={"content-type": content_type, "upsert": "true"},
+            file_options={
+                "content-type": content_type,
+                "cache-control": LOGO_CACHE_CONTROL,
+                "upsert": "true",
+            },
         )
     except Exception:
         raise HTTPException(
@@ -252,23 +262,13 @@ async def update_supermarket_logo(
     sb = get_supabase()
     result = (
         sb.table("supermarkets")
-        .select("id, logo_url")
+        .select("id")
         .eq("id", supermarket_id)
         .maybe_single()
         .execute()
     )
     if not result or not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Supermarket not found")
-
-    old_logo_url = result.data.get("logo_url")
-    if old_logo_url:
-        prefix = f"{settings.supabase_url.rstrip('/')}/storage/v1/object/public/logos/"
-        old_path = old_logo_url.removeprefix(prefix)
-        if old_path != old_logo_url:
-            try:
-                sb.storage.from_("logos").remove([old_path])
-            except Exception:
-                pass
 
     logo_url = _upload_logo(sb, supermarket_id, logo_content, logo.content_type)
     updated = (

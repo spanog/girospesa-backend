@@ -22,6 +22,8 @@ L'abbandono di una lista condivisa crea subito una notifica inbox/push per il pr
 
 Le nuove immagini estratte dalle offerte sono WebP con lato lungo massimo di 640 px, qualità 82 e oggetti immutabili con cache di un anno. Per convertire le PNG esistenti, eseguire prima il dry-run e poi l'applicazione: `python -m scripts.migrate_offer_images_to_webp` e `python -m scripts.migrate_offer_images_to_webp --apply`. L'opzione `--delete-originals` è esplicita e disponibile solo insieme a `--apply`, dopo la verifica dei nuovi file.
 
+I nuovi loghi supermercato usano path basati sul contenuto e cache CDN di un anno; durante una sostituzione il file precedente resta disponibile per le sessioni che lo hanno già richiesto. Per aggiornare la policy cache degli asset esistenti, eseguire prima `python -m scripts.refresh_supermarket_logo_cache`, poi `python -m scripts.refresh_supermarket_logo_cache --apply`.
+
 La registrazione risolve e salva le coordinate dell'indirizzo direttamente nel backend, prima della conferma email: il flusso non dipende da una sessione autenticata nel browser.
 
 In locale, impostare anche `SUPABASE_JWT_SECRET` uguale al `JWT_SECRET` di Docker: consente al backend di verificare i token HS256 emessi dall'istanza Supabase locale. In produzione il backend continua a verificare i token ES256/RS256 tramite JWKS.

@@ -298,6 +298,10 @@ async def test_create_supermarket_success():
     data = resp.json()
     assert data["name"] == "Nuovo Market"
     assert data["logo_url"] == "https://example.com/logos/sm-new.jpg"
+    uploaded_options = sb.storage.from_.return_value.upload.call_args.kwargs[
+        "file_options"
+    ]
+    assert uploaded_options["cache-control"] == "31536000"
 
 
 @pytest.mark.asyncio
@@ -448,7 +452,7 @@ async def test_update_logo_success():
 
 
 @pytest.mark.asyncio
-async def test_update_logo_deletes_old_file_when_present():
+async def test_update_logo_keeps_old_immutable_asset_when_replaced():
     old_url = "https://proj.supabase.co/storage/v1/object/public/logos/sm-1.jpg"
     existing = {"id": "sm-1", "logo_url": old_url}
     updated_row = {"id": "sm-1", "logo_url": "https://proj.supabase.co/storage/v1/object/public/logos/sm-1.png"}
@@ -469,7 +473,7 @@ async def test_update_logo_deletes_old_file_when_present():
         _settings_obj.supabase_url = MagicMock()
 
     assert resp.status_code == 200
-    sb.storage.from_.return_value.remove.assert_called_once_with(["sm-1.jpg"])
+    sb.storage.from_.return_value.remove.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
