@@ -44,7 +44,6 @@ MAX_PRODUCT_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 OFFER_KIND_SOURCE_MASTER = "source_master"
 OFFER_KIND_PUBLISHED_TARGET = "published_target"
 PROCESSING_RESUME_STALE_AFTER = timedelta(minutes=5)
-PUBLIC_FLYER_PAGE_SIZE = 100
 MAX_PUBLIC_FLYERS = 1_000
 
 
@@ -151,26 +150,73 @@ def _public_flyer_expiry_sort_key(flyer: dict) -> date:
     return date.fromisoformat(str(valid_to)) if valid_to else date.max
 
 
-def _public_flyers(sb) -> list[dict]:
-    flyers: list[dict] = []
-    offset = 0
-    while offset < MAX_PUBLIC_FLYERS:
-        response = (
-            sb.table("flyers")
-            .select("*", count="exact")
-            .eq("flyer_kind", "published_target")
-            .eq("status", "done")
-            .eq("is_public", True)
-            .order("created_at", desc=True)
-            .range(offset, offset + PUBLIC_FLYER_PAGE_SIZE - 1)
-            .execute()
-        )
-        page = response.data or []
-        if not page:
-            return flyers
-        flyers.extend(page)
-        offset += len(page)
-    return flyers
+def _public_flyers(sb, supermarket_ids: list[str]) -> list[dict]:
+    if not supermarket_ids:
+        return []
+    query = (
+        sb.table("flyers")
+        .select("*")
+        .eq("flyer_kind", OFFER_KIND_PUBLISHED_TARGET)
+        .eq("status", "done")
+        .eq("is_public", True)
+        .in_("supermarket_id", supermarket_ids)
+        .order("created_at", desc=True)
+        .limit(MAX_PUBLIC_FLYERS)
+    )
+    return apply_current_offer_window(query).execute().data or []
+
+
+def _public_flyer_context(
+    sb, request: Request, user_id: str | None
+) -> tuple[list[dict], dict[str, float]]:
+    guest_token = request.cookies.get(GUEST_LOCATION_COOKIE) if user_id is None else None
+    guest_location = read_guest_location(guest_token)
+    if user_id is None and guest_location is None:
+        raise guest_location_required(clear_cookie=guest_token is not None)
+    location = request_location(sb, user_id, guest_location)
+    if location is None:
+        return [], {}
+    distances = nearby_supermarket_distances(sb, *location)
+    flyers = _public_flyers(sb, list(distances))
+    return flyers, distances
+
+
+def _nearby_supermarket_rows(sb, distances: dict[str, float]) -> list[dict]:
+    if not distances:
+        return []
+    rows = sb.table("supermarkets").select("*").in_("id", list(distances)).execute().data or []
+    visible = [
+        {**row, "distance_km": distances[row["id"]]}
+        for row in rows
+        if row.get("id") in distances
+    ]
+    return sorted(visible, key=lambda row: (row["distance_km"], row["name"]))
+
+
+def _visible_public_flyers(
+    sb, flyers: list[dict], distances: dict[str, float]
+) -> list[dict]:
+    if not flyers:
+        return []
+    confirmed_by_flyer = _confirmed_count_by_flyer(sb, [flyer["id"] for flyer in flyers])
+    today = datetime.now(timezone.utc).date()
+    visible: list[dict] = []
+    for flyer in flyers:
+        if not _is_flyer_current(flyer, today):
+            continue
+        confirmed_count = confirmed_by_flyer.get(flyer["id"], 0)
+        if confirmed_count > 0:
+            flyer["confirmed_count"] = confirmed_count
+            visible.append(_public_flyer_representation(flyer))
+    return sorted(visible, key=lambda flyer: _public_flyer_sort_key(flyer, distances))
+
+
+def _public_flyer_sort_key(flyer: dict, distances: dict[str, float]) -> tuple:
+    return (
+        distances[flyer["supermarket_id"]],
+        _public_flyer_expiry_sort_key(flyer),
+        flyer["id"],
+    )
 
 
 def _offer_count_by_flyer(
@@ -1039,39 +1085,22 @@ async def list_public_flyers(
 ) -> list[dict]:
     """Return current public flyers inside the caller's active radius."""
     sb = get_supabase()
-    guest_token = request.cookies.get(GUEST_LOCATION_COOKIE) if user_id is None else None
-    guest_location = read_guest_location(guest_token)
-    if user_id is None and guest_location is None:
-        raise guest_location_required(clear_cookie=guest_token is not None)
-    location = request_location(sb, user_id, guest_location)
-    if location is None:
-        return []
-    user_lat, user_lng, radius = location
-    distances = nearby_supermarket_distances(sb, user_lat, user_lng, radius)
-    flyers = [flyer for flyer in _public_flyers(sb) if flyer.get("supermarket_id") in distances]
-    if not flyers:
-        return flyers
+    flyers, distances = _public_flyer_context(sb, request, user_id)
+    return _visible_public_flyers(sb, flyers, distances)
 
-    confirmed_by_flyer = _confirmed_count_by_flyer(sb, [f["id"] for f in flyers])
-    visible_flyers: list[dict] = []
-    today = datetime.now(timezone.utc).date()
-    for flyer in flyers:
-        if not _is_flyer_current(flyer, today):
-            continue
-        confirmed_count = confirmed_by_flyer.get(flyer["id"], 0)
-        if confirmed_count <= 0:
-            continue
-        flyer["confirmed_count"] = confirmed_count
-        visible_flyers.append(_public_flyer_representation(flyer))
 
-    visible_flyers.sort(
-        key=lambda flyer: (
-            distances[flyer["supermarket_id"]],
-            _public_flyer_expiry_sort_key(flyer),
-            flyer["id"],
-        )
-    )
-    return visible_flyers
+@router.get("/discovery")
+async def discover_public_flyers(
+    user_id: str | None = Depends(get_optional_user_id),
+    request: Request = None,
+) -> dict:
+    """Return current public flyers and nearby supermarkets from one radius lookup."""
+    sb = get_supabase()
+    flyers, distances = _public_flyer_context(sb, request, user_id)
+    return {
+        "flyers": _visible_public_flyers(sb, flyers, distances),
+        "supermarkets": _nearby_supermarket_rows(sb, distances),
+    }
 
 
 def _public_flyer_representation(flyer: dict) -> dict:

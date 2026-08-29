@@ -24,6 +24,7 @@ import pytest
 FTS_LIMIT_MS = 500       # name search on 10k offers
 FILTER_LIMIT_MS = 500    # active offers filter + JOIN on 10k offers
 PAGINATED_LIMIT_MS = 300 # paginated offer list (first page, 50 rows)
+DISCOVERY_LIMIT_MS = 500 # first nearby discovery query
 
 
 class TestDatabaseQueryPerformance:
@@ -122,3 +123,46 @@ class TestDatabaseQueryPerformance:
             f"Supermarket-filtered query took {elapsed_ms:.0f}ms — exceeds {PAGINATED_LIMIT_MS}ms."
         )
         assert len(result.data) > 0
+
+    def test_offer_discovery_query_avoids_exact_count(self, supabase_client, seeded_10k_dataset):
+        """First nearby offer discovery stays below 500ms without exact count."""
+        today = "2026-08-29"
+        market_ids = [market["id"] for market in seeded_10k_dataset["supermarkets"]]
+        start = time.perf_counter()
+        result = (
+            supabase_client.table("offers")
+            .select("id, name, supermarket_id")
+            .in_("supermarket_id", market_ids)
+            .eq("is_confirmed", True)
+            .eq("offer_kind", "published_target")
+            .gte("valid_to", today)
+            .order("name")
+            .limit(20)
+            .execute()
+        )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+
+        assert elapsed_ms < DISCOVERY_LIMIT_MS
+        assert len(result.data) == 20
+
+    def test_public_flyer_discovery_uses_nearby_branch_index(
+        self, supabase_client, perf_supermarkets, perf_public_flyers
+    ):
+        """Nearby public flyers use the branch-first partial discovery index."""
+        market_ids = [market["id"] for market in perf_supermarkets]
+        start = time.perf_counter()
+        result = (
+            supabase_client.table("flyers")
+            .select("id, supermarket_id")
+            .in_("supermarket_id", market_ids)
+            .eq("flyer_kind", "published_target")
+            .eq("status", "done")
+            .eq("is_public", True)
+            .order("created_at", desc=True)
+            .limit(1000)
+            .execute()
+        )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+
+        assert elapsed_ms < DISCOVERY_LIMIT_MS
+        assert len(result.data) == len(perf_public_flyers)

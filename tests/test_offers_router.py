@@ -194,7 +194,7 @@ async def test_list_public_offers_filters_by_subcategory():
         response = await _get("/offers?subcategory=Acqua%20e%20Bibite")
 
     assert response.status_code == 200
-    query.in_.return_value.eq.assert_called_once_with(
+    query.eq.assert_called_once_with(
         "subcategory", "Acqua e Bibite"
     )
 
@@ -244,6 +244,34 @@ def test_deduplicate_nearby_offers_keeps_selected_store_when_only_target_present
     )
 
     assert [offer["id"] for offer in deduplicated] == ["taurianova"]
+
+
+@pytest.mark.asyncio
+async def test_offer_discovery_reuses_one_nearby_lookup_for_page_and_stores():
+    sb = MagicMock()
+    request = MagicMock(cookies={})
+    page = {"items": [], "total": 0, "nextPage": None}
+
+    with (
+        patch("api.routers.offers.get_supabase", return_value=sb),
+        patch(
+            "api.routers.offers._request_distances",
+            return_value={"sup-1": 1.2},
+        ) as request_distances,
+        patch("api.routers.offers._public_offers_response", return_value=page),
+        patch(
+            "api.routers.offers.active_nearby_supermarkets",
+            return_value=[{"id": "sup-1", "distance_km": 1.2}],
+        ) as active_stores,
+    ):
+        result = await _offers_module.discover_public_offers(
+            request=request,
+            user_id="user-1",
+        )
+
+    assert result == {**page, "supermarkets": [{"id": "sup-1", "distance_km": 1.2}]}
+    request_distances.assert_called_once_with(sb, request, "user-1")
+    active_stores.assert_called_once_with(sb, {"sup-1": 1.2})
 
 
 def test_deduplicate_nearby_offers_keeps_independent_offers_separate():

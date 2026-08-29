@@ -170,10 +170,12 @@ async def test_with_active_offers_uses_authenticated_profile_radius():
             "api.routers.supermarkets._nearby_supermarkets",
             return_value=[{"id": "sup-polistena", "distance_km": 1.1}],
         ),
-        patch(
-            "api.routers.supermarkets._supermarkets_with_active_offers",
-            return_value=[{"id": "sup-polistena", "name": "Conad"}],
-        ),
+            patch(
+                "api.routers.supermarkets.active_nearby_supermarkets",
+                return_value=[
+                    {"id": "sup-polistena", "name": "Conad", "distance_km": 1.1}
+                ],
+            ),
     ):
         result = await _sm_module.list_supermarkets(
             with_active_offers=True,

@@ -7,6 +7,7 @@ Il backend FastAPI è l'unica API applicativa. Le chiamate autenticate usano un 
 | Metodo | Path | Accesso | Descrizione |
 | --- | --- | --- | --- |
 | `GET` | `/offers` | Pubblico | Offerte confermate e attive, con ricerca, filtri e paginazione; non espone un parametro di ordinamento. Accetta `q`, `category`, `subcategory`, `supermarket_id` e `supermarket_ids`. |
+| `GET` | `/offers/discovery` | Pubblico | Prima pagina offerte e sedi vicine con offerte attive, risolte dalla stessa posizione; accetta gli stessi filtri di `/offers`. Le pagine successive restano su `/offers`. |
 | `POST` | `/guest-location` | Pubblico | Valida una posizione guest e imposta il cookie tecnico firmato usato dalla discovery. |
 | `DELETE` | `/guest-location` | Pubblico | Rimuove il cookie tecnico di località guest. |
 
@@ -27,6 +28,7 @@ I client non contattano il provider di geocoding: il backend ne mantiene configu
 | Metodo | Path | Accesso | Descrizione |
 | --- | --- | --- | --- |
 | `GET` | `/flyers/public` | Pubblico | Volantini pubblici correnti nel raggio attivo. Per i guest richiede il cookie di località firmato; senza località restituisce `428 guest_location_required`. |
+| `GET` | `/flyers/discovery` | Pubblico | Volantini pubblici correnti e tutte le sedi vicine in una sola risposta di discovery. Per i guest richiede il cookie di località firmato. |
 | `GET` | `/supermarkets?with_active_offers=true` | Pubblico | Sedi nel raggio attivo, anche per admin e gestori. Per i guest richiede il cookie di località firmato; senza località restituisce `428 guest_location_required`. |
 | `GET` | `/flyers/targets` | Admin/manager | Sedi selezionabili nella gestione volantini: tutte le sedi attive per admin, solo sedi assegnate per gestore. |
 | `GET` | `/flyers` | Admin/manager | Elenco volantini in gestione. |

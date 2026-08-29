@@ -191,6 +191,45 @@ def test_confirmed_count_by_flyer_uses_database_aggregation():
     )
 
 
+def test_public_flyers_filters_nearby_branches_without_exact_count():
+    sb = MagicMock()
+    query = MagicMock()
+    query.select.return_value = query
+    query.eq.return_value = query
+    query.in_.return_value = query
+    query.order.return_value = query
+    query.limit.return_value = query
+    query.params.add.return_value = query.params
+    query.execute.return_value = MagicMock(data=[])
+    sb.table.return_value = query
+
+    assert _flyers_module._public_flyers(sb, ["sup-1"]) == []
+
+    query.select.assert_called_once_with("*")
+    query.in_.assert_called_once_with("supermarket_id", ["sup-1"])
+
+
+@pytest.mark.asyncio
+async def test_flyer_discovery_reuses_public_location_context_once():
+    sb = MagicMock()
+    request = MagicMock(cookies={})
+    context = ([{"id": "flyer-1"}], {"sup-1": 1.2})
+
+    with (
+        patch("api.routers.flyers.get_supabase", return_value=sb),
+        patch("api.routers.flyers._public_flyer_context", return_value=context) as public_context,
+        patch("api.routers.flyers._visible_public_flyers", return_value=[{"id": "flyer-1"}]),
+        patch("api.routers.flyers._nearby_supermarket_rows", return_value=[{"id": "sup-1"}]),
+    ):
+        result = await _flyers_module.discover_public_flyers(
+            request=request,
+            user_id="user-1",
+        )
+
+    assert result == {"flyers": [{"id": "flyer-1"}], "supermarkets": [{"id": "sup-1"}]}
+    public_context.assert_called_once_with(sb, request, "user-1")
+
+
 @pytest.mark.asyncio
 async def test_flyer_targets_returns_all_active_branches_for_admin():
     sb = MagicMock()

@@ -134,3 +134,26 @@ def seeded_10k_dataset(supabase_client, perf_supermarkets):
 
     yield {"offers": offers, "supermarkets": perf_supermarkets}
     _delete_perf_data(supabase_client)
+
+
+@pytest.fixture(scope="session")
+def perf_public_flyers(supabase_client, perf_supermarkets):
+    """Seed public target flyers for the nearby flyer discovery benchmark."""
+    payload = [
+        {
+            "supermarket_id": market["id"],
+            "supermarket_name": market["name"],
+            "file_url": f"performance/{market['id']}.pdf",
+            "file_type": "pdf",
+            "file_name": "performance.pdf",
+            "valid_from": "2020-01-01",
+            "valid_to": _FUTURE_DATE,
+            "status": "done",
+            "is_public": True,
+            "flyer_kind": "published_target",
+        }
+        for market in perf_supermarkets
+    ]
+    rows = _batch_insert(supabase_client, "flyers", payload)
+    yield rows
+    _delete_perf_data(supabase_client)

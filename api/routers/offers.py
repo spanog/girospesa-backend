@@ -9,13 +9,19 @@ from pydantic import BaseModel, Field
 from core.auth import get_optional_user_id, managed_supermarket_ids, require_admin_or_manager
 from core.database import get_supabase
 from core.guest_location import GUEST_LOCATION_COOKIE, guest_location_required, read_guest_location
-from api.routers._nearby_supermarkets import nearby_supermarket_distances, request_location
+from api.routers._nearby_supermarkets import (
+    active_nearby_supermarkets,
+    nearby_supermarket_distances,
+    request_location,
+)
 from services.extraction.normalizer import normalize_unit_price_measure
 from services.offer_visibility import apply_current_offer_window
 from services.product_format import ProductFormat
 from api.routers._offer_utils import build_offer_row, insert_and_fetch_offer
 
 router = APIRouter()
+
+PUBLIC_OFFER_SELECT = "*, supermarkets(name, slug, logo_url, address, city)"
 
 
 def _offer_group_key(offer: dict) -> str:
@@ -92,6 +98,100 @@ def _supermarket_address(supermarket: dict, fallback_name: str | None) -> str | 
     return address if normalized_city in normalized_address else f"{address}, {city}"
 
 
+def _public_offers_query(sb, *, exact_count: bool):
+    offers = sb.table("offers")
+    query = (
+        offers.select(PUBLIC_OFFER_SELECT, count="exact")
+        if exact_count
+        else offers.select(PUBLIC_OFFER_SELECT)
+    )
+    query = query.eq("is_confirmed", True).eq("offer_kind", "published_target")
+    return apply_current_offer_window(query)
+
+
+def _filter_public_offers(
+    query,
+    *,
+    q: str | None,
+    category: str | None,
+    subcategory: str | None,
+    supermarket_id: str | None,
+    supermarket_ids: list[str],
+):
+    if q:
+        query = query.ilike("name", f"%{q.strip()}%")
+    if category:
+        query = query.eq("category", category)
+    if subcategory:
+        query = query.eq("subcategory", subcategory)
+    if supermarket_id:
+        query = query.eq("supermarket_id", supermarket_id)
+    if supermarket_ids:
+        query = query.in_("supermarket_id", list(dict.fromkeys(supermarket_ids)))
+    return query
+
+
+def _public_offers_response(
+    sb,
+    *,
+    q: str | None,
+    category: str | None,
+    subcategory: str | None,
+    supermarket_id: str | None,
+    supermarket_ids: list[str],
+    limit: int,
+    offset: int,
+    distances_by_supermarket_id: dict[str, float] | None,
+) -> dict:
+    query = _filter_public_offers(
+        _public_offers_query(sb, exact_count=distances_by_supermarket_id is None),
+        q=q,
+        category=category,
+        subcategory=subcategory,
+        supermarket_id=supermarket_id,
+        supermarket_ids=supermarket_ids,
+    )
+    if distances_by_supermarket_id is not None:
+        query = query.in_("supermarket_id", list(distances_by_supermarket_id))
+    ordered_query = query.order("name")
+    if distances_by_supermarket_id is None:
+        response = ordered_query.range(offset, offset + limit - 1).execute()
+        items = _serialize_offers(response.data or [])
+        total = response.count or 0
+        return _offer_page(items, total, offset, limit)
+    offers = _serialize_offers(ordered_query.execute().data or [])
+    offers = _deduplicate_nearby_offers(offers, distances_by_supermarket_id)
+    return _nearby_offer_page(offers, offset, limit)
+
+
+def _offer_page(items: list[dict], total: int, offset: int, limit: int) -> dict:
+    return {
+        "items": items,
+        "total": total,
+        "nextPage": offset + limit if offset + limit < total else None,
+    }
+
+
+def _nearby_offer_page(offers: list[dict], offset: int, limit: int) -> dict:
+    summary = _offer_summary(offers)
+    return {
+        "items": offers[offset : offset + limit],
+        **summary,
+        "nextPage": offset + limit if offset + limit < summary["total"] else None,
+    }
+
+
+def _request_distances(sb, request: Request, user_id: str | None) -> dict[str, float] | None:
+    guest_token = request.cookies.get(GUEST_LOCATION_COOKIE) if user_id is None else None
+    guest_location = read_guest_location(guest_token)
+    if user_id is None and guest_location is None:
+        raise guest_location_required(clear_cookie=guest_token is not None)
+    location = request_location(sb, user_id, guest_location)
+    if location is None:
+        return None
+    return nearby_supermarket_distances(sb, *location)
+
+
 @router.get("")
 async def list_public_offers(
     q: str | None = Query(None),
@@ -106,59 +206,41 @@ async def list_public_offers(
 ) -> dict:
     """Return currently visible offers; offer fields are self-contained."""
     sb = get_supabase()
-    query = (
-        sb.table("offers")
-        .select("*, supermarkets(name, slug, logo_url, address, city)", count="exact")
-        .eq("is_confirmed", True)
-        .eq("offer_kind", "published_target")
+    distances = _request_distances(sb, request, user_id)
+    if distances == {}:
+        return {"items": [], "total": 0, "nextPage": None}
+    return _public_offers_response(
+        sb, q=q, category=category, subcategory=subcategory,
+        supermarket_id=supermarket_id, supermarket_ids=supermarket_ids,
+        limit=limit, offset=offset, distances_by_supermarket_id=distances,
     )
-    query = apply_current_offer_window(query)
-    guest_token = request.cookies.get(GUEST_LOCATION_COOKIE) if user_id is None else None
-    guest_location = read_guest_location(guest_token)
-    if user_id is None and guest_location is None:
-        raise guest_location_required(clear_cookie=guest_token is not None)
-    location = request_location(sb, user_id, guest_location)
-    distances_by_supermarket_id: dict[str, float] | None = None
-    if location is not None:
-        user_lat, user_lng, radius = location
-        distances_by_supermarket_id = nearby_supermarket_distances(
-            sb, user_lat, user_lng, radius
-        )
-        if not distances_by_supermarket_id:
-            return {"items": [], "total": 0, "nextPage": None}
-        query = query.in_("supermarket_id", list(distances_by_supermarket_id))
-    if q:
-        query = query.ilike("name", f"%{q.strip()}%")
-    if category:
-        query = query.eq("category", category)
-    if subcategory:
-        query = query.eq("subcategory", subcategory)
-    if supermarket_id:
-        query = query.eq("supermarket_id", supermarket_id)
-    if supermarket_ids:
-        query = query.in_("supermarket_id", list(dict.fromkeys(supermarket_ids)))
 
-    ordered_query = query.order("name")
-    if distances_by_supermarket_id is None:
-        response = ordered_query.range(offset, offset + limit - 1).execute()
-        items = _serialize_offers(response.data or [])
-        total = response.count or 0
-        return {
-            "items": items,
-            "total": total,
-            "nextPage": offset + limit if offset + limit < total else None,
-        }
 
-    response = ordered_query.execute()
-    offers = _serialize_offers(response.data or [])
-    offers = _deduplicate_nearby_offers(offers, distances_by_supermarket_id)
-    summary = _offer_summary(offers)
-    total = summary["total"]
-    items = offers[offset : offset + limit]
+@router.get("/discovery")
+async def discover_public_offers(
+    q: str | None = Query(None),
+    category: str | None = Query(None),
+    subcategory: str | None = Query(None),
+    supermarket_id: str | None = Query(None),
+    supermarket_ids: list[str] = Query(default=[]),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    request: Request = None,
+    user_id: str | None = Depends(get_optional_user_id),
+) -> dict:
+    """Return first offer page and nearby active branches from one radius lookup."""
+    sb = get_supabase()
+    distances = _request_distances(sb, request, user_id)
+    if distances == {}:
+        return {"items": [], "total": 0, "nextPage": None, "supermarkets": []}
+    page = _public_offers_response(
+        sb, q=q, category=category, subcategory=subcategory,
+        supermarket_id=supermarket_id, supermarket_ids=supermarket_ids,
+        limit=limit, offset=offset, distances_by_supermarket_id=distances,
+    )
     return {
-        "items": items,
-        **summary,
-        "nextPage": offset + limit if offset + limit < total else None,
+        **page,
+        "supermarkets": active_nearby_supermarkets(sb, distances or {}),
     }
 
 

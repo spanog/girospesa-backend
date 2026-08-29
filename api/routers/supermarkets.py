@@ -9,9 +9,11 @@ from core.auth import get_optional_user_id, require_admin
 from core.config import settings
 from core.database import get_supabase
 from core.guest_location import GUEST_LOCATION_COOKIE, guest_location_required, read_guest_location
-from api.routers._nearby_supermarkets import request_location
+from api.routers._nearby_supermarkets import (
+    active_nearby_supermarkets,
+    request_location,
+)
 from services.geocoding import geocode_address
-from services.offer_visibility import apply_current_offer_window
 
 router = APIRouter()
 
@@ -66,19 +68,6 @@ def _unique_slug(sb, base: str) -> str:
     return slug
 
 
-def _supermarkets_with_active_offers(sb, ids: list[str] | None = None) -> list[dict]:
-    query = (
-        sb.table("supermarkets")
-        .select("*, offers!inner(id)")
-        .eq("is_active", True)
-        .eq("offers.is_confirmed", True)
-    )
-    if ids:
-        query = query.in_("id", ids)
-    rows = apply_current_offer_window(query, reference_table="offers").execute().data or []
-    return [{key: value for key, value in row.items() if key != "offers"} for row in rows]
-
-
 @router.get("")
 async def list_supermarkets(
     with_active_offers: bool = Query(False),
@@ -99,8 +88,9 @@ async def list_supermarkets(
         if not ids:
             return []
         if with_active_offers:
-            active_rows = _supermarkets_with_active_offers(sb, ids)
-            return _merge_distances(active_rows, nearby)
+            return active_nearby_supermarkets(
+                sb, {row["id"]: row["distance_km"] for row in nearby}
+            )
         nearby_rows = []
         if ids:
             resp = sb.table("supermarkets").select("*").in_("id", ids).execute()
