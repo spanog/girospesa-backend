@@ -28,13 +28,12 @@ def _item(
     }
 
 
-def _offer(is_active: bool = True, price: float = 1.29, valid_to: str = "2099-12-31") -> dict:
+def _offer(price: float = 1.29, valid_to: str = "2099-12-31") -> dict:
     return {
         "id": _OFFER_ID,
         "price_offer": price,
         "valid_from": "2000-01-01",
         "valid_to": valid_to,
-        "is_active": is_active,
     }
 
 
@@ -51,26 +50,32 @@ class TestClassifyDealFreshness:
         assert result[0]["status"] == DealFreshnessStatus.FRESH
 
     def test_expired_offer(self):
-        offer = _offer(is_active=False, valid_to="2000-01-01")
+        offer = _offer(valid_to="2000-01-01")
         result = classify_deal_freshness([_item()], {_OFFER_ID: offer})
         assert result[0]["status"] == DealFreshnessStatus.EXPIRED
         assert result[0]["valid_to"] == "2000-01-01"
 
-    def test_expired_offer_when_valid_to_is_past_even_if_is_active_flag_is_stale(self):
-        offer = _offer(is_active=True, valid_to="2000-01-01")
+    def test_expired_offer_when_valid_to_is_past(self):
+        offer = _offer(valid_to="2000-01-01")
         result = classify_deal_freshness([_item()], {_OFFER_ID: offer})
         assert result[0]["status"] == DealFreshnessStatus.EXPIRED
 
-    def test_future_offer_is_not_treated_as_fresh_even_if_is_active_flag_is_stale(self):
+    def test_future_offer_is_not_treated_as_fresh(self):
         offer = {
             "id": _OFFER_ID,
             "price_offer": 1.29,
             "valid_from": "2999-01-01",
             "valid_to": "2999-01-31",
-            "is_active": True,
         }
         result = classify_deal_freshness([_item()], {_OFFER_ID: offer})
         assert result[0]["status"] == DealFreshnessStatus.EXPIRED
+
+    def test_current_offer_ignores_legacy_is_active_cache(self):
+        offer = {**_offer(), "is_active": False}
+
+        result = classify_deal_freshness([_item()], {_OFFER_ID: offer})
+
+        assert result[0]["status"] == DealFreshnessStatus.FRESH
 
     def test_price_changed(self):
         result = classify_deal_freshness([_item(pinned_price=1.29)], {_OFFER_ID: _offer(price=1.49)})
@@ -110,8 +115,8 @@ class TestClassifyDealFreshness:
             },
         ]
         offers = {
-            offer_expired: {"id": offer_expired, "price_offer": 1.00, "valid_to": "2000-01-01", "is_active": False},
-            offer_fresh: {"id": offer_fresh, "price_offer": 0.99, "valid_to": "2099-12-31", "is_active": True},
+            offer_expired: {"id": offer_expired, "price_offer": 1.00, "valid_to": "2000-01-01"},
+            offer_fresh: {"id": offer_fresh, "price_offer": 0.99, "valid_to": "2099-12-31"},
         }
         result = classify_deal_freshness(items, offers)
         assert len(result) == 2

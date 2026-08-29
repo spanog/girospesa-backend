@@ -105,7 +105,7 @@ Frontend
     Backend: per ogni item con pinned_offer_id:
       ┌──────────────────────────────────────────────┐
       │  offer non trovata       → unavailable        │
-      │  is_active = false       → expired            │
+      │  validità fuori intervallo → expired          │
       │  prezzo cambiato > 0.01€ → price_changed      │
       │  tutto ok                → fresh              │
       └──────────────────────────────────────────────┘

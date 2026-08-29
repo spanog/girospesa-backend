@@ -16,7 +16,7 @@ from core.config import settings
 from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
 from services.repositories import lists_repository as repo
 from services.extraction.normalizer import format_unit_price_label
-from services.deal_freshness import classify_deal_freshness, offer_is_active_now
+from services.deal_freshness import classify_deal_freshness, offer_is_current_now
 from services.list_offer_visibility import (
     HIDDEN_FOR_VIEWER,
     hidden_offer_ids_for_viewer,
@@ -593,7 +593,7 @@ def _offer_rows_for_items(sb: object, items: list[dict]) -> list[dict]:
         return []
     return (
         sb.table("offers")  # type: ignore[union-attr,attr-defined]
-        .select("id, supermarket_id, valid_from, valid_to, is_active")
+        .select("id, supermarket_id, valid_from, valid_to")
         .in_("id", offer_ids)
         .execute()
         .data
@@ -648,7 +648,7 @@ def _stale_offer_ids_for_viewer(
         if not offer_id or offer_id in hidden_offer_ids:
             continue
         offer_row = offers_by_id.get(offer_id)
-        if not offer_row or not offer_is_active_now(offer_row):
+        if not offer_row or not offer_is_current_now(offer_row):
             stale_offer_ids.add(offer_id)
     return stale_offer_ids
 
@@ -1549,7 +1549,7 @@ async def get_deal_freshness(
     if offer_ids:
         rows = (
             sb.table("offers")
-            .select("id, price_offer, valid_from, valid_to, is_active")
+            .select("id, price_offer, valid_from, valid_to")
             .in_("id", offer_ids)
             .execute()
         ).data
@@ -1598,7 +1598,7 @@ async def clear_stale_offers(
     if offer_ids:
         rows = (
             sb.table("offers")
-            .select("id, price_offer, valid_from, valid_to, is_active")
+            .select("id, price_offer, valid_from, valid_to")
             .in_("id", offer_ids)
             .execute()
         ).data

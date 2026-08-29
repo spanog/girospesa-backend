@@ -1,9 +1,9 @@
 """Deal freshness classification service.
 
 Classifies each pinned offer in a shopping list as:
-- fresh: offer is active and price unchanged
-- price_changed: offer is active but price differs from the pinned snapshot
-- expired: offer's valid_to is in the past (is_active = false)
+- fresh: offer is inside its validity window and price unchanged
+- price_changed: offer is inside its validity window but price differs from the pinned snapshot
+- expired: offer validity window does not include today
 - unavailable: no offer row found for the pinned_offer_id
 
 Used by GET /lists/{list_id}/deal-freshness.
@@ -11,9 +11,10 @@ Used by GET /lists/{list_id}/deal-freshness.
 
 from __future__ import annotations
 
-from datetime import date
 from enum import Enum
 from typing import TypedDict
+
+from services.offer_visibility import offer_is_current
 
 
 class DealFreshnessStatus(str, Enum):
@@ -42,7 +43,7 @@ def classify_deal_freshness(
     Args:
         list_items: raw JSONB items from shopping_lists.items
         offers_by_id: map of offer_id → offer row fetched from the DB
-            Each row must have: id, price_offer, valid_from, valid_to, is_active
+            Each row must have: id, price_offer, valid_from, valid_to
 
     Returns:
         One entry per list item that has a pinned_offer_id.
@@ -62,7 +63,7 @@ def classify_deal_freshness(
             status = DealFreshnessStatus.UNAVAILABLE
             current_price = None
             valid_to = None
-        elif not offer_is_active_now(offer):
+        elif not offer_is_current_now(offer):
             status = DealFreshnessStatus.EXPIRED
             current_price = offer.get("price_offer")
             valid_to = offer.get("valid_to")
@@ -107,26 +108,6 @@ def _price_changed(pinned: float, current: float) -> bool:
     return abs(pinned - current) > 0.01
 
 
-def offer_is_active_now(offer: dict) -> bool:
-    """Return True only when the offer window includes today and is_active is not false."""
-    if offer.get("is_active") is False:
-        return False
-
-    today = date.today()
-    valid_from = _parse_iso_date(offer.get("valid_from"))
-    valid_to = _parse_iso_date(offer.get("valid_to"))
-
-    if valid_from and valid_from > today:
-        return False
-    if valid_to and valid_to < today:
-        return False
-    return True
-
-
-def _parse_iso_date(value: str | None) -> date | None:
-    if not value:
-        return None
-    try:
-        return date.fromisoformat(value)
-    except ValueError:
-        return None
+def offer_is_current_now(offer: dict) -> bool:
+    """Return whether the offer validity window includes the current Rome day."""
+    return offer_is_current(offer)

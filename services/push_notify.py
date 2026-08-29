@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from jose import jwt
@@ -150,17 +150,6 @@ def send_push_to_user(
     data: dict,
 ) -> None:
     _send_push_to_user(sb, user_id=user_id, title=title, body=body, data=data)
-
-
-def _offer_is_currently_active(record: dict) -> bool:
-    today = date.today().isoformat()
-    valid_from = record.get("valid_from")
-    valid_to = record.get("valid_to")
-    if valid_from and valid_from > today:
-        return False
-    if valid_to and valid_to < today:
-        return False
-    return True
 
 
 def _flyer_published_url(*, supermarket_id: str | None) -> str:

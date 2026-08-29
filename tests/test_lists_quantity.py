@@ -3,7 +3,11 @@ import os
 os.environ.setdefault("SUPABASE_SECRET_KEY", "test-secret-key")
 
 import pytest
-from api.routers.lists import _patch_item_in_items, _patch_quantity_in_items
+from api.routers.lists import (
+    _patch_item_in_items,
+    _patch_quantity_in_items,
+    _stale_offer_ids_for_viewer,
+)
 
 
 def _make_item(item_id: str, quantity: float = 1.0) -> dict:
@@ -110,6 +114,20 @@ def test_patch_item_clears_subcategory_when_category_is_null():
 
     assert result[0]["category"] is None
     assert result[0]["subcategory"] is None
+
+
+def test_current_offer_with_legacy_inactive_cache_is_not_stale():
+    items = [{"pinned_offer_id": "offer-1"}]
+    offer_rows = [{
+        "id": "offer-1",
+        "valid_from": "2000-01-01",
+        "valid_to": "2099-12-31",
+        "is_active": False,
+    }]
+
+    stale = _stale_offer_ids_for_viewer(items, offer_rows, set())
+
+    assert stale == set()
 
 
 # ---------------------------------------------------------------------------

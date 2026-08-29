@@ -365,7 +365,6 @@ def _clone_offer_fields(
         "offer_notes": source_offer.get("offer_notes"),
         "valid_from": source_offer.get("valid_from"),
         "valid_to": source_offer.get("valid_to"),
-        "is_active": source_offer.get("is_active"),
         "raw_text": source_offer.get("raw_text"),
         "confidence_score": source_offer.get("confidence_score"),
         "format": source_offer.get("format"),

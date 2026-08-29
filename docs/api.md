@@ -10,7 +10,7 @@ Il backend FastAPI è l'unica API applicativa. Le chiamate autenticate usano un 
 | `POST` | `/guest-location` | Pubblico | Valida una posizione guest e imposta il cookie tecnico firmato usato dalla discovery. |
 | `DELETE` | `/guest-location` | Pubblico | Rimuove il cookie tecnico di località guest. |
 
-Un'offerta contiene i propri dati, validità, prezzo, formato strutturato e `image_url`. Non esistono endpoint per catalogo prodotti, dettagli prodotto o preferiti prodotto.
+Un'offerta contiene i propri dati, validità, prezzo, formato strutturato e `image_url`. Il backend determina la disponibilità corrente esclusivamente da `valid_from` e `valid_to`, usando il giorno `Europe/Rome`; nessun client calcola autonomamente lo stato dell'offerta. Non esistono endpoint per catalogo prodotti, dettagli prodotto o preferiti prodotto.
 
 ## Geocoding
 

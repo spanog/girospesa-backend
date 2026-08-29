@@ -1331,6 +1331,7 @@ def test_published_offer_clone_keeps_packshot_localization():
 
     assert clone["packshot_source_page"] == 2
     assert clone["packshot_bbox"] == [100, 200, 500, 600]
+    assert "is_active" not in clone
 
 
 @pytest.mark.asyncio
