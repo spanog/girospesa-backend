@@ -1,10 +1,7 @@
 """Shared geographic lookup helpers for public discovery endpoints."""
 from __future__ import annotations
 
-from services.offer_visibility import apply_current_offer_window
-
-
-PUBLISHED_TARGET_OFFER_KIND = "published_target"
+_CURRENT_PUBLIC_OFFER_SUPERMARKETS_RPC = "current_public_offer_supermarket_ids"
 
 
 def nearby_supermarket_distances(
@@ -41,15 +38,12 @@ def active_nearby_supermarkets(
 
 
 def _active_offer_supermarket_ids(sb, supermarket_ids: list[str]) -> list[str]:
-    query = (
-        sb.table("offers")
-        .select("supermarket_id")
-        .in_("supermarket_id", supermarket_ids)
-        .eq("is_confirmed", True)
-        .eq("offer_kind", PUBLISHED_TARGET_OFFER_KIND)
+    response = sb.rpc(
+        _CURRENT_PUBLIC_OFFER_SUPERMARKETS_RPC,
+        {"candidate_supermarket_ids": supermarket_ids},
     )
-    rows = apply_current_offer_window(query).execute().data or []
-    return list({row["supermarket_id"] for row in rows if row.get("supermarket_id")})
+    rows = response.execute().data or []
+    return [row["id"] for row in rows if row.get("id")]
 
 
 def _with_distances(rows: list[dict], distances: dict[str, float]) -> list[dict]:
