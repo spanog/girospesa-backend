@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -30,6 +30,11 @@ from api.routers.guest_location import router as guest_location_router
 
 guest_location_app = FastAPI()
 guest_location_app.include_router(guest_location_router, prefix="/guest-location")
+
+
+@guest_location_app.get("/guest-location/cookie")
+async def guest_location_cookie(request: Request) -> dict[str, str | None]:
+    return {"token": request.cookies.get(guest_location.GUEST_LOCATION_COOKIE)}
 
 
 @pytest.fixture(autouse=True)
@@ -129,6 +134,24 @@ async def test_guest_location_endpoint_sets_cross_site_cookie_for_capacitor() ->
     assert response.status_code == 204
     assert "SameSite=none" in cookie
     assert "Secure" in cookie
+
+
+@pytest.mark.asyncio
+async def test_guest_location_cookie_round_trips_on_direct_api_origin() -> None:
+    transport = httpx.ASGITransport(app=guest_location_app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="https://api.girospesa.it",
+    ) as client:
+        response = await client.post(
+            "/guest-location",
+            headers={"Origin": "https://www.girospesa.it"},
+            json={"lat": 38.4, "lng": 16.1},
+        )
+        cookie_response = await client.get("/guest-location/cookie")
+
+    assert response.status_code == 204
+    assert cookie_response.json()["token"]
 
 
 def test_session_settings_only_require_session_env(monkeypatch: pytest.MonkeyPatch) -> None:

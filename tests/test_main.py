@@ -7,7 +7,9 @@ import sys
 import types
 
 import pytest
-from fastapi import APIRouter
+import httpx
+from fastapi import APIRouter, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 
 @pytest.fixture(autouse=True)
@@ -172,3 +174,41 @@ def test_cors_extra_origins_ignore_empty_values(monkeypatch):
         "https://app.girospesa.it",
         "https://app.girospesa.local",
     ]
+
+
+@pytest.mark.asyncio
+async def test_web_api_cors_preflight_accepts_direct_browser_requests(monkeypatch):
+    main = _import_main(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "settings",
+        types.SimpleNamespace(
+            environment="production",
+            frontend_url="https://www.girospesa.it",
+            cors_extra_origins="",
+        ),
+    )
+    app = FastAPI()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=main._allow_origins(),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        max_age=600,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="https://api.test") as client:
+        response = await client.options(
+            "/flyers/discovery",
+            headers={
+                "Origin": "https://www.girospesa.it",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://www.girospesa.it"
+    assert response.headers["access-control-allow-credentials"] == "true"
+    assert response.headers["access-control-max-age"] == "600"
