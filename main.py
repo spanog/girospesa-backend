@@ -160,6 +160,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    max_age=600,
 )
 app.add_middleware(RequestTimingMiddleware)
 
