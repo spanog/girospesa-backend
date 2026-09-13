@@ -50,3 +50,13 @@ def test_pdf_page_chunk_returns_the_requested_single_page() -> None:
 
     assert (chunk.start_page, chunk.end_page) == (3, 3)
     assert count_pdf_pages(chunk.pdf_bytes) == 1
+
+
+def test_pdf_path_source_keeps_chunk_boundaries_and_page_content(tmp_path) -> None:
+    path = tmp_path / "volantino.pdf"
+    path.write_bytes(_make_pdf_bytes(4))
+
+    chunks = list(iter_pdf_chunks(path, 3))
+
+    assert [(chunk.start_page, chunk.end_page) for chunk in chunks] == [(1, 3), (4, 4)]
+    assert [count_pdf_pages(chunk.pdf_bytes) for chunk in chunks] == [3, 1]

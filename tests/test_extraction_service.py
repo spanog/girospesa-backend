@@ -198,6 +198,49 @@ class TestExtractionServiceRunSetsOfferAsUnconfirmed:
             assert row["is_confirmed"] is False
 
 
+def test_download_pdf_streams_original_bytes_to_a_temporary_file() -> None:
+    from services.extraction.service import ExtractionService
+
+    response = MagicMock()
+    response.iter_content.return_value = [b"%PDF-", b"original"]
+    with patch("services.extraction.service.requests.get", return_value=response) as get:
+        downloaded = ExtractionService()._download_file(MagicMock(), "https://files.test/flyer.pdf", "flyer.pdf")
+
+    assert downloaded.temporary_path is not None
+    assert downloaded.content.read_bytes() == b"%PDF-original"
+    get.assert_called_once_with("https://files.test/flyer.pdf", timeout=30, stream=True)
+    downloaded.cleanup()
+    assert not downloaded.temporary_path.exists()
+
+
+def test_peak_rss_uses_platform_specific_units() -> None:
+    from services.extraction.service import _peak_rss_mib
+
+    usage = MagicMock(ru_maxrss=3 * 1_048_576)
+    with (
+        patch("services.extraction.service.resource.getrusage", return_value=usage),
+        patch("services.extraction.service.sys.platform", "darwin"),
+    ):
+        assert _peak_rss_mib() == 3.0
+
+    usage.ru_maxrss = 3 * 1_024
+    with (
+        patch("services.extraction.service.resource.getrusage", return_value=usage),
+        patch("services.extraction.service.sys.platform", "linux"),
+    ):
+        assert _peak_rss_mib() == 3.0
+
+
+def test_storage_path_recovers_legacy_signed_flyer_url() -> None:
+    from services.extraction.service import _flyer_storage_path
+
+    path = _flyer_storage_path(
+        "https://supabase.test/storage/v1/object/sign/flyers/user/flyer.pdf?token=short-lived"
+    )
+
+    assert path == "user/flyer.pdf"
+
+
 class TestExtractionServiceStatusTransitions:
     """Flyer status set to 'done' on success."""
 

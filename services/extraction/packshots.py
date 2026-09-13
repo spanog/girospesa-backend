@@ -1,11 +1,13 @@
 """Render and crop AI-localized product packshots from flyer PDF pages."""
 from __future__ import annotations
 
+from collections.abc import Iterator
 from io import BytesIO
 from typing import Mapping, Sequence
 
 from PIL import Image
 
+from services.extraction.pdf_utils import PdfSource
 
 _BOX_GRID_SIZE = 1000
 _PACKSHOT_RENDER_SCALE = 2
@@ -25,41 +27,50 @@ def normalized_box(value: object) -> tuple[int, int, int, int] | None:
     return y1, x1, y2, x2
 
 
-def render_packshot(pdf_bytes: bytes, page_number: int, box: object) -> bytes | None:
-    return render_page_packshots(pdf_bytes, page_number, {"packshot": box}).get("packshot")
+def render_packshot(pdf_source: PdfSource, page_number: int, box: object) -> bytes | None:
+    return render_page_packshots(pdf_source, page_number, {"packshot": box}).get("packshot")
 
 
 def render_page_packshots(
-    pdf_bytes: bytes, page_number: int, boxes: Mapping[str, object]
+    pdf_source: PdfSource, page_number: int, boxes: Mapping[str, object]
 ) -> dict[str, bytes]:
-    image = _render_page(pdf_bytes, page_number)
+    return dict(iter_page_packshots(pdf_source, page_number, boxes))
+
+
+def iter_page_packshots(
+    pdf_source: PdfSource, page_number: int, boxes: Mapping[str, object]
+) -> Iterator[tuple[str, bytes]]:
+    """Yield each crop before rendering the next one to bound peak memory."""
+    image = _render_page(pdf_source, page_number)
     if image is None:
-        return {}
+        return
     try:
-        return _render_crops(image, boxes)
+        yield from _iter_crops(image, boxes)
     finally:
         image.close()
 
 
-def _render_crops(image: Image.Image, boxes: Mapping[str, object]) -> dict[str, bytes]:
-    rendered: dict[str, bytes] = {}
+def _iter_crops(image: Image.Image, boxes: Mapping[str, object]) -> Iterator[tuple[str, bytes]]:
     for key, box in boxes.items():
         coordinates = normalized_box(box)
         if coordinates is None:
             continue
         crop = image.crop(_pixel_box(image.size, expanded_box(coordinates)))
         try:
-            rendered[key] = _webp_bytes(crop)
+            yield key, _webp_bytes(crop)
         finally:
             crop.close()
-    return rendered
 
 
-def _render_page(pdf_bytes: bytes, page_number: int) -> Image.Image | None:
+def _render_page(pdf_source: PdfSource, page_number: int) -> Image.Image | None:
     try:
         import fitz
 
-        document = fitz.open(stream=pdf_bytes, filetype="pdf")
+        document = (
+            fitz.open(stream=pdf_source, filetype="pdf")
+            if isinstance(pdf_source, bytes)
+            else fitz.open(filename=str(pdf_source))
+        )
         if page_number > len(document):
             document.close()
             return None

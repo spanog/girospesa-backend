@@ -19,11 +19,16 @@ resumes from the first failed chunk.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
+from pathlib import Path
+import resource
+import sys
+import tempfile
 import time
 import uuid
-from typing import Callable
+from typing import BinaryIO, Callable
 
 import requests
 
@@ -36,8 +41,8 @@ from services.extraction.normalizer import (
     json_size_bytes,
     normalize_product,
 )
-from services.extraction.pdf_utils import count_pdf_pages, is_pdf, mime_type_for_filename
-from services.extraction.packshots import render_page_packshots
+from services.extraction.pdf_utils import PdfSource, count_pdf_pages, is_pdf, mime_type_for_filename
+from services.extraction.packshots import iter_page_packshots
 from services.extraction.providers import ExtractionProvider, get_provider
 from services.extraction.providers.base import PdfChunkExtractionError
 from services.extraction.extraction_log import ERROR, SUCCESS, WARNING, log_event
@@ -51,14 +56,37 @@ _FLYER_SELECT = (
     "user_id, status, extraction_metadata"
 )
 
+_DOWNLOAD_CHUNK_BYTES = 1_048_576
+_SIGNED_DOWNLOAD_TTL_SECONDS = 900
+
+
+@dataclass(frozen=True)
+class DownloadedFlyer:
+    content: bytes | Path
+    temporary_path: Path | None = None
+
+    def cleanup(self) -> None:
+        if self.temporary_path is not None:
+            self.temporary_path.unlink(missing_ok=True)
+
 
 def _flyer_storage_path(file_reference: str) -> str | None:
     if file_reference and "://" not in file_reference:
         return file_reference
-    marker = "/storage/v1/object/public/flyers/"
-    if marker not in file_reference:
-        return None
-    return file_reference.split(marker, maxsplit=1)[1].split("?", maxsplit=1)[0]
+    markers = (
+        "/storage/v1/object/public/flyers/",
+        "/storage/v1/object/sign/flyers/",
+    )
+    for marker in markers:
+        if marker in file_reference:
+            return file_reference.split(marker, maxsplit=1)[1].split("?", maxsplit=1)[0]
+    return None
+
+
+def _peak_rss_mib() -> float:
+    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    divisor = 1_048_576 if sys.platform == "darwin" else 1_024
+    return round(peak_rss / divisor, 1)
 
 
 class ExtractionService:
@@ -86,10 +114,23 @@ class ExtractionService:
         )
 
         user_id: str | None = flyer.get("user_id")
+        downloaded: DownloadedFlyer | None = None
         try:
-            self._run_pipeline(sb, flyer, supermarket_id, supermarket_name, t_start)
+            downloaded = self._download_file(sb, flyer["file_url"], flyer.get("file_name", ""))
+            logger.info("Extraction flyer %s peak_rss_mib=%.1f stage=downloaded", flyer_id, _peak_rss_mib())
+            self._run_pipeline(
+                sb,
+                flyer,
+                supermarket_id,
+                supermarket_name,
+                t_start,
+                downloaded.content,
+            )
         except Exception as exc:
             self._handle_error(sb, flyer_id, supermarket_id, supermarket_name, exc, t_start, user_id=user_id)
+        finally:
+            if downloaded is not None:
+                downloaded.cleanup()
 
     def _run_pipeline(
         self,
@@ -98,9 +139,9 @@ class ExtractionService:
         supermarket_id: str | None,
         supermarket_name: str,
         t_start: float,
+        content: PdfSource,
     ) -> None:
         flyer_id = flyer["id"]
-        content = self._download_file(sb, flyer["file_url"])
         file_name = flyer.get("file_name", "")
         mime_type = mime_type_for_filename(file_name)
         pages_count = count_pdf_pages(content) if is_pdf(file_name) else 1
@@ -137,6 +178,7 @@ class ExtractionService:
         all_products: list[dict] = []
         retry_errors: list[str] = []
         starting_saved_count = runtime["products_saved_count"]
+        starting_raw_count = runtime["products_raw_count"]
 
         def _progress_callback(progress: dict) -> None:
             self._update_chunk_progress(
@@ -228,6 +270,7 @@ class ExtractionService:
             )
         self._save_pending_packshots(sb, flyer_id, content)
         provider_seconds = time.perf_counter() - provider_started_at
+        logger.info("Extraction flyer %s peak_rss_mib=%.1f stage=extracted", flyer_id, _peak_rss_mib())
 
         sb.table("flyers").update({  # type: ignore[union-attr]
             "extraction_metadata": {
@@ -258,7 +301,8 @@ class ExtractionService:
                 details={"retry_errors": retry_errors},
             )
 
-        if not all_products:
+        extracted_any_products = bool(all_products) or runtime["products_raw_count"] > starting_raw_count
+        if not extracted_any_products:
             raise ValueError("No products extracted from flyer")
 
         if runtime["products_saved_count"] == 0:
@@ -500,7 +544,7 @@ class ExtractionService:
         runtime["products_saved_count"] += len(unique_offer_rows)
         return len(unique_offer_rows)
 
-    def _save_pending_packshots(self, sb: object, flyer_id: str, pdf_bytes: bytes) -> None:
+    def _save_pending_packshots(self, sb: object, flyer_id: str, pdf_source: PdfSource) -> None:
         pending = (
             sb.table("offers")  # type: ignore[union-attr]
             .select("id, image_url, packshot_source_page, packshot_bbox")
@@ -511,11 +555,10 @@ class ExtractionService:
             .execute()
         )
         for source_page, offers in self._packshots_by_page(pending.data or []).items():
-            images = render_page_packshots(
-                pdf_bytes, source_page, {offer["id"]: offer["packshot_bbox"] for offer in offers}
-            )
-            for offer in offers:
-                self._upload_packshot(sb, offer, images.get(offer["id"]))
+            offers_by_id = {offer["id"]: offer for offer in offers}
+            boxes = {offer_id: offer["packshot_bbox"] for offer_id, offer in offers_by_id.items()}
+            for offer_id, image in iter_page_packshots(pdf_source, source_page, boxes):
+                self._upload_packshot(sb, offers_by_id[offer_id], image)
 
     def _packshots_by_page(self, offers: list[dict]) -> dict[int, list[dict]]:
         grouped: dict[int, list[dict]] = {}
@@ -872,15 +915,51 @@ class ExtractionService:
             raise ValueError(f"Flyer not found: {flyer_id}")
         return result.data
 
-    def _download_file(self, sb: object, file_url: str) -> bytes:
-        # flyers bucket is private — use storage SDK (service role) instead of HTTP GET
+    def _download_file(self, sb: object, file_url: str, file_name: str) -> DownloadedFlyer:
         storage_path = _flyer_storage_path(file_url)
+        if not is_pdf(file_name):
+            return DownloadedFlyer(self._download_bytes(sb, file_url, storage_path))
+        return self._download_pdf_to_disk(sb, file_url, storage_path)
+
+    def _download_bytes(self, sb: object, file_url: str, storage_path: str | None) -> bytes:
+        if storage_path is not None:
+            return bytes(sb.storage.from_("flyers").download(storage_path))  # type: ignore[union-attr]
+        response = requests.get(file_url, timeout=30)
+        response.raise_for_status()
+        return response.content
+
+    def _download_pdf_to_disk(
+        self, sb: object, file_url: str, storage_path: str | None
+    ) -> DownloadedFlyer:
+        download_url = self._signed_download_url(sb, file_url, storage_path)
+        temporary = tempfile.NamedTemporaryFile(prefix="girospesa-flyer-", suffix=".pdf", delete=False)
+        path = Path(temporary.name)
+        try:
+            self._stream_to_file(download_url, temporary)
+        except Exception:
+            temporary.close()
+            path.unlink(missing_ok=True)
+            raise
+        return DownloadedFlyer(content=path, temporary_path=path)
+
+    def _signed_download_url(self, sb: object, file_url: str, storage_path: str | None) -> str:
         if storage_path is None:
-            # fallback: signed-URL path or unknown format — try HTTP
-            resp = requests.get(file_url, timeout=30)
-            resp.raise_for_status()
-            return resp.content
-        return bytes(sb.storage.from_("flyers").download(storage_path))  # type: ignore[union-attr]
+            return file_url
+        signed = sb.storage.from_("flyers").create_signed_url(  # type: ignore[union-attr]
+            storage_path,
+            _SIGNED_DOWNLOAD_TTL_SECONDS,
+        )
+        return signed["signedURL"]
+
+    def _stream_to_file(self, download_url: str, destination: BinaryIO) -> None:
+        response = requests.get(download_url, timeout=30, stream=True)
+        try:
+            response.raise_for_status()
+            for chunk in response.iter_content(chunk_size=_DOWNLOAD_CHUNK_BYTES):
+                if chunk:
+                    destination.write(chunk)
+        finally:
+            destination.close()
 
     def _build_offer_row(
         self,

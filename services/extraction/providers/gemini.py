@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-import multiprocessing
 import random
 import re
 import time
 from collections import Counter
+from pathlib import Path
 from typing import Callable
 
-from services.extraction.pdf_utils import PdfChunk, count_pdf_pages, iter_pdf_chunks, pdf_page_chunk
+from services.extraction.pdf_utils import PdfChunk, PdfSource, count_pdf_pages, iter_pdf_chunks, pdf_page_chunk
 from services.extraction.providers.base import PdfChunkExtractionError
 from services.extraction.providers.prompts import EXTRACTION_PROMPT
 
@@ -27,7 +27,6 @@ PDF_CHUNK_SIZE_PAGES = 2
 LOW_COVERAGE_MAX_PRODUCTS = 1
 LOW_COVERAGE_MIN_SIBLING_PRODUCTS = 4
 GEMINI_REQUEST_TIMEOUT_MS = 8 * 60 * 1000
-GEMINI_REQUEST_TIMEOUT_S = GEMINI_REQUEST_TIMEOUT_MS / 1000
 _RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)s'")
 _UNAVAILABLE_RE = re.compile(r"503|UNAVAILABLE", re.IGNORECASE)
 _TRANSIENT_SERVER_ERROR_RE = re.compile(r"500|502|504|INTERNAL|BAD_GATEWAY|GATEWAY_TIMEOUT", re.IGNORECASE)
@@ -39,61 +38,23 @@ LOW_COVERAGE_RETRY_PROMPT = (
 )
 
 
-class GeminiRequestTimeoutError(TimeoutError):
-    """Raised when one Gemini request exceeds its hard deadline."""
-
-
-def _generate_in_child(
-    api_key: str, model: str, payload_bytes: bytes, mime_type: str, prompt: str, result: object
-) -> None:
-    try:
-        from google import genai
-        from google.genai import types as gtypes
-
-        response = genai.Client(
-            api_key=api_key,
-            http_options=gtypes.HttpOptions(timeout=GEMINI_REQUEST_TIMEOUT_MS),
-        ).models.generate_content(
-            model=model,
-            contents=[gtypes.Part.from_bytes(data=payload_bytes, mime_type=mime_type), gtypes.Part.from_text(text=prompt)],
-            config=gtypes.GenerateContentConfig(
-                response_mime_type="application/json", temperature=0.1,
-                http_options=gtypes.HttpOptions(timeout=GEMINI_REQUEST_TIMEOUT_MS),
-            ),
-        )
-        result.send(("ok", response.text or "{}"))
-    except Exception as exc:
-        result.send(("error", _format_exception(exc)))
-    finally:
-        result.close()
-
-
-def _generate_with_hard_deadline(
-    *, api_key: str, model: str, payload_bytes: bytes, mime_type: str, prompt: str, **_: object
+def _generate_direct(
+    *, client: object, gtypes: object, model: str, payload_bytes: bytes, mime_type: str, prompt: str, **_: object
 ) -> str:
-    context = multiprocessing.get_context("spawn")
-    received, sent = context.Pipe(duplex=False)
-    process = context.Process(
-        target=_generate_in_child,
-        args=(api_key, model, payload_bytes, mime_type, prompt, sent),
+    """Call Gemini in-process so the PDF chunk is not copied into a child process."""
+    response = client.models.generate_content(
+        model=model,
+        contents=[
+            gtypes.Part.from_bytes(data=payload_bytes, mime_type=mime_type),
+            gtypes.Part.from_text(text=prompt),
+        ],
+        config=gtypes.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.1,
+            http_options=gtypes.HttpOptions(timeout=GEMINI_REQUEST_TIMEOUT_MS),
+        ),
     )
-    process.start()
-    sent.close()
-    try:
-        if not received.poll(GEMINI_REQUEST_TIMEOUT_S):
-            process.terminate()
-            process.join()
-            raise GeminiRequestTimeoutError(f"Gemini request exceeded {GEMINI_REQUEST_TIMEOUT_S:.0f}s deadline")
-        status, payload = received.recv()
-        process.join()
-        if status != "ok":
-            raise RuntimeError(payload)
-        return payload
-    finally:
-        received.close()
-        if process.is_alive():
-            process.terminate()
-            process.join()
+    return response.text or "{}"
 
 
 def _retry_delay(exc: Exception, attempt: int = 0) -> float:
@@ -179,12 +140,12 @@ class GeminiProvider:
     ) -> None:
         self._api_key = api_key
         self._model = model
-        self._request_executor = request_executor or _generate_with_hard_deadline
+        self._request_executor = request_executor or _generate_direct
         self.chunk_size_pages = PDF_CHUNK_SIZE_PAGES
 
     def extract_products(
         self,
-        file_bytes: bytes,
+        file_bytes: bytes | Path,
         mime_type: str,
         progress_callback: Callable[[dict], None] | None = None,
         chunk_result_callback: Callable[[dict], None] | None = None,
@@ -204,6 +165,8 @@ class GeminiProvider:
                 "google-genai is required. Install with: pip install google-genai"
             ) from exc
 
+        if mime_type != "application/pdf" and not isinstance(file_bytes, bytes):
+            raise TypeError("Only PDF extraction accepts a file path")
         if mime_type != "application/pdf" and len(file_bytes) > MAX_INLINE_BYTES:
             raise ValueError(
                 f"File too large for inline upload "
@@ -290,12 +253,13 @@ class GeminiProvider:
         *,
         client: object,
         gtypes: object,
-        pdf_bytes: bytes,
+        pdf_bytes: PdfSource,
         progress_callback: Callable[[dict], None] | None,
         chunk_result_callback: Callable[[dict], None] | None,
         start_chunk_index: int,
     ) -> tuple[list[dict], list[str]]:
-        products: list[dict] = []
+        products: list[dict] | None = [] if chunk_result_callback is None else None
+        products_found = 0
         retry_errors: list[str] = []
         pages_total = count_pdf_pages(pdf_bytes)
         chunks_total = max(1, (pages_total + self.chunk_size_pages - 1) // self.chunk_size_pages)
@@ -315,7 +279,7 @@ class GeminiProvider:
                     "current_chunk_start": chunk.start_page,
                     "current_chunk_end": chunk.end_page,
                     "pages_processed": chunk.start_page - 1,
-                    "products_found": len(products),
+                    "products_found": products_found,
                 }
                 if chunk_index == 1:
                     progress["progress_percent"] = 5
@@ -357,7 +321,9 @@ class GeminiProvider:
                         "retry_errors": chunk_errors,
                     }
                 )
-            products.extend(chunk_products)
+            products_found += len(chunk_products)
+            if products is not None:
+                products.extend(chunk_products)
             if progress_callback:
                 progress_callback(
                     {
@@ -366,11 +332,11 @@ class GeminiProvider:
                         "current_chunk_start": chunk.start_page,
                         "current_chunk_end": chunk.end_page,
                         "pages_processed": chunk.end_page,
-                        "products_found": len(products),
+                        "products_found": products_found,
                     }
                 )
 
-        return products, retry_errors
+        return products or [], retry_errors
 
     def _extract_pdf_chunk(
         self,

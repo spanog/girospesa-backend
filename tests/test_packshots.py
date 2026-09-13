@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import fitz
 from services.extraction.normalizer import normalize_product
 from PIL import Image
 
@@ -71,11 +72,40 @@ def test_pending_packshots_are_uploaded_from_persisted_metadata() -> None:
         {"id": "offer-1", "image_url": None, "packshot_source_page": 2, "packshot_bbox": [1, 2, 3, 4]}
     ]
 
-    with patch("services.extraction.service.render_page_packshots", return_value={"offer-1": b"png"}) as render, patch.object(ExtractionService, "_upload_packshot") as upload:
+    with patch("services.extraction.service.iter_page_packshots", return_value=iter([("offer-1", b"png")])) as render, patch.object(ExtractionService, "_upload_packshot") as upload:
         ExtractionService()._save_pending_packshots(sb, "flyer-1", b"%PDF")
 
     render.assert_called_once_with(b"%PDF", 2, {"offer-1": [1, 2, 3, 4]})
     upload.assert_called_once_with(sb, pending.execute.return_value.data[0], b"png")
+
+
+def test_pending_packshots_upload_each_crop_before_rendering_the_next() -> None:
+    from services.extraction.service import ExtractionService
+
+    sb = MagicMock()
+    pending = (
+        sb.table.return_value.select.return_value.eq.return_value.is_.return_value.not_.is_.return_value.not_.is_.return_value
+    )
+    offers = [
+        {"id": "offer-1", "image_url": None, "packshot_source_page": 2, "packshot_bbox": [1, 2, 3, 4]},
+        {"id": "offer-2", "image_url": None, "packshot_source_page": 2, "packshot_bbox": [5, 6, 7, 8]},
+    ]
+    pending.execute.return_value.data = offers
+    uploaded: list[str] = []
+
+    def crops():
+        yield "offer-1", b"first"
+        assert uploaded == ["offer-1"]
+        yield "offer-2", b"second"
+
+    with patch("services.extraction.service.iter_page_packshots", return_value=crops()), patch.object(
+        ExtractionService,
+        "_upload_packshot",
+        side_effect=lambda _sb, offer, _image: uploaded.append(offer["id"]),
+    ):
+        ExtractionService()._save_pending_packshots(sb, "flyer-1", b"%PDF")
+
+    assert uploaded == ["offer-1", "offer-2"]
 
 
 def test_page_packshots_render_page_once_for_multiple_crops() -> None:
@@ -93,6 +123,21 @@ def test_packshot_bytes_are_webp_and_bounded_to_640_pixels() -> None:
 
     with patch("services.extraction.packshots._render_page", return_value=page):
         image_bytes = render_page_packshots(b"%PDF", 1, {"one": [0, 0, 1000, 1000]})["one"]
+
+    with Image.open(__import__("io").BytesIO(image_bytes)) as rendered:
+        assert rendered.format == "WEBP"
+        assert max(rendered.size) == 640
+
+
+def test_packshots_render_from_a_pdf_path_without_changing_crop_output(tmp_path) -> None:
+    path = tmp_path / "volantino.pdf"
+    document = fitz.open()
+    page = document.new_page(width=1_000, height=1_000)
+    page.draw_rect(fitz.Rect(100, 100, 900, 900), color=(0, 1, 0), fill=(0, 1, 0))
+    document.save(path)
+    document.close()
+
+    image_bytes = render_page_packshots(path, 1, {"one": [100, 100, 900, 900]})["one"]
 
     with Image.open(__import__("io").BytesIO(image_bytes)) as rendered:
         assert rendered.format == "WEBP"

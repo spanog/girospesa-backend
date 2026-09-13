@@ -5,7 +5,11 @@ pdf_utils.py — PDF utility helpers (page count, chunking, page rasterization, 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import NamedTuple
+
+
+PdfSource = bytes | Path
 
 
 class PdfChunk(NamedTuple):
@@ -14,7 +18,7 @@ class PdfChunk(NamedTuple):
     pdf_bytes: bytes
 
 
-def _open_pdf(pdf_bytes: bytes):
+def _open_pdf(pdf_source: PdfSource):
     try:
         import fitz  # PyMuPDF
     except ImportError as exc:
@@ -22,42 +26,44 @@ def _open_pdf(pdf_bytes: bytes):
             "PyMuPDF is required. Install with: pip install pymupdf"
         ) from exc
 
-    return fitz.open(stream=pdf_bytes, filetype="pdf")
+    if isinstance(pdf_source, bytes):
+        return fitz.open(stream=pdf_source, filetype="pdf")
+    return fitz.open(filename=str(pdf_source))
 
 
 def is_pdf(filename: str) -> bool:
     return filename.lower().endswith(".pdf")
 
 
-def count_pdf_pages(pdf_bytes: bytes) -> int:
+def count_pdf_pages(pdf_source: PdfSource) -> int:
     """Return the number of pages in a PDF without rendering them."""
-    doc = _open_pdf(pdf_bytes)
+    doc = _open_pdf(pdf_source)
     n = len(doc)
     doc.close()
     return n
 
 
-def split_pdf_into_chunks(pdf_bytes: bytes, chunk_size: int) -> list[PdfChunk]:
+def split_pdf_into_chunks(pdf_source: PdfSource, chunk_size: int) -> list[PdfChunk]:
     """Split a PDF into smaller PDF byte payloads with fixed page counts."""
-    return list(iter_pdf_chunks(pdf_bytes, chunk_size))
+    return list(iter_pdf_chunks(pdf_source, chunk_size))
 
 
-def pdf_page_chunk(pdf_bytes: bytes, page_number: int) -> PdfChunk:
+def pdf_page_chunk(pdf_source: PdfSource, page_number: int) -> PdfChunk:
     """Return one page as a standalone PDF chunk, preserving its source index."""
     if page_number < 1:
         raise ValueError("page_number must be >= 1")
-    for chunk in iter_pdf_chunks(pdf_bytes, chunk_size=1):
+    for chunk in iter_pdf_chunks(pdf_source, chunk_size=1):
         if chunk.start_page == page_number:
             return chunk
     raise ValueError(f"page_number {page_number} exceeds PDF length")
 
 
-def iter_pdf_chunks(pdf_bytes: bytes, chunk_size: int) -> Iterator[PdfChunk]:
+def iter_pdf_chunks(pdf_source: PdfSource, chunk_size: int) -> Iterator[PdfChunk]:
     """Yield PDF chunks one at a time, keeping one generated chunk in memory."""
     if chunk_size < 1:
         raise ValueError("chunk_size must be >= 1")
 
-    doc = _open_pdf(pdf_bytes)
+    doc = _open_pdf(pdf_source)
     try:
         import fitz  # PyMuPDF
 
@@ -77,9 +83,9 @@ def iter_pdf_chunks(pdf_bytes: bytes, chunk_size: int) -> Iterator[PdfChunk]:
         doc.close()
 
 
-def split_pdf_to_jpeg_pages(pdf_bytes: bytes, dpi: int = 150) -> list[bytes]:
+def split_pdf_to_jpeg_pages(pdf_source: PdfSource, dpi: int = 150) -> list[bytes]:
     """Render each PDF page to JPEG bytes."""
-    doc = _open_pdf(pdf_bytes)
+    doc = _open_pdf(pdf_source)
     scale = dpi / 72
     try:
         import fitz  # PyMuPDF

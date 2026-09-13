@@ -210,6 +210,41 @@ def test_extract_products_chunks_pdf_in_fixed_groups_of_three_pages() -> None:
     ]
 
 
+def test_extract_products_streams_pdf_results_when_callback_persists_them() -> None:
+    fake_client = _FakeClient(
+        responses=[
+            json.dumps({"products": [{"name": "Prodotto 1", "price_current": 1.0}]}),
+            json.dumps({"products": [{"name": "Prodotto 2", "price_current": 2.0}]}),
+        ]
+    )
+    _install_google_stub(fake_client)
+
+    from services.extraction.pdf_utils import PdfChunk
+    from services.extraction.providers.gemini import GeminiProvider
+
+    chunks = [
+        PdfChunk(start_page=1, end_page=1, pdf_bytes=b"chunk-1"),
+        PdfChunk(start_page=2, end_page=2, pdf_bytes=b"chunk-2"),
+    ]
+    persisted: list[list[dict]] = []
+    with (
+        patch("services.extraction.providers.gemini.count_pdf_pages", return_value=2),
+        patch("services.extraction.providers.gemini.iter_pdf_chunks", return_value=iter(chunks)),
+    ):
+        products, retry_errors = GeminiProvider(api_key="test-key").extract_products(
+            b"%PDF-fake",
+            "application/pdf",
+            chunk_result_callback=lambda payload: persisted.append(payload["products"]),
+        )
+
+    assert products == []
+    assert retry_errors == []
+    assert [[product["name"] for product in chunk] for chunk in persisted] == [
+        ["Prodotto 1"],
+        ["Prodotto 2"],
+    ]
+
+
 def test_extract_products_chunks_pdf_larger_than_inline_limit() -> None:
     fake_client = _FakeClient(responses=[json.dumps({"products": []})])
     _install_google_stub(fake_client)
@@ -379,9 +414,7 @@ def test_extract_products_sets_eight_minute_gemini_request_timeout() -> None:
 
     from services.extraction.providers.gemini import GEMINI_REQUEST_TIMEOUT_MS, GeminiProvider
 
-    GeminiProvider(api_key="test-key", request_executor=_direct_request_executor).extract_products(
-        b"image-fake", "image/jpeg"
-    )
+    GeminiProvider(api_key="test-key").extract_products(b"image-fake", "image/jpeg")
 
     assert fake_client.api_key == "test-key"
     assert fake_client.http_options.kwargs == {"timeout": GEMINI_REQUEST_TIMEOUT_MS}
@@ -389,41 +422,6 @@ def test_extract_products_sets_eight_minute_gemini_request_timeout() -> None:
     assert config.kwargs["http_options"].kwargs == {"timeout": GEMINI_REQUEST_TIMEOUT_MS}
     assert GEMINI_REQUEST_TIMEOUT_MS == 480_000
     assert GeminiProvider(api_key="test-key").chunk_size_pages == 2
-
-
-def test_hard_deadline_terminates_a_stuck_gemini_child() -> None:
-    class _Receive:
-        def close(self) -> None: pass
-        def poll(self, timeout: float) -> bool:
-            assert timeout == 480
-            return False
-
-    class _Send:
-        def close(self) -> None: pass
-
-    class _Process:
-        terminated: list[bool] = []
-        def __init__(self, **_: object) -> None: pass
-        def start(self) -> None: pass
-        def terminate(self) -> None: _Process.terminated.append(True)
-        def join(self) -> None: pass
-        def is_alive(self) -> bool: return False
-
-    class _Context:
-        def Pipe(self, *, duplex: bool) -> tuple[_Receive, _Send]:
-            assert duplex is False
-            return _Receive(), _Send()
-        Process = _Process
-
-    from services.extraction.providers.gemini import GeminiRequestTimeoutError, _generate_with_hard_deadline
-
-    with patch("services.extraction.providers.gemini.multiprocessing.get_context", return_value=_Context()):
-        with pytest.raises(GeminiRequestTimeoutError):
-            _generate_with_hard_deadline(
-                api_key="test-key", model="test-model", payload_bytes=b"pdf", mime_type="application/pdf", prompt="test"
-            )
-
-    assert _Process.terminated == [True]
 
 
 def test_extract_products_logs_structured_gemini_error_details(caplog: pytest.LogCaptureFixture) -> None:

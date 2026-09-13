@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Protocol
 
 
@@ -22,7 +23,7 @@ class PdfChunkExtractionError(Exception):
 class ExtractionProvider(Protocol):
     def extract_products(
         self,
-        file_bytes: bytes,
+        file_bytes: bytes | Path,
         mime_type: str,
         progress_callback: Callable[[dict], None] | None = None,
         chunk_result_callback: Callable[[dict], None] | None = None,
