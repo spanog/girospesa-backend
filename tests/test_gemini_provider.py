@@ -231,7 +231,10 @@ def test_extract_products_streams_pdf_results_when_callback_persists_them() -> N
         patch("services.extraction.providers.gemini.count_pdf_pages", return_value=2),
         patch("services.extraction.providers.gemini.iter_pdf_chunks", return_value=iter(chunks)),
     ):
-        products, retry_errors = GeminiProvider(api_key="test-key").extract_products(
+        products, retry_errors = GeminiProvider(
+            api_key="test-key",
+            request_executor=_direct_request_executor,
+        ).extract_products(
             b"%PDF-fake",
             "application/pdf",
             chunk_result_callback=lambda payload: persisted.append(payload["products"]),
@@ -243,6 +246,21 @@ def test_extract_products_streams_pdf_results_when_callback_persists_them() -> N
         ["Prodotto 1"],
         ["Prodotto 2"],
     ]
+
+
+def test_hard_deadline_terminates_a_stalled_gemini_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.extraction.providers import gemini
+
+    monkeypatch.setattr(gemini, "GEMINI_REQUEST_TIMEOUT_S", 0)
+
+    with pytest.raises(gemini.GeminiRequestTimeoutError, match="exceeded 0s deadline"):
+        gemini._generate_with_hard_deadline(
+            api_key="test-key",
+            model="test-model",
+            payload_bytes=b"stalled-request",
+            mime_type="application/pdf",
+            prompt="Extract offers",
+        )
 
 
 def test_extract_products_chunks_pdf_larger_than_inline_limit() -> None:
@@ -414,7 +432,10 @@ def test_extract_products_sets_eight_minute_gemini_request_timeout() -> None:
 
     from services.extraction.providers.gemini import GEMINI_REQUEST_TIMEOUT_MS, GeminiProvider
 
-    GeminiProvider(api_key="test-key").extract_products(b"image-fake", "image/jpeg")
+    GeminiProvider(
+        api_key="test-key",
+        request_executor=_direct_request_executor,
+    ).extract_products(b"image-fake", "image/jpeg")
 
     assert fake_client.api_key == "test-key"
     assert fake_client.http_options.kwargs == {"timeout": GEMINI_REQUEST_TIMEOUT_MS}

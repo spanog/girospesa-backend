@@ -48,7 +48,8 @@ ALLOWED_PRODUCT_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/g
 MAX_PRODUCT_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 OFFER_KIND_SOURCE_MASTER = "source_master"
 OFFER_KIND_PUBLISHED_TARGET = "published_target"
-PROCESSING_RESUME_STALE_AFTER = timedelta(minutes=5)
+# Chunk retries can make up to nine 8-minute Gemini calls before failing.
+PROCESSING_RESUME_STALE_AFTER = timedelta(minutes=90)
 MAX_PUBLIC_FLYERS = 1_000
 
 

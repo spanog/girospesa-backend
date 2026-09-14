@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import multiprocessing
 import random
 import re
+import tempfile
 import time
 from collections import Counter
 from pathlib import Path
@@ -27,6 +29,7 @@ PDF_CHUNK_SIZE_PAGES = 2
 LOW_COVERAGE_MAX_PRODUCTS = 1
 LOW_COVERAGE_MIN_SIBLING_PRODUCTS = 4
 GEMINI_REQUEST_TIMEOUT_MS = 8 * 60 * 1000
+GEMINI_REQUEST_TIMEOUT_S = GEMINI_REQUEST_TIMEOUT_MS / 1000
 _RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)s'")
 _UNAVAILABLE_RE = re.compile(r"503|UNAVAILABLE", re.IGNORECASE)
 _TRANSIENT_SERVER_ERROR_RE = re.compile(r"500|502|504|INTERNAL|BAD_GATEWAY|GATEWAY_TIMEOUT", re.IGNORECASE)
@@ -55,6 +58,104 @@ def _generate_direct(
         ),
     )
     return response.text or "{}"
+
+
+class GeminiRequestTimeoutError(TimeoutError):
+    """Raised when a Gemini request exceeds its hard deadline."""
+
+
+def _generate_in_child(
+    api_key: str,
+    model: str,
+    payload_path: str,
+    mime_type: str,
+    prompt: str,
+    result: object,
+) -> None:
+    try:
+        response = _generate_child_payload(api_key, model, payload_path, mime_type, prompt)
+        result.send(("ok", response))  # type: ignore[union-attr]
+    except Exception as exc:
+        result.send(("error", _format_exception(exc)))  # type: ignore[union-attr]
+    finally:
+        result.close()  # type: ignore[union-attr]
+
+
+def _generate_child_payload(
+    api_key: str, model: str, payload_path: str, mime_type: str, prompt: str
+) -> str:
+    from google import genai
+    from google.genai import types as gtypes
+
+    client = genai.Client(
+        api_key=api_key,
+        http_options=gtypes.HttpOptions(timeout=GEMINI_REQUEST_TIMEOUT_MS),
+    )
+    return _generate_direct(
+        api_key=api_key,
+        client=client,
+        gtypes=gtypes,
+        model=model,
+        payload_bytes=Path(payload_path).read_bytes(),
+        mime_type=mime_type,
+        prompt=prompt,
+    )
+
+
+def _write_request_payload(payload_bytes: bytes) -> Path:
+    temporary = tempfile.NamedTemporaryFile(prefix="girospesa-gemini-", delete=False)
+    try:
+        temporary.write(payload_bytes)
+        return Path(temporary.name)
+    finally:
+        temporary.close()
+
+
+def _generate_with_hard_deadline(
+    *, api_key: str, model: str, payload_bytes: bytes, mime_type: str, prompt: str, **_: object
+) -> str:
+    payload_path = _write_request_payload(payload_bytes)
+    process, received, sent = _new_deadline_process(api_key, model, payload_path, mime_type, prompt)
+    try:
+        process.start()
+        sent.close()
+        return _read_deadline_response(received)
+    finally:
+        received.close()
+        sent.close()
+        _stop_deadline_process(process)
+        payload_path.unlink(missing_ok=True)
+
+
+def _new_deadline_process(
+    api_key: str, model: str, payload_path: Path, mime_type: str, prompt: str
+) -> tuple[object, object, object]:
+    context = multiprocessing.get_context("spawn")
+    received, sent = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_generate_in_child,
+        args=(api_key, model, str(payload_path), mime_type, prompt, sent),
+    )
+    return process, received, sent
+
+
+def _read_deadline_response(received: object) -> str:
+    if not received.poll(GEMINI_REQUEST_TIMEOUT_S):  # type: ignore[union-attr]
+        raise GeminiRequestTimeoutError(
+            f"Gemini request exceeded {GEMINI_REQUEST_TIMEOUT_S:.0f}s deadline"
+        )
+    status, response = received.recv()  # type: ignore[union-attr]
+    if status != "ok":
+        raise RuntimeError(response)
+    return response
+
+
+def _stop_deadline_process(process: object) -> None:
+    if getattr(process, "pid", None) is None:
+        return
+    if process.is_alive():  # type: ignore[union-attr]
+        process.terminate()  # type: ignore[union-attr]
+    process.join()  # type: ignore[union-attr]
 
 
 def _retry_delay(exc: Exception, attempt: int = 0) -> float:
@@ -140,7 +241,7 @@ class GeminiProvider:
     ) -> None:
         self._api_key = api_key
         self._model = model
-        self._request_executor = request_executor or _generate_direct
+        self._request_executor = request_executor or _generate_with_hard_deadline
         self.chunk_size_pages = PDF_CHUNK_SIZE_PAGES
 
     def extract_products(

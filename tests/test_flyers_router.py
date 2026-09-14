@@ -190,6 +190,21 @@ def test_confirmed_count_by_flyer_uses_database_aggregation():
     )
 
 
+def test_stale_processing_flyer_can_resume_only_after_safety_window():
+    now = _flyers_module.datetime.now(_flyers_module.timezone.utc)
+    flyer = {
+        "status": "processing",
+        "updated_at": (now - _flyers_module.PROCESSING_RESUME_STALE_AFTER).isoformat(),
+        "extraction_metadata": {"last_completed_chunk": 2, "next_chunk_index": 3},
+    }
+
+    assert _flyers_module._can_resume_stale_processing(flyer) is True
+
+    flyer["updated_at"] = now.isoformat()
+
+    assert _flyers_module._can_resume_stale_processing(flyer) is False
+
+
 def test_public_flyers_filters_nearby_branches_without_exact_count():
     sb = MagicMock()
     query = MagicMock()

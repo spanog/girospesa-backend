@@ -80,7 +80,8 @@ Flow identica in locale, test, prod: cambia solo valore env.
 ### Retry policy Gemini
 
 - I chunk PDF Gemini usano `MAX_RETRIES = 3`.
-- I PDF nuovi vengono inviati in chunk da 2 pagine, quindi la dimensione complessiva del PDF non usa il limite di 20 MB previsto per le immagini inviate inline. Ogni richiesta Gemini ha una deadline hard di 8 minuti: gira in un sottoprocesso terminabile, quindi anche una connessione TLS viva ma senza risposta viene chiusa e passa nel retry con backoff invece di lasciare l'estrazione indefinitamente in `processing`. Una ripresa conserva invece la dimensione chunk già checkpointata.
+- I PDF nuovi vengono inviati in chunk da 2 pagine, quindi la dimensione complessiva del PDF non usa il limite di 20 MB previsto per le immagini inviate inline. Ogni richiesta Gemini ha una deadline hard di 8 minuti: gira in un sottoprocesso terminabile che legge il solo chunk da file temporaneo, quindi una connessione TLS viva ma senza risposta viene chiusa senza duplicare il PDF completo in RAM e passa nel retry con backoff. Una ripresa conserva la dimensione chunk già checkpointata.
+- Un volantino `processing` può essere ripreso soltanto dopo 90 minuti senza aggiornamenti: finestra superiore ai tentativi del chunk e ai controlli di copertura con deadline, per non avviare due estrazioni concorrenti sullo stesso checkpoint.
 - Errori provider `503/UNAVAILABLE` usano backoff esponenziale lungo con jitter.
 - Errori transient server-side `500/502/504` e `INTERNAL` usano backoff esponenziale dedicato con jitter, per evitare tre retry troppo ravvicinati quando il provider e' in stato instabile.
 - Se i retry si esauriscono, il flyer passa a `error` con checkpoint di resume sul chunk fallito.
