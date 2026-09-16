@@ -145,6 +145,33 @@ class TestDatabaseQueryPerformance:
         assert elapsed_ms < DISCOVERY_LIMIT_MS
         assert len(result.data) == 20
 
+    def test_nearby_offer_page_returns_only_requested_rows(
+        self, supabase_client, seeded_10k_dataset
+    ):
+        """Comune discovery deduplicates and pages 10k offers inside PostgreSQL."""
+        supermarkets = seeded_10k_dataset["supermarkets"]
+        start = time.perf_counter()
+        result = supabase_client.rpc(
+            "nearby_public_offer_page",
+            {
+                "candidate_supermarket_ids": [market["id"] for market in supermarkets],
+                "candidate_distances_km": [float(index) for index in range(len(supermarkets))],
+                "filter_query": "PERF_Prodotto_",
+                "filter_category": None,
+                "filter_subcategory": None,
+                "filter_supermarket_id": None,
+                "filter_supermarket_ids": None,
+                "page_limit": 20,
+                "page_offset": 0,
+            },
+        ).execute()
+        elapsed_ms = (time.perf_counter() - start) * 1000
+
+        assert elapsed_ms < DISCOVERY_LIMIT_MS
+        assert len(result.data) == 20
+        assert result.data[0]["total"] == 10_000
+        assert sum(result.data[0]["counts_by_supermarket_id"].values()) == 10_000
+
     def test_public_flyer_discovery_uses_nearby_branch_index(
         self, supabase_client, perf_supermarkets, perf_public_flyers
     ):

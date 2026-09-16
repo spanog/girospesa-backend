@@ -111,7 +111,13 @@ def perf_upload_user(supabase_client):
 def perf_upload_supermarket(supabase_client, clean_db):
     row = (
         supabase_client.table("supermarkets")
-        .insert({"name": "PERF_Upload_Market", "slug": "perf-upload-market"})
+        .insert(
+            {
+                "name": "PERF_Upload_Market",
+                "slug": "perf-upload-market",
+                "municipality_code": "015146",
+            }
+        )
         .execute()
     ).data[0]
     return row
