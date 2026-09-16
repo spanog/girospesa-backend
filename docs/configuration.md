@@ -43,6 +43,10 @@ FCM_ENABLED=false
 FCM_PROJECT_ID=
 FCM_CLIENT_EMAIL=
 FCM_PRIVATE_KEY=
+NOTIFICATION_DELIVERY_WORKERS=2
+NOTIFICATION_DELIVERY_BATCH_SIZE=10
+NOTIFICATION_JOB_LOCK_TIMEOUT_SECONDS=600
+PUSH_DELIVERY_TIMEOUT_SECONDS=10
 
 # ── Copia da `supabase status -o env` ---------------------------------------
 # SUPABASE_SECRET_KEY <- SERVICE_ROLE_KEY
@@ -76,6 +80,7 @@ Flow identica in locale, test, prod: cambia solo valore env.
 | **Google Gemini** | Estrazione AI volantini | `GOOGLE_API_KEY` + `GEMINI_MODEL` | Unica dipendenza esterna richiesta quando usi AI extraction |
 | **SMTP provider** | Email transazionali / contatto pubblico | `MAIL_FROM` + `SMTP_*` | Backend runtime attuale usa SMTP diretto via `smtplib`; in produzione GiroSpesa usa `Brevo` come relay SMTP e `Aruba` solo per ricezione mailbox |
 | **Web Push (VAPID)** | Notifiche browser | Coppia VAPID | Standard W3C, nessun servizio proprietario |
+| **Delivery queue** | Notifiche pubblicazione | `NOTIFICATION_DELIVERY_*`, `PUSH_DELIVERY_TIMEOUT_SECONDS` | Batch da 10, 2 thread, deadline push 10 s, recupero lock dopo 10 min. |
 
 ### Retry policy Gemini
 

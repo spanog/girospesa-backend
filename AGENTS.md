@@ -17,6 +17,7 @@
 - `GET /offers` deve risolvere l'area soltanto dal Comune firmato guest o dal profilo e applicare il raggio prima di paginare le offerte.
 - `append_list_item` deve incrementare atomically una riga attiva con lo stesso `pinned_offer_id`, senza unire righe già acquistate.
 - Cookie località guest: richieste da origin HTTPS Capacitor devono ricevere `SameSite=None; Secure`; mantenere test endpoint per questo contratto cross-site.
+- Notification delivery: mantenere batch e concorrenza configurabili; ogni chiamata push deve avere una deadline e un worker terminato non può lasciare job `processing` senza recovery.
 
 ## Commands
 

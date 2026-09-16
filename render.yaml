@@ -35,5 +35,13 @@ services:
         sync: false
       - key: VAPID_MAILTO
         value: mailto:info@girospesa.it
+      - key: NOTIFICATION_DELIVERY_WORKERS
+        value: "2"
+      - key: NOTIFICATION_DELIVERY_BATCH_SIZE
+        value: "10"
+      - key: NOTIFICATION_JOB_LOCK_TIMEOUT_SECONDS
+        value: "600"
+      - key: PUSH_DELIVERY_TIMEOUT_SECONDS
+        value: "10"
       - key: OPS_CRON_SECRET
         sync: false

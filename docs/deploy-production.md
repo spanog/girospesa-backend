@@ -93,6 +93,10 @@ Optional production integrations:
 | `FCM_PROJECT_ID` | Native push | Firebase project id used in FCM v1 endpoint. | Firebase Console → Project settings → General → Project ID. |
 | `FCM_CLIENT_EMAIL` | Native push | Service account email used to mint OAuth token for FCM. | Firebase Console / Google Cloud IAM → service account JSON → `client_email`. |
 | `FCM_PRIVATE_KEY` | Native push | Service account private key used to sign OAuth JWT for FCM. | Firebase service account JSON → `private_key`; store with escaped newlines (`\n`) if Render input is single-line. |
+| `NOTIFICATION_DELIVERY_WORKERS` | Notification queue | Maximum simultaneous recipient deliveries. | `2` on Render Free to bound memory and CPU. |
+| `NOTIFICATION_DELIVERY_BATCH_SIZE` | Notification queue | Parent and recipient jobs claimed per minute. | `10` on Render Free. |
+| `NOTIFICATION_JOB_LOCK_TIMEOUT_SECONDS` | Notification queue | Time before a `processing` job from a terminated worker is requeued. | `600`. |
+| `PUSH_DELIVERY_TIMEOUT_SECONDS` | Notification delivery | Deadline applied to Web Push and FCM HTTP calls. | `10`; must be positive and no greater than `30`. |
 | `SMTP_HOST` | Contact forms | SMTP relay host for `/contact-requests`. | Brevo SMTP settings, currently `smtp-relay.brevo.com`. |
 | `SMTP_PORT` | Contact forms | SMTP relay port. | Brevo SMTP settings, currently `2525`. |
 | `SMTP_USERNAME` | Contact forms | SMTP login username. | Brevo SMTP settings → SMTP login. |

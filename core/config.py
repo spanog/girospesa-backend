@@ -41,7 +41,10 @@ class Settings(BaseSettings):
     fcm_private_key: str = ""
 
     ops_cron_secret: str = ""
-    notification_delivery_workers: int = Field(default=8, ge=1, le=16)
+    notification_delivery_workers: int = Field(default=2, ge=1, le=8)
+    notification_delivery_batch_size: int = Field(default=10, ge=1, le=50)
+    notification_job_lock_timeout_seconds: int = Field(default=600, ge=60, le=3600)
+    push_delivery_timeout_seconds: float = Field(default=10, gt=0, le=30)
 
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"

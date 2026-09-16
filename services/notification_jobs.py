@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from core.config import settings
 from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
 from core.supabase_client import create_supabase_client
-from services.push_notify import deliver_public_flyer_published_to_recipient
+from services.push_notify import FcmAccessTokenProvider, deliver_public_flyer_published_to_recipient
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,6 @@ STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 STATUS_PENDING = "pending"
 STATUS_PROCESSING = "processing"
-DEFAULT_LIMIT = 50
 RETRY_DELAY_MINUTES = 5
 _ROME_TZ = ZoneInfo("Europe/Rome")
 _FLYER_NOTIFICATION_TIME = time(hour=10)
@@ -132,14 +131,18 @@ class NotificationJobWorker:
         self,
         sb: object | None = None,
         client_factory: Callable[[], object] | None = None,
+        fcm_token_provider: FcmAccessTokenProvider | None = None,
     ) -> None:
         self._sb = sb
         self._client_factory = client_factory or _new_service_client
+        self._fcm_token_provider = fcm_token_provider or FcmAccessTokenProvider()
 
-    def run_pending(self, limit: int = DEFAULT_LIMIT) -> dict[str, int]:
-        parents = self._claim_jobs(JOB_FLYER_PUBLISHED, limit)
+    def run_pending(self, limit: int | None = None) -> dict[str, int]:
+        batch_limit = limit or settings.notification_delivery_batch_size
+        self._release_stale_jobs()
+        parents = self._claim_jobs(JOB_FLYER_PUBLISHED, batch_limit)
         parent_results = [self._run_job(job, self._supabase()) for job in parents]
-        recipients = self._claim_jobs(JOB_FLYER_PUBLISHED_RECIPIENT, limit)
+        recipients = self._claim_jobs(JOB_FLYER_PUBLISHED_RECIPIENT, batch_limit)
         recipient_results = self._run_recipients(recipients)
         results = parent_results + recipient_results
         return {
@@ -176,7 +179,11 @@ class NotificationJobWorker:
             self._materialize_recipients(sb, payload)
             return
         if job.get("kind") == JOB_FLYER_PUBLISHED_RECIPIENT:
-            deliver_public_flyer_published_to_recipient(sb, **payload)
+            deliver_public_flyer_published_to_recipient(
+                sb,
+                **payload,
+                fcm_token_provider=self._fcm_token_provider,
+            )
             return
         raise ValueError(f"Unsupported notification job kind: {job.get('kind')}")
 
@@ -254,6 +261,35 @@ class NotificationJobWorker:
             }
         ).eq("id", job["id"]).execute()
 
+    def _release_stale_jobs(self) -> None:
+        if has_direct_postgres():
+            released = self._release_stale_jobs_postgres()
+        else:
+            released = self._release_stale_jobs_supabase()
+        if released:
+            logger.warning("Recovered %s notification jobs with expired worker locks", released)
+
+    def _release_stale_jobs_postgres(self) -> int:
+        with get_postgres_cursor() as cursor:
+            cursor.execute(_RELEASE_STALE_SQL, _stale_lock_parameters())
+            return len(cursor.fetchall())
+
+    def _release_stale_jobs_supabase(self) -> int:
+        response = (
+            self._supabase()
+            .table("notification_jobs")
+            .select("id, attempts, max_attempts")
+            .eq("status", STATUS_PROCESSING)
+            .lte("locked_at", _stale_lock_cutoff_iso())
+            .execute()
+        )
+        jobs = response.data or []
+        for job in jobs:
+            self._supabase().table("notification_jobs").update(
+                _stale_lock_update(job)
+            ).eq("id", job["id"]).eq("status", STATUS_PROCESSING).execute()
+        return len(jobs)
+
     def _supabase(self) -> object:
         if self._sb is None:
             self._sb = get_supabase()
@@ -281,12 +317,55 @@ RETURNING job.*;
 """
 
 
+_RELEASE_STALE_SQL = """
+UPDATE public.notification_jobs
+SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'pending' END,
+    locked_at = NULL, available_at = NOW(), updated_at = NOW(),
+    last_error = CASE
+        WHEN attempts >= max_attempts THEN 'Notification worker lock expired after final attempt.'
+        ELSE 'Notification worker lock expired; requeued.'
+    END
+WHERE status = 'processing'
+  AND locked_at <= NOW() - (%(timeout_seconds)s * INTERVAL '1 second')
+RETURNING id;
+"""
+
+
 def _new_service_client() -> object:
     return create_supabase_client(settings.supabase_url, settings.supabase_secret_key)
 
 
 def _attempts_left(job: dict[str, Any]) -> bool:
     return int(job.get("attempts") or 0) < int(job.get("max_attempts") or 5)
+
+
+def _stale_lock_cutoff() -> datetime:
+    return datetime.now(UTC) - timedelta(
+        seconds=settings.notification_job_lock_timeout_seconds
+    )
+
+
+def _stale_lock_cutoff_iso() -> str:
+    return _stale_lock_cutoff().isoformat()
+
+
+def _stale_lock_parameters() -> dict[str, int]:
+    return {"timeout_seconds": settings.notification_job_lock_timeout_seconds}
+
+
+def _stale_lock_update(job: dict[str, Any]) -> dict[str, str | None]:
+    exhausted = not _attempts_left(job)
+    return {
+        "status": STATUS_DEAD if exhausted else STATUS_PENDING,
+        "locked_at": None,
+        "available_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "last_error": (
+            "Notification worker lock expired after final attempt."
+            if exhausted
+            else "Notification worker lock expired; requeued."
+        ),
+    }
 
 
 def _flyer_is_notification_eligible(sb: object, flyer_id: str) -> bool:

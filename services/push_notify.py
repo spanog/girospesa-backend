@@ -5,6 +5,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from threading import Lock
 
 import httpx
 from jose import jwt
@@ -15,6 +16,7 @@ from core.config import settings
 logger = logging.getLogger(__name__)
 _FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 _FCM_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_FCM_TOKEN_REUSE = timedelta(minutes=50)
 
 
 @dataclass(frozen=True)
@@ -100,12 +102,30 @@ def _send_push_to_user(
     title: str,
     body: str,
     data: dict,
+    fcm_token_provider: FcmAccessTokenProvider | None = None,
 ) -> None:
     subscriptions = _load_push_subscriptions(sb, user_id)
     if not subscriptions:
         return
+    stale_endpoints = _send_web_pushes(subscriptions, title, body, data)
+    stale_tokens = _send_native_pushes(
+        subscriptions,
+        title,
+        body,
+        data,
+        fcm_token_provider,
+    )
+    _delete_stale_push_endpoints(sb, stale_endpoints)
+    _delete_stale_native_tokens(sb, stale_tokens)
 
-    stale_endpoints: list[str] = []
+
+def _send_web_pushes(
+    subscriptions: list[dict],
+    title: str,
+    body: str,
+    data: dict,
+) -> list[str]:
+    stale: list[str] = []
     for sub in _web_push_subscriptions(subscriptions):
         try:
             send_push_notification(
@@ -119,26 +139,35 @@ def _send_push_to_user(
                 data=data,
             )
         except PushEndpointGoneError:
-            stale_endpoints.append(sub["endpoint"])
+            stale.append(sub["endpoint"])
         except Exception as exc:
             logger.warning("Push notify failed for %s: %s", sub["endpoint"], exc)
+    return stale
 
-    stale_tokens: list[str] = []
+
+def _send_native_pushes(
+    subscriptions: list[dict],
+    title: str,
+    body: str,
+    data: dict,
+    provider: FcmAccessTokenProvider | None,
+) -> list[str]:
+    stale: list[str] = []
     for sub in _native_push_subscriptions(subscriptions):
+        token = str(sub["token"])
         try:
             send_native_push_notification(
-                token=str(sub["token"]),
-                title=title,
-                body=body,
-                data=data,
+                token,
+                title,
+                body,
+                data,
+                token_provider=provider,
             )
         except NativePushTokenGoneError:
-            stale_tokens.append(str(sub["token"]))
+            stale.append(token)
         except Exception as exc:
-            logger.warning("Native push notify failed for %s: %s", sub["token"], exc)
-
-    _delete_stale_push_endpoints(sb, stale_endpoints)
-    _delete_stale_native_tokens(sb, stale_tokens)
+            logger.warning("Native push notify failed for %s: %s", token, exc)
+    return stale
 
 
 def send_push_to_user(
@@ -248,6 +277,7 @@ def send_push_notification(
             data=payload,
             vapid_private_key=settings.vapid_private_key,
             vapid_claims={"sub": settings.vapid_mailto},
+            timeout=settings.push_delivery_timeout_seconds,
         )
     except WebPushException as exc:
         if exc.response is not None and exc.response.status_code == 410:
@@ -272,7 +302,33 @@ def _fcm_private_key() -> str:
     return settings.fcm_private_key.replace("\\n", "\n")
 
 
-def _fcm_access_token() -> str:
+class FcmAccessTokenProvider:
+    """Share one short-lived FCM OAuth token across a delivery batch."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._token: str | None = None
+        self._expires_at = datetime.min.replace(tzinfo=UTC)
+
+    def get(self) -> str:
+        with self._lock:
+            if self._token and datetime.now(UTC) < self._expires_at:
+                return self._token
+            self._token = self._fetch()
+            self._expires_at = datetime.now(UTC) + _FCM_TOKEN_REUSE
+            return self._token
+
+    def _fetch(self) -> str:
+        response = httpx.post(
+            _FCM_TOKEN_URL,
+            data=_fcm_token_request(),
+            timeout=_push_timeout(),
+        )
+        response.raise_for_status()
+        return str(response.json()["access_token"])
+
+
+def _fcm_token_request() -> dict[str, str]:
     now = datetime.now(UTC)
     claims = {
         "iss": settings.fcm_client_email,
@@ -282,16 +338,14 @@ def _fcm_access_token() -> str:
         "exp": int((now + timedelta(minutes=55)).timestamp()),
     }
     assertion = jwt.encode(claims, _fcm_private_key(), algorithm="RS256")
-    resp = httpx.post(
-        _FCM_TOKEN_URL,
-        data={
-            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-            "assertion": assertion,
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return str(resp.json()["access_token"])
+    return {
+        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        "assertion": assertion,
+    }
+
+
+def _push_timeout() -> float:
+    return float(settings.push_delivery_timeout_seconds)
 
 
 def _fcm_url() -> str:
@@ -323,15 +377,17 @@ def send_native_push_notification(
     title: str,
     body: str,
     data: dict | None = None,
+    token_provider: FcmAccessTokenProvider | None = None,
 ) -> None:
     if not _fcm_is_configured():
         return
     payload = {"message": _fcm_message(token, title, body, data)}
+    provider = token_provider or FcmAccessTokenProvider()
     resp = httpx.post(
         _fcm_url(),
-        headers={"Authorization": f"Bearer {_fcm_access_token()}"},
+        headers={"Authorization": f"Bearer {provider.get()}"},
         json=payload,
-        timeout=10,
+        timeout=_push_timeout(),
     )
     if resp.status_code in {400, 404} and "UNREGISTERED" in resp.text:
         raise NativePushTokenGoneError(token)
@@ -387,6 +443,7 @@ def deliver_public_flyer_published_to_recipient(
     products_count: int,
     user_id: str,
     supermarket_location: str | None = None,
+    fcm_token_provider: FcmAccessTokenProvider | None = None,
 ) -> None:
     profile = _notification_profile(sb, user_id)
     if not profile:
@@ -410,6 +467,7 @@ def deliver_public_flyer_published_to_recipient(
             title=title,
             body=body,
             data=_flyer_notification_data(flyer_id, supermarket_id, products_count),
+            fcm_token_provider=fcm_token_provider,
         )
 
 

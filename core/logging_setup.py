@@ -14,9 +14,9 @@ def _is_production() -> bool:
 def configure_logging() -> None:
     root_level = logging.WARNING if _is_production() else logging.INFO
     logging.basicConfig(level=root_level, format=_LOG_FORMAT, force=False)
+    logging.getLogger().setLevel(root_level)
 
     if _is_production():
         logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
         logging.getLogger("uvicorn.error").setLevel(logging.INFO)
         logging.getLogger("apscheduler").setLevel(logging.WARNING)
-

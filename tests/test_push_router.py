@@ -39,6 +39,7 @@ _settings_stub.fcm_enabled = True
 _settings_stub.fcm_project_id = "test-project"
 _settings_stub.fcm_client_email = "fcm@example.com"
 _settings_stub.fcm_private_key = "private-key"
+_settings_stub.push_delivery_timeout_seconds = 10
 _config_mod.settings = _settings_stub  # type: ignore[attr-defined]
 sys.modules["core.config"] = _config_mod
 
@@ -59,6 +60,7 @@ from api.routers.push import (
     router as _push_router,
 )
 from services.push_notify import (
+    FcmAccessTokenProvider,
     NativePushTokenGoneError,
     PushEndpointGoneError,
     PushSubscription,
@@ -75,6 +77,7 @@ def _use_stubbed_webpush(monkeypatch: pytest.MonkeyPatch):
 
     mock_webpush = sys.modules["pywebpush"].webpush
     mock_webpush.reset_mock()
+    _settings_stub.push_delivery_timeout_seconds = 10
     monkeypatch.setattr(push_notify, "webpush", mock_webpush)
     monkeypatch.setattr(push_notify, "WebPushException", sys.modules["pywebpush"].WebPushException)
     monkeypatch.setattr(push_notify, "settings", _settings_stub)
@@ -218,6 +221,14 @@ class TestSendPushNotification:
         assert payload["body"] == "€1.99"
         assert payload["data"]["url"] == "/offerte?product=abc"
 
+    def test_uses_configured_delivery_timeout(self):
+        sub = self._make_sub()
+        _settings_stub.push_delivery_timeout_seconds = 7
+
+        send_push_notification(sub, title="Test", body="Hello")
+
+        assert sys.modules["pywebpush"].webpush.call_args.kwargs["timeout"] == 7
+
 
 class TestSendNativePushNotification:
     def test_calls_fcm_with_string_data_payload(self):
@@ -244,6 +255,24 @@ class TestSendNativePushNotification:
         assert message["android"]["notification"]["icon"] == "ic_notification"
         assert message["android"]["notification"]["color"] == "#1E7A45"
         assert message["apns"]["payload"]["aps"]["sound"] == "default"
+
+    def test_reuses_oauth_token_within_delivery_batch(self):
+        token_response = MagicMock(status_code=200, json=lambda: {"access_token": "token"})
+        token_response.raise_for_status = MagicMock()
+        fcm_response = MagicMock(status_code=200, text="", raise_for_status=MagicMock())
+        provider = FcmAccessTokenProvider()
+
+        with patch("services.push_notify.jwt.encode", return_value="assertion"):
+            with patch(
+                "services.push_notify.httpx.post",
+                side_effect=[token_response, fcm_response, fcm_response],
+            ) as mock_post:
+                send_native_push_notification("first", "Titolo", "Corpo", token_provider=provider)
+                send_native_push_notification("second", "Titolo", "Corpo", token_provider=provider)
+
+        assert mock_post.call_count == 3
+        assert mock_post.call_args_list[1].kwargs["headers"]["Authorization"] == "Bearer token"
+        assert mock_post.call_args_list[2].kwargs["headers"]["Authorization"] == "Bearer token"
 
     def test_unregistered_fcm_token_raises(self):
         token_resp = MagicMock(status_code=200, json=lambda: {"access_token": "token"})

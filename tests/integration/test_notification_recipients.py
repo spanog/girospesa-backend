@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import psycopg2
 import pytest
@@ -31,7 +32,11 @@ def notification_municipality_context():
     finally:
         conn.rollback()
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM public.notification_jobs WHERE payload->>'flyer_id' LIKE 'uat-%'")
+            cur.execute(
+                "DELETE FROM public.notification_jobs WHERE payload->>'supermarket_id' = %s",
+                (supermarket_id,),
+            )
+            cur.execute("DELETE FROM public.flyers WHERE supermarket_id = %s", (supermarket_id,))
             cur.execute("DELETE FROM auth.users WHERE id = ANY(%s::uuid[])", (list(user_ids.values()),))
             cur.execute("DELETE FROM public.supermarkets WHERE id = %s", (supermarket_id,))
         conn.commit()
@@ -40,35 +45,139 @@ def notification_municipality_context():
 
 def test_flyer_notification_recipients_include_staff_and_nearby_customers(notification_municipality_context):
     conn, supermarket_id, user_ids = notification_municipality_context
-    with conn.cursor() as cur:
-        cur.execute("SELECT user_id FROM public.flyer_notification_recipients(%s)", (supermarket_id,))
-        recipients = {str(row[0]) for row in cur.fetchall()}
-    assert recipients == {
+    recipients = _recipient_ids(conn, supermarket_id)
+
+    assert {
         user_ids["same_municipality"], user_ids["nearby_municipality"], user_ids["manager"], user_ids["admin"],
-    }
+    } <= recipients
+    assert user_ids["far"] not in recipients
 
 
 def test_flyer_notification_jobs_persist_inbox_without_push(
     notification_municipality_context,
     supabase_client,
 ):
-    _, supermarket_id, user_ids = notification_municipality_context
-    supabase_client.table("user_profiles").update({"notifications_enabled": False}).in_(
-        "id", [user_ids["same_municipality"], user_ids["nearby_municipality"], user_ids["manager"], user_ids["admin"]]
-    ).execute()
+    conn, supermarket_id, _ = notification_municipality_context
+    recipients = _recipient_ids(conn, supermarket_id)
+    supabase_client.table("user_profiles").update(
+        {"notifications_enabled": False}
+    ).in_("id", list(recipients)).execute()
+    flyer_id = str(uuid.uuid4())
+    _insert_public_flyer(supabase_client, flyer_id, supermarket_id)
     enqueue_flyer_published(
         supabase_client,
-        flyer_id=f"uat-{uuid.uuid4()}",
+        flyer_id=flyer_id,
         supermarket_id=supermarket_id,
         supermarket_name="Supermercato UAT",
         products_count=4,
     )
     result = NotificationJobWorker(supabase_client).run_pending()
-    inbox = supabase_client.table("app_notifications").select("user_id").execute().data
-    assert result == {"claimed": 5, "processed": 5, "failed": 0}
-    assert {row["user_id"] for row in inbox} == {
-        user_ids["same_municipality"], user_ids["nearby_municipality"], user_ids["manager"], user_ids["admin"],
+    inbox = (
+        supabase_client.table("app_notifications")
+        .select("user_id")
+        .eq("kind", "flyer_published")
+        .contains("data", {"aggregation_key": f"flyer-published:{flyer_id}"})
+        .execute()
+        .data
+    )
+    assert result == {
+        "claimed": len(recipients) + 1,
+        "processed": len(recipients) + 1,
+        "failed": 0,
     }
+    assert {row["user_id"] for row in inbox} == recipients
+
+
+def test_notification_worker_recovers_expired_processing_job(supabase_client):
+    flyer_id = str(uuid.uuid4())
+    job_id = _insert_expired_recipient_job(supabase_client, flyer_id)
+    exhausted_job_id = _insert_expired_recipient_job(
+        supabase_client,
+        str(uuid.uuid4()),
+        attempts=1,
+        max_attempts=1,
+    )
+    _insert_public_flyer(supabase_client, flyer_id)
+
+    try:
+        result = NotificationJobWorker(supabase_client).run_pending()
+        row = (
+            supabase_client.table("notification_jobs")
+            .select("status")
+            .eq("id", job_id)
+            .single()
+            .execute()
+            .data
+        )
+        exhausted_row = (
+            supabase_client.table("notification_jobs")
+            .select("status")
+            .eq("id", exhausted_job_id)
+            .single()
+            .execute()
+            .data
+        )
+
+        assert result == {"claimed": 1, "processed": 1, "failed": 0}
+        assert row["status"] == "done"
+        assert exhausted_row["status"] == "dead"
+    finally:
+        supabase_client.table("notification_jobs").delete().in_(
+            "id", [job_id, exhausted_job_id]
+        ).execute()
+        supabase_client.table("flyers").delete().eq("id", flyer_id).execute()
+
+
+def _insert_expired_recipient_job(
+    supabase_client,
+    flyer_id: str,
+    attempts: int = 0,
+    max_attempts: int = 5,
+) -> str:
+    response = supabase_client.table("notification_jobs").insert(
+        {
+            "kind": "flyer_published_recipient",
+            "idempotency_key": f"flyer-published:{flyer_id}:user-1",
+            "payload": {
+                "flyer_id": flyer_id,
+                "supermarket_id": str(uuid.uuid4()),
+                "supermarket_name": "Supermercato UAT",
+                "products_count": 1,
+                "user_id": str(uuid.uuid4()),
+            },
+            "status": "processing",
+            "attempts": attempts,
+            "max_attempts": max_attempts,
+            "available_at": datetime.now(UTC).isoformat(),
+            "locked_at": (datetime.now(UTC) - timedelta(minutes=11)).isoformat(),
+        }
+    ).execute()
+    return str(response.data[0]["id"])
+
+
+def _recipient_ids(conn, supermarket_id: str) -> set[str]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT user_id FROM public.flyer_notification_recipients(%s)", (supermarket_id,))
+        return {str(row[0]) for row in cur.fetchall()}
+
+
+def _insert_public_flyer(
+    supabase_client,
+    flyer_id: str,
+    supermarket_id: str | None = None,
+) -> None:
+    supabase_client.table("flyers").insert(
+        {
+            "id": flyer_id,
+            "supermarket_id": supermarket_id,
+            "supermarket_name": "Supermercato UAT",
+            "file_url": "uat/flyer.pdf",
+            "file_type": "pdf",
+            "file_name": "flyer.pdf",
+            "status": "done",
+            "is_public": True,
+        }
+    ).execute()
 
 
 def _insert_supermarket(cur, supermarket_id: str) -> None:

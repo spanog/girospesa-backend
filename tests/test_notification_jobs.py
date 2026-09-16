@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from services.notification_jobs import (
     NotificationJobWorker,
     _flyer_notification_available_at,
+    _stale_lock_update,
     _supermarket_notification_location,
     enqueue_flyer_published,
     reschedule_flyer_published,
@@ -121,6 +122,29 @@ def test_recipient_jobs_use_independent_clients_and_run_in_parallel():
     assert results == [True, True]
     assert deliver.call_count == 2
     assert {call.args[0] for call in deliver.call_args_list} == set(issued_clients)
+    assert {call.kwargs["fcm_token_provider"] for call in deliver.call_args_list} == {
+        worker._fcm_token_provider
+    }
+
+
+def test_run_pending_releases_stale_locks_before_claiming_jobs():
+    worker = NotificationJobWorker(MagicMock())
+
+    with (
+        patch.object(worker, "_release_stale_jobs") as release,
+        patch.object(worker, "_claim_jobs", return_value=[]),
+    ):
+        result = worker.run_pending(limit=2)
+
+    release.assert_called_once()
+    assert result == {"claimed": 0, "processed": 0, "failed": 0}
+
+
+def test_expired_final_attempt_becomes_dead_instead_of_pending():
+    update = _stale_lock_update({"attempts": 1, "max_attempts": 1})
+
+    assert update["status"] == "dead"
+    assert update["last_error"] == "Notification worker lock expired after final attempt."
 
 
 def test_failed_recipient_is_retried_without_reprocessing_parent():
