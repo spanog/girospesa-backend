@@ -999,6 +999,27 @@ class TestManagerFlyerTargetsAccess:
         assert resp.json()[0]["published_target_count"] == 1
 
     @pytest.mark.asyncio
+    async def test_list_flyers_hides_expired_source_flyers_pending_cleanup(self):
+        sb = MagicMock()
+        flyers_table = MagicMock()
+        flyers_table.select.return_value.eq.return_value.order.return_value.execute.return_value = MagicMock(
+            data=[
+                {
+                    "id": "expired-source",
+                    "valid_to": "2020-01-01",
+                    "flyer_kind": "source",
+                }
+            ]
+        )
+        sb.table.return_value = flyers_table
+
+        with patch("api.routers.flyers.get_supabase", return_value=sb):
+            response = await _get("/flyers", {_DEP_PROFILE: lambda: ADMIN_PROFILE})
+
+        assert response.status_code == 200
+        assert response.json() == []
+
+    @pytest.mark.asyncio
     async def test_get_flyer_allows_source_flyer_when_manager_owns_one_target(self):
         sb = MagicMock()
 

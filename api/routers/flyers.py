@@ -150,6 +150,11 @@ def _is_flyer_current(flyer: dict, today: date) -> bool:
     return True
 
 
+def _is_flyer_expired(flyer: dict, today: date) -> bool:
+    valid_to = flyer.get("valid_to")
+    return bool(valid_to and date.fromisoformat(str(valid_to)) < today)
+
+
 def _public_flyer_expiry_sort_key(flyer: dict) -> date:
     """Keep flyers without an expiry date after dated flyers."""
     valid_to = flyer.get("valid_to")
@@ -1078,7 +1083,10 @@ async def list_flyers(
         .order("created_at", desc=True)
     )
     response = query.execute()
-    raw_flyers = response.data or []
+    today = datetime.now(timezone.utc).date()
+    raw_flyers = [
+        flyer for flyer in (response.data or []) if not _is_flyer_expired(flyer, today)
+    ]
     flyer_ids = [flyer["id"] for flyer in raw_flyers if flyer.get("id")]
     draft_counts = _offer_count_by_flyer(sb, flyer_ids, is_confirmed=False)
     confirmed_counts = _offer_count_by_flyer(sb, flyer_ids, is_confirmed=True)
@@ -1514,7 +1522,7 @@ async def delete_flyer(
 ) -> None:
     """Delete a flyer immediately: removes storage file (best-effort) and DB row."""
     sb = get_supabase()
-    result = sb.table("flyers").select("id, file_url, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
+    result = sb.table("flyers").select("id, file_url, preview_path, supermarket_id, supermarket_name").eq("id", flyer_id).maybe_single().execute()
     if not result or not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flyer not found")
 
