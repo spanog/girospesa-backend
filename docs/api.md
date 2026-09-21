@@ -6,12 +6,25 @@ Il backend FastAPI è l'unica API applicativa. Le chiamate autenticate usano un 
 
 | Metodo | Path | Accesso | Descrizione |
 | --- | --- | --- | --- |
-| `GET` | `/offers` | Pubblico | Offerte confermate e attive, con ricerca, filtri e paginazione; per l'area Comune+raggio deduplica e pagina nel database. Non espone un parametro di ordinamento. Accetta `q`, `category`, `subcategory`, `supermarket_id` e `supermarket_ids`. |
+| `GET` | `/offers` | Pubblico | Offerte confermate e attive, con ricerca linguistica, filtri e paginazione; per l'area Comune+raggio deduplica e pagina nel database. Non espone un parametro di ordinamento. Accetta `q`, `category`, `subcategory`, `supermarket_id` e `supermarket_ids`. |
 | `GET` | `/offers/discovery` | Pubblico | Prima pagina offerte e sedi dell'area Comune+raggio con offerte attive; accetta gli stessi filtri di `/offers`. Deduplica e paginazione avvengono nel database e il backend recupera solo i dettagli della pagina. Le pagine successive restano su `/offers`. |
 | `POST` | `/guest-location` | Pubblico | Accetta `{ "municipality_code": "080061" }`, valida il Comune e imposta il cookie tecnico firmato usato dalla discovery. Il raggio guest è sempre 10 km. |
 | `DELETE` | `/guest-location` | Pubblico | Rimuove il cookie tecnico di località guest. |
 
 Un'offerta contiene i propri dati, validità, prezzo, formato strutturato e `image_url`. Il backend determina la disponibilità corrente esclusivamente da `valid_from` e `valid_to`, usando il giorno `Europe/Rome`; nessun client calcola autonomamente lo stato dell'offerta. Non esistono endpoint per catalogo prodotti, dettagli prodotto o preferiti prodotto.
+
+### Ricerca linguistica offerte
+
+`q` usa il dizionario full-text italiano su nome, marca, categoria, sottocategoria e formato: normalizza maiuscole e accenti, riduce singolare/plurale alla stessa radice e ordina i risultati per rilevanza. Un fallback trigrammi entra in funzione soltanto se non esiste alcun match linguistico o letterale, per recuperare piccoli refusi senza inquinare risultati corretti.
+
+| Query | Principio | Risultati reali attesi |
+| --- | --- | --- |
+| `piadina` | Stemming italiano: `piadina` e `piadine` → `piadin` | `Piadina Romagnola IGP alla Riminese XXL` e `3 piadine sfogliatissime all'olio extravergine d'oliva Loriana` |
+| `piadine` | Stessa radice lessicale | Le stesse due offerte |
+| `piadin` | Prefisso letterale compatibile con la ricerca precedente | Le stesse due offerte |
+| `piadnia` | Nessun match linguistico; fallback trigrammi | Le stesse due offerte |
+
+Non usa embeddings o un LLM in fase di ricerca: "semantica" qui indica corrispondenza linguistica italiana e tolleranza controllata ai refusi, con risposta deterministica e indicizzata.
 
 ## Comuni
 
