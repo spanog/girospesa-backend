@@ -214,21 +214,21 @@ def test_download_pdf_streams_original_bytes_to_a_temporary_file() -> None:
 
 
 def test_peak_rss_uses_platform_specific_units() -> None:
-    from services.extraction.service import _peak_rss_mib
+    from services.runtime_memory import peak_rss_mib
 
     usage = MagicMock(ru_maxrss=3 * 1_048_576)
     with (
-        patch("services.extraction.service.resource.getrusage", return_value=usage),
-        patch("services.extraction.service.sys.platform", "darwin"),
+        patch("services.runtime_memory.resource.getrusage", return_value=usage),
+        patch("services.runtime_memory.sys.platform", "darwin"),
     ):
-        assert _peak_rss_mib() == 3.0
+        assert peak_rss_mib() == 3.0
 
     usage.ru_maxrss = 3 * 1_024
     with (
-        patch("services.extraction.service.resource.getrusage", return_value=usage),
-        patch("services.extraction.service.sys.platform", "linux"),
+        patch("services.runtime_memory.resource.getrusage", return_value=usage),
+        patch("services.runtime_memory.sys.platform", "linux"),
     ):
-        assert _peak_rss_mib() == 3.0
+        assert peak_rss_mib() == 3.0
 
 
 def test_storage_path_recovers_legacy_signed_flyer_url() -> None:

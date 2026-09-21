@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import logging
 import uuid
 import hashlib
 from typing import Annotated
@@ -31,6 +32,7 @@ from services.notification_jobs import enqueue_flyer_published, reschedule_flyer
 from services.product_format import ProductFormat, build_format_bundle
 from services.flyer_preview import render_flyer_preview
 from services.offer_visibility import apply_current_offer_window
+from services.runtime_memory import current_rss_mib, peak_rss_mib
 from api.routers._offer_utils import (
     _OFFER_PRODUCT_SELECT,
     _flatten_draft_offer,
@@ -41,6 +43,7 @@ from api.routers._offer_utils import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 ALLOWED_CONTENT_TYPES = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
@@ -371,18 +374,6 @@ def _published_target_flyers(sb, source_flyer_id: str) -> dict[str, dict]:
     }
 
 
-def _source_master_offers(sb, flyer_id: str) -> list[dict]:
-    result = (
-        sb.table("offers")
-        .select("*")
-        .eq("flyer_id", flyer_id)
-        .eq("is_confirmed", True)
-        .eq("offer_kind", OFFER_KIND_SOURCE_MASTER)
-        .execute()
-    )
-    return result.data or []
-
-
 def _delete_removed_published_targets(
     sb,
     *,
@@ -403,134 +394,15 @@ def _delete_removed_published_targets(
     sb.table("flyers").delete().in_("id", stale_flyer_ids).execute()
 
 
-def _clone_offer_fields(
-    source_offer: dict,
-    *,
-    flyer_id: str,
-    supermarket_id: str,
-    supermarket_name: str,
-) -> dict:
+def _materialize_source_flyer_targets(sb, flyer_id: str) -> dict[str, int]:
+    result = sb.rpc(
+        "materialize_source_flyer_targets",
+        {"p_source_flyer_id": flyer_id},
+    ).execute()
     return {
-        "name": source_offer.get("name"),
-        "brand": source_offer.get("brand"),
-        "category": source_offer.get("category"),
-        "subcategory": source_offer.get("subcategory"),
-        "offer_key": source_offer.get("offer_key"),
-        "image_url": source_offer.get("image_url"),
-        "packshot_source_page": source_offer.get("packshot_source_page"),
-        "packshot_bbox": source_offer.get("packshot_bbox"),
-        "flyer_id": flyer_id,
-        "supermarket_id": supermarket_id,
-        "supermarket_name": supermarket_name,
-        "price_original": source_offer.get("price_original"),
-        "price_offer": source_offer.get("price_offer"),
-        "discount_pct": source_offer.get("discount_pct"),
-        "unit_price": source_offer.get("unit_price"),
-        "unit_price_value": source_offer.get("unit_price_value"),
-        "unit_price_unit": source_offer.get("unit_price_unit"),
-        "offer_type": source_offer.get("offer_type"),
-        "offer_notes": source_offer.get("offer_notes"),
-        "valid_from": source_offer.get("valid_from"),
-        "valid_to": source_offer.get("valid_to"),
-        "raw_text": source_offer.get("raw_text"),
-        "confidence_score": source_offer.get("confidence_score"),
-        "format": source_offer.get("format"),
-        "format_key": source_offer.get("format_key"),
-        "format_label": source_offer.get("format_label"),
-        "is_confirmed": True,
-        "is_reviewed": source_offer.get("is_reviewed", False),
-        "offer_kind": OFFER_KIND_PUBLISHED_TARGET,
-        "source_offer_id": source_offer["id"],
+        row["flyer_id"]: int(row["products_count"])
+        for row in result.data or []
     }
-
-
-def _sync_published_clones_for_source_offers(
-    sb,
-    *,
-    source_offers: list[dict],
-    target_flyers: dict[str, dict],
-) -> dict[str, int]:
-    if not target_flyers:
-        return {}
-
-    if not source_offers:
-        stale_rows = (
-            sb.table("offers")
-            .select("id")
-            .in_("flyer_id", [target["flyer_id"] for target in target_flyers.values()])
-            .eq("offer_kind", OFFER_KIND_PUBLISHED_TARGET)
-            .execute()
-        ).data or []
-        stale_ids = [row["id"] for row in stale_rows if row.get("id")]
-        if stale_ids:
-            sb.table("offers").delete().in_("id", stale_ids).execute()
-        return {target["flyer_id"]: 0 for target in target_flyers.values()}
-
-    source_offer_ids = [source_offer["id"] for source_offer in source_offers]
-    target_supermarket_ids = list(target_flyers.keys())
-    existing_rows = (
-        sb.table("offers")
-        .select("id, flyer_id, supermarket_id, source_offer_id")
-        .in_("source_offer_id", source_offer_ids)
-        .in_("supermarket_id", target_supermarket_ids)
-        .eq("offer_kind", OFFER_KIND_PUBLISHED_TARGET)
-        .execute()
-    ).data or []
-    existing_by_key = {
-        (row["source_offer_id"], row["supermarket_id"]): row
-        for row in existing_rows
-        if row.get("id") and row.get("source_offer_id") and row.get("supermarket_id")
-    }
-
-    desired_keys: set[tuple[str, str]] = set()
-    existing_payloads: list[dict] = []
-    missing_payloads: list[dict] = []
-    counts_by_flyer: dict[str, int] = {}
-
-    for source_offer in source_offers:
-        for supermarket_id, target in target_flyers.items():
-            payload = _clone_offer_fields(
-                source_offer,
-                flyer_id=target["flyer_id"],
-                supermarket_id=supermarket_id,
-                supermarket_name=target["supermarket_name"],
-            )
-            desired_keys.add((source_offer["id"], supermarket_id))
-            counts_by_flyer[target["flyer_id"]] = counts_by_flyer.get(target["flyer_id"], 0) + 1
-            existing = existing_by_key.get((source_offer["id"], supermarket_id))
-            if existing:
-                existing_payloads.append({"id": existing["id"], **payload})
-            else:
-                clone = {"id": str(uuid.uuid4()), **payload}
-                missing_payloads.append(clone)
-
-    if existing_payloads:
-        sb.table("offers").upsert(existing_payloads, on_conflict="id").execute()
-    if missing_payloads:
-        sb.table("offers").insert(missing_payloads).execute()
-
-    stale_clone_ids = [
-        row["id"]
-        for row in existing_rows
-        if (row.get("source_offer_id"), row.get("supermarket_id")) not in desired_keys
-    ]
-    if stale_clone_ids:
-        sb.table("offers").delete().in_("id", stale_clone_ids).execute()
-
-    return counts_by_flyer
-
-
-def _sync_published_clones_for_source_offer(
-    sb,
-    *,
-    source_offer: dict,
-    target_flyers: dict[str, dict],
-) -> None:
-    _sync_published_clones_for_source_offers(
-        sb,
-        source_offers=[source_offer],
-        target_flyers=target_flyers,
-    )
 
 
 def _upsert_published_target_flyer(
@@ -539,9 +411,7 @@ def _upsert_published_target_flyer(
     source_flyer: dict,
     target: dict,
     existing_flyer_id: str | None,
-    products_count: int,
-    notify_new: bool,
-) -> str:
+) -> tuple[str, bool]:
     target_supermarket_id = target["supermarket_id"]
     target_supermarket_name = target.get("supermarket_name") or "Supermercato"
     fields = {
@@ -553,7 +423,7 @@ def _upsert_published_target_flyer(
     }
     if existing_flyer_id:
         sb.table("flyers").update(fields).eq("id", existing_flyer_id).execute()
-        return existing_flyer_id
+        return existing_flyer_id, False
     inserted = (
         sb.table("flyers")
         .insert({
@@ -573,17 +443,7 @@ def _upsert_published_target_flyer(
         })
         .execute()
     )
-    flyer_id = inserted.data[0]["id"]
-    if notify_new:
-        enqueue_flyer_published(
-            sb,
-            flyer_id=flyer_id,
-            supermarket_id=target_supermarket_id,
-            supermarket_name=target_supermarket_name,
-            products_count=products_count,
-            valid_from=source_flyer.get("valid_from"),
-        )
-    return flyer_id
+    return inserted.data[0]["id"], True
 
 
 def _sync_published_targets_for_source_flyer(
@@ -592,10 +452,7 @@ def _sync_published_targets_for_source_flyer(
     source_flyer: dict,
     targets: list[dict],
     notify_new: bool,
-    source_offers: list[dict] | None = None,
 ) -> dict[str, int]:
-    if source_offers is None:
-        source_offers = _source_master_offers(sb, source_flyer["id"])
     target_flyers = _published_target_flyers(sb, source_flyer["id"])
     desired_ids = {target["supermarket_id"] for target in targets}
     _delete_removed_published_targets(
@@ -603,31 +460,28 @@ def _sync_published_targets_for_source_flyer(
         target_flyers=target_flyers,
         desired_supermarket_ids=desired_ids,
     )
+    new_targets: list[tuple[str, dict]] = []
     for target in targets:
         existing = target_flyers.get(target["supermarket_id"])
-        _upsert_published_target_flyer(
+        flyer_id, created = _upsert_published_target_flyer(
             sb,
             source_flyer=source_flyer,
             target=target,
             existing_flyer_id=existing["flyer_id"] if existing else None,
-            products_count=len(source_offers),
-            notify_new=notify_new,
         )
-    target_flyers = _published_target_flyers(sb, source_flyer["id"])
-    counts = _sync_published_clones_for_source_offers(
-        sb,
-        source_offers=source_offers,
-        target_flyers={
-            key: value
-            for key, value in target_flyers.items()
-            if key in desired_ids
-        },
-    )
-    for published_flyer_id, count in counts.items():
-        sb.table("flyers").update({"products_count": count}).eq(
-            "id",
-            published_flyer_id,
-        ).execute()
+        if created:
+            new_targets.append((flyer_id, target))
+    counts = _materialize_source_flyer_targets(sb, source_flyer["id"])
+    if notify_new:
+        for flyer_id, target in new_targets:
+            enqueue_flyer_published(
+                sb,
+                flyer_id=flyer_id,
+                supermarket_id=target["supermarket_id"],
+                supermarket_name=target.get("supermarket_name") or "Supermercato",
+                products_count=counts.get(flyer_id, 0),
+                valid_from=source_flyer.get("valid_from"),
+            )
     return counts
 
 
@@ -1493,14 +1347,13 @@ async def update_flyer_targets(
 
     updated = sb.table("flyers").select("*").eq("id", flyer_id).single().execute().data
     targets = _flyer_targets(sb, flyer_id)
-    source_offers = _source_master_offers(sb, flyer_id)
-    if source_offers or _published_target_flyers(sb, flyer_id):
+    confirmed_count = _confirmed_count_by_flyer(sb, [flyer_id]).get(flyer_id, 0)
+    if confirmed_count or _published_target_flyers(sb, flyer_id):
         _sync_published_targets_for_source_flyer(
             sb,
             source_flyer=updated,
             targets=targets,
             notify_new=True,
-            source_offers=source_offers,
         )
     enriched = _enrich_flyer(sb, updated)
     rejected_names = _supermarket_name_map(sb, list(conflicts))
@@ -1745,11 +1598,7 @@ async def update_draft_offer(
     )
     updated_offer = updated.data
     if updated_offer.get("is_confirmed") and _offer_kind(updated_offer) == OFFER_KIND_SOURCE_MASTER:
-        _sync_published_clones_for_source_offer(
-            sb,
-            source_offer=updated_offer,
-            target_flyers=_published_target_flyers(sb, flyer_id),
-        )
+        _materialize_source_flyer_targets(sb, flyer_id)
         updated = (
             sb.table("offers")
             .select(_OFFER_PRODUCT_SELECT)
@@ -1891,35 +1740,18 @@ async def confirm_offers(
             detail="Add at least one supermarket target before confirmation",
         )
 
-    drafts = (
-        sb.table("offers")
-        .select("*")
-        .eq("flyer_id", flyer_id)
-        .eq("is_confirmed", False)
-        .execute()
-    )
-    draft_rows = drafts.data or []
-
-    if draft_rows:
-        sb.table("offers").update(
-            {"is_confirmed": True, "offer_kind": OFFER_KIND_SOURCE_MASTER}
-        ).eq("flyer_id", flyer_id).eq("is_confirmed", False).execute()
-    confirmed_count = len(draft_rows)
-
-    source_confirmed = (
-        sb.table("offers")
-        .select("*", count="exact")
-        .eq("flyer_id", flyer_id)
-        .eq("is_confirmed", True)
-        .eq("offer_kind", OFFER_KIND_SOURCE_MASTER)
-        .execute()
-    )
-    source_offers = source_confirmed.data or []
-    source_offer_count = (
-        source_confirmed.count
-        if isinstance(source_confirmed.count, int)
-        else len(source_offers)
-    )
+    confirmed = sb.rpc(
+        "confirm_source_flyer_offers",
+        {"p_flyer_id": flyer_id},
+    ).execute()
+    confirmed_count = int(confirmed.data or 0)
+    if confirmed_count <= 0:
+        return {
+            "confirmed": 0,
+            "flyer_id": flyer_id,
+            "published_flyers": [],
+        }
+    source_offer_count = _confirmed_count_by_flyer(sb, [flyer_id]).get(flyer_id, 0)
     if source_offer_count <= 0:
         return {
             "confirmed": confirmed_count,
@@ -1927,85 +1759,37 @@ async def confirm_offers(
             "published_flyers": [],
         }
 
-    existing_target_flyer_by_supermarket = {
-        supermarket_id: target["flyer_id"]
-        for supermarket_id, target in _published_target_flyers(sb, flyer_id).items()
-    }
-
-    published_flyers: list[dict] = []
-    published_flyer_ids: list[str] = []
-    for target in targets:
-        target_supermarket_id = target["supermarket_id"]
-        target_supermarket_name = target.get("supermarket_name") or "Supermercato"
-        published_flyer_id = existing_target_flyer_by_supermarket.get(target_supermarket_id)
-
-        if not published_flyer_id:
-            inserted = (
-                sb.table("flyers")
-                .insert(
-                    {
-                        "user_id": flyer.get("user_id"),
-                        "supermarket_id": target_supermarket_id,
-                        "supermarket_name": target_supermarket_name,
-                        "file_url": flyer.get("file_url"),
-                        "file_type": flyer.get("file_type"),
-                        "file_name": flyer.get("file_name"),
-                        "preview_path": flyer.get("preview_path"),
-                        "valid_from": flyer.get("valid_from"),
-                        "valid_to": flyer.get("valid_to"),
-                        "status": "done",
-                        "error_message": None,
-                        "products_count": 0,
-                        "pages_count": flyer.get("pages_count"),
-                        "extraction_metadata": flyer.get("extraction_metadata"),
-                        "is_public": True,
-                        "file_hash": flyer.get("file_hash"),
-                        "flyer_kind": "published_target",
-                        "source_flyer_id": flyer_id,
-                    }
-                )
-                .execute()
-            )
-            published_flyer_id = inserted.data[0]["id"]
-            if draft_rows and not flyer.get("is_public"):
-                enqueue_flyer_published(
-                    sb,
-                    flyer_id=published_flyer_id,
-                    supermarket_id=target_supermarket_id,
-                    supermarket_name=target_supermarket_name,
-                    products_count=source_offer_count,
-                    valid_from=flyer.get("valid_from"),
-                )
-        else:
-            sb.table("flyers").update(
-                {
-                    "supermarket_name": target_supermarket_name,
-                    "status": "done",
-                    "valid_from": flyer.get("valid_from"),
-                    "valid_to": flyer.get("valid_to"),
-                    "is_public": True,
-                }
-            ).eq("id", published_flyer_id).execute()
-
-        published_flyers.append(
-            {
-                "flyer_id": published_flyer_id,
-                "supermarket_id": target_supermarket_id,
-                "supermarket_name": target_supermarket_name,
-            }
-        )
-        published_flyer_ids.append(published_flyer_id)
-
-    target_flyers = _published_target_flyers(sb, flyer_id)
-    published_counts = _sync_published_clones_for_source_offers(
-        sb,
-        source_offers=source_offers,
-        target_flyers=target_flyers,
+    logger.info(
+        "Confirm flyer %s source_offers=%d targets=%d rss_mib=%s peak_rss_mib=%.1f",
+        flyer_id,
+        source_offer_count,
+        len(targets),
+        current_rss_mib(),
+        peak_rss_mib(),
     )
-    for published_flyer_id in published_flyer_ids:
-        sb.table("flyers").update(
-            {"products_count": published_counts.get(published_flyer_id, 0)}
-        ).eq("id", published_flyer_id).execute()
+    published_counts = _sync_published_targets_for_source_flyer(
+        sb,
+        source_flyer=flyer,
+        targets=targets,
+        notify_new=not flyer.get("is_public"),
+    )
+    target_flyers = _published_target_flyers(sb, flyer_id)
+    published_flyers = [
+        {
+            "flyer_id": target_flyers[target["supermarket_id"]]["flyer_id"],
+            "supermarket_id": target["supermarket_id"],
+            "supermarket_name": target.get("supermarket_name") or "Supermercato",
+        }
+        for target in targets
+        if target["supermarket_id"] in target_flyers
+    ]
+    logger.info(
+        "Confirmed flyer %s clones=%d rss_mib=%s peak_rss_mib=%.1f",
+        flyer_id,
+        sum(published_counts.values()),
+        current_rss_mib(),
+        peak_rss_mib(),
+    )
     return {
         "confirmed": confirmed_count,
         "flyer_id": flyer_id,

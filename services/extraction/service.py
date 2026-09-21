@@ -23,8 +23,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
-import resource
-import sys
 import tempfile
 import time
 import uuid
@@ -48,6 +46,7 @@ from services.extraction.providers.base import PdfChunkExtractionError
 from services.extraction.extraction_log import ERROR, SUCCESS, WARNING, log_event
 from services.product_format import NormalizedFormatBundle
 from services.push_notify import notify_extraction_complete
+from services.runtime_memory import current_rss_mib, peak_rss_mib, release_native_memory
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +82,6 @@ def _flyer_storage_path(file_reference: str) -> str | None:
     return None
 
 
-def _peak_rss_mib() -> float:
-    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    divisor = 1_048_576 if sys.platform == "darwin" else 1_024
-    return round(peak_rss / divisor, 1)
-
-
 class ExtractionService:
     def __init__(
         self,
@@ -117,7 +110,7 @@ class ExtractionService:
         downloaded: DownloadedFlyer | None = None
         try:
             downloaded = self._download_file(sb, flyer["file_url"], flyer.get("file_name", ""))
-            logger.info("Extraction flyer %s peak_rss_mib=%.1f stage=downloaded", flyer_id, _peak_rss_mib())
+            self._log_memory(flyer_id, "downloaded")
             self._run_pipeline(
                 sb,
                 flyer,
@@ -270,7 +263,7 @@ class ExtractionService:
             )
         self._save_pending_packshots(sb, flyer_id, content)
         provider_seconds = time.perf_counter() - provider_started_at
-        logger.info("Extraction flyer %s peak_rss_mib=%.1f stage=extracted", flyer_id, _peak_rss_mib())
+        self._log_memory(flyer_id, "extracted")
 
         sb.table("flyers").update({  # type: ignore[union-attr]
             "extraction_metadata": {
@@ -555,10 +548,25 @@ class ExtractionService:
             .execute()
         )
         for source_page, offers in self._packshots_by_page(pending.data or []).items():
-            offers_by_id = {offer["id"]: offer for offer in offers}
-            boxes = {offer_id: offer["packshot_bbox"] for offer_id, offer in offers_by_id.items()}
+            self._save_packshot_page(sb, flyer_id, pdf_source, source_page, offers)
+
+    def _save_packshot_page(
+        self, sb: object, flyer_id: str, pdf_source: PdfSource, source_page: int, offers: list[dict]
+    ) -> None:
+        offers_by_id = {offer["id"]: offer for offer in offers}
+        boxes = {offer_id: offer["packshot_bbox"] for offer_id, offer in offers_by_id.items()}
+        try:
             for offer_id, image in iter_page_packshots(pdf_source, source_page, boxes):
                 self._upload_packshot(sb, offers_by_id[offer_id], image)
+        finally:
+            release_native_memory()
+            self._log_memory(flyer_id, f"packshots-page-{source_page}")
+
+    def _log_memory(self, flyer_id: str, stage: str) -> None:
+        logger.info(
+            "Extraction flyer %s rss_mib=%s peak_rss_mib=%.1f stage=%s",
+            flyer_id, current_rss_mib(), peak_rss_mib(), stage,
+        )
 
     def _packshots_by_page(self, offers: list[dict]) -> dict[int, list[dict]]:
         grouped: dict[int, list[dict]] = {}
