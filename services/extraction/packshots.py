@@ -63,6 +63,7 @@ def _iter_crops(image: Image.Image, boxes: Mapping[str, object]) -> Iterator[tup
 
 
 def _render_page(pdf_source: PdfSource, page_number: int) -> Image.Image | None:
+    document = None
     try:
         import fitz
 
@@ -72,17 +73,21 @@ def _render_page(pdf_source: PdfSource, page_number: int) -> Image.Image | None:
             else fitz.open(filename=str(pdf_source))
         )
         if page_number > len(document):
-            document.close()
             return None
-        pixmap = document.load_page(page_number - 1).get_pixmap(
+        page = document.load_page(page_number - 1)
+        pixmap = page.get_pixmap(
             matrix=fitz.Matrix(_PACKSHOT_RENDER_SCALE, _PACKSHOT_RENDER_SCALE), alpha=False
         )
-        document.close()
-        with BytesIO(pixmap.tobytes("png")) as buffer:
-            with Image.open(buffer) as source:
-                return source.convert("RGB")
-    except (ImportError, RuntimeError, ValueError):
+        try:
+            return Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+        finally:
+            del pixmap
+            del page
+    except (ImportError, OSError, RuntimeError, ValueError):
         return None
+    finally:
+        if document is not None:
+            document.close()
 
 
 def _pixel_box(size: tuple[int, int], box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:

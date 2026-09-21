@@ -176,6 +176,13 @@ async def _put(url: str, dep_overrides: dict, json: dict) -> httpx.Response:
         return await client.put(url, json=json)
 
 
+async def _post(url: str, dep_overrides: dict) -> httpx.Response:
+    test_app.dependency_overrides = dep_overrides
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.post(url)
+
+
 def test_confirmed_count_by_flyer_uses_database_aggregation():
     sb = MagicMock()
     sb.rpc.return_value.execute.return_value = MagicMock(
@@ -188,6 +195,90 @@ def test_confirmed_count_by_flyer_uses_database_aggregation():
         "count_offers_by_flyer",
         {"p_flyer_ids": ["flyer-taurianova"], "p_is_confirmed": True},
     )
+
+
+@pytest.mark.asyncio
+async def test_confirm_offers_keeps_response_and_notification_contract():
+    sb = MagicMock()
+    source_flyer = {
+        "id": "flyer-source",
+        "status": "done",
+        "is_public": False,
+        "flyer_kind": "source",
+    }
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+        data=source_flyer
+    )
+    sb.rpc.return_value.execute.return_value = MagicMock(data=285)
+    targets = [
+        {"supermarket_id": "sup-1", "supermarket_name": "Coop"},
+        {"supermarket_id": "sup-2", "supermarket_name": "Esselunga"},
+    ]
+    target_flyers = {
+        "sup-1": {"flyer_id": "published-1"},
+        "sup-2": {"flyer_id": "published-2"},
+    }
+    with (
+        patch("api.routers.flyers.get_supabase", return_value=sb),
+        patch("api.routers.flyers._flyer_targets", return_value=targets),
+        patch("api.routers.flyers._confirmed_count_by_flyer", return_value={"flyer-source": 285}),
+        patch(
+            "api.routers.flyers._sync_published_targets_for_source_flyer",
+            return_value={"published-1": 285, "published-2": 285},
+        ) as sync,
+        patch("api.routers.flyers._published_target_flyers", return_value=target_flyers),
+    ):
+        response = await _post(
+            "/flyers/flyer-source/offers/confirm",
+            {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "confirmed": 285,
+        "flyer_id": "flyer-source",
+        "published_flyers": [
+            {"flyer_id": "published-1", "supermarket_id": "sup-1", "supermarket_name": "Coop"},
+            {"flyer_id": "published-2", "supermarket_id": "sup-2", "supermarket_name": "Esselunga"},
+        ],
+    }
+    sb.rpc.assert_called_once_with(
+        "confirm_source_flyer_offers", {"p_flyer_id": "flyer-source"}
+    )
+    sync.assert_called_once_with(
+        sb,
+        source_flyer=source_flyer,
+        targets=targets,
+        notify_new=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_confirm_offers_is_idempotent_without_republishing_targets():
+    sb = MagicMock()
+    source_flyer = {"id": "flyer-source", "status": "done", "flyer_kind": "source"}
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+        data=source_flyer
+    )
+    sb.rpc.return_value.execute.return_value = MagicMock(data=0)
+
+    with (
+        patch("api.routers.flyers.get_supabase", return_value=sb),
+        patch("api.routers.flyers._flyer_targets", return_value=[{"supermarket_id": "sup-1"}]),
+        patch("api.routers.flyers._sync_published_targets_for_source_flyer") as sync,
+    ):
+        response = await _post(
+            "/flyers/flyer-source/offers/confirm",
+            {_DEP_PROFILE: lambda: ADMIN_PROFILE},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "confirmed": 0,
+        "flyer_id": "flyer-source",
+        "published_flyers": [],
+    }
+    sync.assert_not_called()
 
 
 def test_stale_processing_flyer_can_resume_only_after_safety_window():
@@ -1236,10 +1327,7 @@ class TestUpdateFlyerTargets:
                 return_value={"sup-1": "Coop", "sup-2": "Esselunga"},
             ),
             patch("api.routers.flyers._flyer_targets", return_value=targets),
-            patch(
-                "api.routers.flyers._source_master_offers",
-                return_value=[{"id": "offer-1"}],
-            ),
+            patch("api.routers.flyers._confirmed_count_by_flyer", return_value={"flyer-source": 1}),
             patch(
                 "api.routers.flyers._sync_published_targets_for_source_flyer"
             ) as sync_mock,
@@ -1261,7 +1349,6 @@ class TestUpdateFlyerTargets:
             source_flyer=updated_flyer,
             targets=targets,
             notify_new=True,
-            source_offers=[{"id": "offer-1"}],
         )
 
     def test_sync_published_targets_adds_and_removes_public_materialization(self):
@@ -1304,21 +1391,18 @@ class TestUpdateFlyerTargets:
         with (
             patch(
                 "api.routers.flyers._published_target_flyers",
-                side_effect=[
-                    {
-                        "sup-1": {"flyer_id": "flyer-pub-1", "supermarket_name": "Coop"},
-                        "sup-old": {
-                            "flyer_id": "flyer-pub-old",
-                            "supermarket_name": "Old",
-                        },
+                return_value={
+                    "sup-1": {"flyer_id": "flyer-pub-1", "supermarket_name": "Coop"},
+                    "sup-old": {
+                        "flyer_id": "flyer-pub-old",
+                        "supermarket_name": "Old",
                     },
-                    target_flyers_after,
-                ],
+                },
             ),
             patch(
-                "api.routers.flyers._sync_published_clones_for_source_offers",
+                "api.routers.flyers._materialize_source_flyer_targets",
                 return_value={"flyer-pub-1": 1, "flyer-pub-2": 1},
-            ) as clone_sync,
+            ) as materialize,
             patch("api.routers.flyers.enqueue_flyer_published") as flyer_job_mock,
         ):
             counts = _flyers_module._sync_published_targets_for_source_flyer(
@@ -1326,7 +1410,6 @@ class TestUpdateFlyerTargets:
                 source_flyer=source_flyer,
                 targets=targets,
                 notify_new=True,
-                source_offers=[{"id": "offer-1"}],
             )
 
         offers_table.delete.return_value.in_.assert_called_once_with(
@@ -1338,11 +1421,7 @@ class TestUpdateFlyerTargets:
             ["flyer-pub-old"],
         )
         assert flyers_table.insert.call_args.args[0]["supermarket_id"] == "sup-2"
-        clone_sync.assert_called_once_with(
-            sb,
-            source_offers=[{"id": "offer-1"}],
-            target_flyers=target_flyers_after,
-        )
+        materialize.assert_called_once_with(sb, "flyer-source")
         flyer_job_mock.assert_called_once()
         assert counts == {"flyer-pub-1": 1, "flyer-pub-2": 1}
 
@@ -1446,24 +1525,20 @@ def test_public_flyer_expiry_sort_key_prioritizes_nearest_expiry():
     ]
 
 
-def test_published_offer_clone_keeps_packshot_localization():
-    source_offer = {
-        "id": "source-offer-1",
-        "name": "Latte",
-        "packshot_source_page": 2,
-        "packshot_bbox": [100, 200, 500, 600],
-    }
+def test_materialize_source_targets_uses_database_result_without_offer_payloads():
+    sb = MagicMock()
+    sb.rpc.return_value.execute.return_value = MagicMock(data=[
+        {"flyer_id": "published-1", "products_count": 285},
+        {"flyer_id": "published-2", "products_count": 285},
+        {"flyer_id": "published-3", "products_count": 285},
+    ])
 
-    clone = _flyers_module._clone_offer_fields(
-        source_offer,
-        flyer_id="published-flyer-1",
-        supermarket_id="supermarket-1",
-        supermarket_name="Coop",
+    counts = _flyers_module._materialize_source_flyer_targets(sb, "source-flyer")
+
+    assert counts == {"published-1": 285, "published-2": 285, "published-3": 285}
+    sb.rpc.assert_called_once_with(
+        "materialize_source_flyer_targets", {"p_source_flyer_id": "source-flyer"}
     )
-
-    assert clone["packshot_source_page"] == 2
-    assert clone["packshot_bbox"] == [100, 200, 500, 600]
-    assert "is_active" not in clone
 
 
 @pytest.mark.asyncio

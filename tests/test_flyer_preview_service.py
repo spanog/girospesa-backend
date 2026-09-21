@@ -5,7 +5,7 @@ from io import BytesIO
 import fitz
 from PIL import Image
 
-from services.flyer_preview import PREVIEW_SIZE, render_flyer_preview
+from services.flyer_preview import PREVIEW_QUALITY, PREVIEW_SIZE, _webp, render_flyer_preview
 
 
 def _image_bytes() -> bytes:
@@ -41,6 +41,23 @@ def test_renders_first_pdf_page_to_webp() -> None:
     with Image.open(BytesIO(preview)) as image:
         assert image.format == "WEBP"
         assert image.height > image.width
+
+
+def test_pdf_preview_keeps_legacy_webp_pixels_without_png_buffer() -> None:
+    content = _pdf_bytes()
+    document = fitz.open(stream=content, filetype="pdf")
+    pixmap = document.load_page(0).get_pixmap(matrix=fitz.Matrix(1.2, 1.2), alpha=False)
+    with BytesIO(pixmap.tobytes("png")) as buffer:
+        with Image.open(buffer) as legacy_source:
+            expected = _webp(legacy_source.convert("RGB"))
+    document.close()
+
+    preview = render_flyer_preview(content, "application/pdf")
+
+    assert preview == expected
+    with Image.open(BytesIO(preview)) as image:
+        assert image.format == "WEBP"
+        assert PREVIEW_QUALITY == 82
 
 
 def test_returns_none_for_unrenderable_file() -> None:

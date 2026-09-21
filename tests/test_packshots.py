@@ -6,7 +6,13 @@ import fitz
 from services.extraction.normalizer import normalize_product
 from PIL import Image
 
-from services.extraction.packshots import expanded_box, normalized_box, render_page_packshots
+from services.extraction.packshots import (
+    _pixel_box,
+    _webp_bytes,
+    expanded_box,
+    normalized_box,
+    render_page_packshots,
+)
 
 
 def test_normalized_box_accepts_gemma_grid_coordinates() -> None:
@@ -108,6 +114,28 @@ def test_pending_packshots_upload_each_crop_before_rendering_the_next() -> None:
     assert uploaded == ["offer-1", "offer-2"]
 
 
+def test_pending_packshots_release_native_memory_after_each_page() -> None:
+    from services.extraction.service import ExtractionService
+
+    sb = MagicMock()
+    pending = (
+        sb.table.return_value.select.return_value.eq.return_value.is_.return_value.not_.is_.return_value.not_.is_.return_value
+    )
+    pending.execute.return_value.data = [
+        {"id": "offer-1", "image_url": None, "packshot_source_page": 1, "packshot_bbox": [1, 2, 3, 4]},
+        {"id": "offer-2", "image_url": None, "packshot_source_page": 2, "packshot_bbox": [5, 6, 7, 8]},
+    ]
+
+    with (
+        patch("services.extraction.service.iter_page_packshots", return_value=iter([])),
+        patch("services.extraction.service.release_native_memory") as release_memory,
+        patch.object(ExtractionService, "_log_memory"),
+    ):
+        ExtractionService()._save_pending_packshots(sb, "flyer-1", b"%PDF")
+
+    assert release_memory.call_count == 2
+
+
 def test_page_packshots_render_page_once_for_multiple_crops() -> None:
     page = Image.new("RGB", (1000, 1000))
 
@@ -142,3 +170,26 @@ def test_packshots_render_from_a_pdf_path_without_changing_crop_output(tmp_path)
     with Image.open(__import__("io").BytesIO(image_bytes)) as rendered:
         assert rendered.format == "WEBP"
         assert max(rendered.size) == 640
+
+
+def test_pdf_packshot_keeps_legacy_webp_pixels_without_png_buffer(tmp_path) -> None:
+    path = tmp_path / "volantino.pdf"
+    document = fitz.open()
+    page = document.new_page(width=1_000, height=1_000)
+    page.draw_rect(fitz.Rect(100, 100, 900, 900), color=(0, 1, 0), fill=(0, 1, 0))
+    document.save(path)
+    document.close()
+    box = [100, 100, 900, 900]
+
+    rendered = render_page_packshots(path, 1, {"one": box})["one"]
+    legacy_document = fitz.open(filename=str(path))
+    legacy_pixmap = legacy_document.load_page(0).get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+    with Image.open(__import__("io").BytesIO(legacy_pixmap.tobytes("png"))) as legacy_page:
+        crop = legacy_page.convert("RGB").crop(_pixel_box(legacy_page.size, expanded_box(tuple(box))))
+        try:
+            expected = _webp_bytes(crop)
+        finally:
+            crop.close()
+    legacy_document.close()
+
+    assert rendered == expected

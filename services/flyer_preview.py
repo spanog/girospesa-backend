@@ -35,9 +35,10 @@ def _pdf_first_page(content: bytes) -> Image.Image | None:
         pixmap = document.load_page(0).get_pixmap(
             matrix=fitz.Matrix(PDF_RENDER_SCALE, PDF_RENDER_SCALE), alpha=False
         )
-        with BytesIO(pixmap.tobytes("png")) as buffer:
-            with Image.open(buffer) as source:
-                return source.convert("RGB")
+        try:
+            return Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+        finally:
+            del pixmap
     finally:
         document.close()
 
