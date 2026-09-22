@@ -30,6 +30,7 @@ La registrazione richiede la selezione di un Comune dall'archivio ISTAT. Salva i
 
 In locale, impostare anche `SUPABASE_JWT_SECRET` uguale al `JWT_SECRET` di Docker: consente al backend di verificare i token HS256 emessi dall'istanza Supabase locale. In produzione il backend continua a verificare i token ES256/RS256 tramite JWKS.
 L'aggiunta ripetuta della stessa offerta attiva a una lista incrementa la quantità della riga esistente in modo atomico.
+Le operazioni offline della lista arrivano una alla volta con identificatori idempotenti: ripetere una richiesta dopo perdita di rete non duplica l'aggiunta né la registrazione di acquisto. Il client mantiene la coda solo sul dispositivo e la cancella al logout; il backend conserva esclusivamente gli identificatori tecnici necessari a deduplicare i retry.
 
 Dettagli architetturali: [docs/architecture.md](docs/architecture.md).
 

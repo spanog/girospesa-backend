@@ -599,3 +599,46 @@ async def test_get_history_returns_next_cursor_and_applies_filters():
     assert payload["next_cursor_purchased_at"] == "2026-05-08T09:00:00+00:00"
     assert payload["next_cursor_id"] == "r3"
     assert payload["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_purchase_operation_retry_returns_existing_history_record():
+    _test_app.dependency_overrides = _deps("user-1")
+    transport = httpx.ASGITransport(app=_test_app)
+    purchase_history_table = MagicMock()
+    existing_record = {
+        "id": "purchase-1",
+        "list_id": "list-1",
+        "list_item_id": "item-1",
+        "item_name": "Latte",
+        "quantity": 1,
+        "price_paid": 1.2,
+        "price_original": None,
+        "discount_pct": None,
+        "savings": 0,
+        "purchased_at": "2026-09-21T10:00:00+00:00",
+    }
+    operation_query = purchase_history_table.select.return_value
+    operation_query.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+        data=[existing_record]
+    )
+    sb = MagicMock()
+    sb.table.return_value = purchase_history_table
+    rpc_mock = AsyncMock(return_value=None)
+
+    with patch.object(_purchases_module, "get_supabase", return_value=sb), \
+         patch.object(_purchases_module, "_verify_member", return_value=None), \
+         patch.object(_purchases_module, "_rpc_update_list_item", new=rpc_mock):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/purchases/items/item-1",
+                json={
+                    "list_id": "list-1",
+                    "client_operation_id": "b1d939a5-566a-4e79-83a3-e3c6d50b0d4d",
+                },
+            )
+
+    assert response.status_code == 201
+    assert response.json()["id"] == "purchase-1"
+    purchase_history_table.insert.assert_not_called()
+    rpc_mock.assert_awaited_once()

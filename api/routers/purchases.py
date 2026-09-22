@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
@@ -30,6 +31,8 @@ def _verify_member(sb: object, list_id: str, user_id: str) -> None:
 class PurchaseItemBody(BaseModel):
     list_id: str
     offer_id: str | None = None
+    client_operation_id: UUID | None = None
+    purchased_at: datetime | None = None
 
 
 class PurchaseRecord(BaseModel):
@@ -197,6 +200,26 @@ async def purchase_item(
     sb = get_supabase()
     _verify_member(sb, body.list_id, user_id)
 
+    existing_operation = _existing_offline_purchase(
+        sb,
+        body.client_operation_id,
+        body.list_id,
+        user_id,
+    )
+    if existing_operation:
+        await _rpc_update_list_item(
+            body.list_id,
+            item_id,
+            _purchase_patch(
+                purchased=True,
+                user_id=user_id,
+                at=existing_operation["purchased_at"],
+            ),
+            user_id,
+            access_token,
+        )
+        return _to_purchase_record(existing_operation)
+
     list_row = (
         sb.table("shopping_lists")
         .select("items")
@@ -244,7 +267,8 @@ async def purchase_item(
     )
     snapshot = _build_purchase_snapshot(item, offer_data)
 
-    now = datetime.now(timezone.utc).isoformat()
+    purchased_at = body.purchased_at or datetime.now(timezone.utc)
+    now = purchased_at.isoformat()
 
     record_insert = {
         "user_id": user_id,
@@ -259,6 +283,10 @@ async def purchase_item(
         "price_paid": price_paid,
         "price_original": price_original,
         "discount_pct": offer_data.get("discount_pct"),
+        "offline_operation_id": str(body.client_operation_id)
+        if body.client_operation_id
+        else None,
+        "purchased_at": now,
         **snapshot,
     }
 
@@ -275,6 +303,27 @@ async def purchase_item(
     publish_list_sync_event(body.list_id, "list_updated", "item_purchased")
 
     return _to_purchase_record(record)
+
+
+def _existing_offline_purchase(
+    sb: object,
+    operation_id: UUID | None,
+    list_id: str,
+    user_id: str,
+) -> dict | None:
+    if operation_id is None:
+        return None
+    result = (
+        sb.table("purchase_history")  # type: ignore[union-attr,attr-defined]
+        .select("*")
+        .eq("offline_operation_id", str(operation_id))
+        .eq("list_id", list_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
 
 
 @router.delete(

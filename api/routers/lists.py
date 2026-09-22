@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from uuid import UUID, uuid4
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 import json
@@ -105,6 +106,8 @@ class AddItemBody(BaseModel):
     source: Literal["manual", "offer"] = "manual"
     pinned_offer_id: str | None = None    # specific offers.id (set when source='offer')
     image_url: str | None = None
+    client_item_id: UUID | None = None
+    client_operation_id: UUID | None = None
 
 
 class InviteByEmailBody(BaseModel):
@@ -322,10 +325,12 @@ async def _rpc_append_list_item(
     item: dict,
     user_id: str,
     access_token: str,
+    operation_id: str | None = None,
 ) -> None:
     await _rpc_call("append_list_item", {
         "p_list_id": list_id,
         "p_item": item,
+        "p_operation_id": operation_id,
     }, user_id, access_token)
 
 
@@ -369,6 +374,21 @@ def _direct_rpc_call(function_name: str, payload: dict, user_id: str) -> None:
     # Run as postgres superuser (bypasses RLS) — no auth.uid() needed here.
     with get_postgres_cursor() as cursor:
         if function_name == "append_list_item":
+            if payload.get("p_operation_id"):
+                cursor.execute(
+                    """
+                    INSERT INTO public.list_sync_operations (list_id, operation_id, user_id)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (list_id, operation_id) DO NOTHING
+                    """,
+                    (
+                        payload["p_list_id"],
+                        payload["p_operation_id"],
+                        user_id,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    return
             cursor.execute(
                 """
                 UPDATE public.shopping_lists
@@ -1171,12 +1191,10 @@ async def add_item(
     user_id: Annotated[str, Depends(get_current_user_id)],
     access_token: Annotated[str, Depends(get_current_access_token)],
 ) -> dict:
-    import uuid
-
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
     new_item = {
-        "id": str(uuid.uuid4()),
+        "id": str(body.client_item_id or uuid4()),
         "name": body.name,
         "brand": body.brand,
         "quantity": body.quantity,
@@ -1200,7 +1218,13 @@ async def add_item(
         except HTTPException:
             pass
     new_item = _enrich_items_with_categories(sb, [new_item])[0]
-    await _rpc_append_list_item(list_id, new_item, user_id, access_token)
+    await _rpc_append_list_item(
+        list_id,
+        new_item,
+        user_id,
+        access_token,
+        str(body.client_operation_id) if body.client_operation_id else None,
+    )
     _publish_list_sync_event(list_id, "list_updated", "item_added")
     return project_item_for_viewer(
         new_item,

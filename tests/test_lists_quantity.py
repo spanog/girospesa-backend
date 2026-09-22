@@ -463,6 +463,31 @@ async def test_add_offer_item_returns_brand_in_snapshot():
     rpc_mock.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_add_item_forwards_client_operation_id_to_atomic_append():
+    sb_mock = MagicMock()
+    operation_id = "b1d939a5-566a-4e79-83a3-e3c6d50b0d4d"
+    item_id = "9d9b4cdd-d187-4a24-a7a2-f8d9ec6371aa"
+
+    with patch.object(_lists_module, "get_supabase", return_value=sb_mock), \
+         patch.object(_lists_module, "_verify_member", return_value=None), \
+         patch.object(_lists_module, "_enrich_items_with_categories", side_effect=lambda _sb, items: items), \
+         patch.object(_lists_module, "_rpc_append_list_item", new=AsyncMock()) as rpc_mock:
+        resp = await _post_req(
+            f"/lists/{_LIST_ID}/items",
+            json={
+                "name": "Pane",
+                "client_item_id": item_id,
+                "client_operation_id": operation_id,
+            },
+            dep_overrides=_deps(),
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["id"] == item_id
+    assert rpc_mock.await_args.args[-1] == operation_id
+
+
 async def test_patch_category_returns_updated_item():
     initial_items = [
         {
