@@ -60,6 +60,7 @@ Bootstrap admin condiviso per locale/test/prod:
 
 - Schema canonico: `supabase/migrations/*.sql`
 - Baseline attiva iniziale: `supabase/migrations/20260617000000_initial_schema.sql`
+- Data API: nuove tabelle, sequenze e funzioni nello schema `public` non ricevono grant impliciti. La migration che le crea deve assegnare esplicitamente i soli privilegi necessari; le policy RLS non sostituiscono i grant.
 - SQL seed locale: `supabase/seed.sql` non crea piu' admin auth
 - Script Python canonico: `.venv/bin/python -m scripts.seed_admin`
 - Alias task locale: `.venv/bin/task dev-setup`

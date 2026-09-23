@@ -49,6 +49,7 @@
 ## Supabase Conventions
 
 - Match pinned client API exactly. Example: PostgREST `.order()` expects `nullsfirst`, not `nulls_first`.
+- Data API grants are opt-in. Every migration creating a `public` table, sequence, or function must grant only the operations required by each caller in that same migration; include `service_role` when FastAPI accesses it through Supabase. Do not restore default grants. RLS policies never replace grants.
 - Local Supabase API exposure stays limited to `public` schema. `pg_graphql` is disabled; do not build or document `/graphql/v1` flows.
 - RLS-only helper functions that need `SECURITY DEFINER` privileges must live in a non-exposed schema such as `private`; do not publish them from `public` or document them as client-callable RPCs.
 - Public Storage buckets (`avatars`, `logos`, `product-images`) rely on signed-less `/storage/v1/object/public/...` URLs only. Do not depend on anonymous bucket listing via `storage.objects` policies.

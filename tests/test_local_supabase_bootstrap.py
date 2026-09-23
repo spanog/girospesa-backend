@@ -98,6 +98,15 @@ def test_bootstrap_reapplies_offer_function_search_path():
     assert "ALTER FUNCTION public.offers_compute_fields() SET search_path = public" in bootstrap
 
 
+def test_bootstrap_matches_data_api_opt_in_grants():
+    bootstrap = _read("supabase/init/001-bootstrap-local-db.sh")
+
+    assert "REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES" in bootstrap
+    assert "FROM anon, authenticated, service_role;" in bootstrap
+    assert "REVOKE USAGE, SELECT ON SEQUENCES" in bootstrap
+    assert "REVOKE EXECUTE ON FUNCTIONS" in bootstrap
+
+
 def test_local_supabase_exposes_only_public_and_storage_schemas():
     compose = _read("docker-compose.yml")
     integration_compose = _read("docker-compose.integration.yml")
@@ -136,6 +145,17 @@ def test_backend_migrations_dir_starts_from_initial_baseline():
         path.name == "20260617124848_grant_service_role_public_schema_access.sql"
         for path in migration_files
     )
+
+
+def test_historical_data_api_grants_are_preserved_and_future_grants_are_opt_in():
+    migration = _read(
+        "supabase/migrations/20260923120000_make_data_api_grants_explicit.sql"
+    )
+
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public" in migration
+    assert "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public" in migration
+    assert "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;" in migration
+    assert migration.count("ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public") == 3
 
 
 def test_repo_has_no_historical_migration_archive():
