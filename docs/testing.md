@@ -11,7 +11,7 @@ pytest tests/ -v --ignore=tests/integration   # tutto tranne integration
 
 Questa suite include anche snapshot contract mirati per router/unit test. Gli snapshot JSON vivono in `tests/__snapshots__/` e devono restare leggibili: normalizzare UUID, token, timestamp e URL variabili prima del confronto, mantenendo assertion esplicite per regole di business critiche.
 
-I test della skill volante (`tests/test_flyer_ingestion_helpers.py`) simulano il primo run con un documento già noto, date mancanti, i tre retry Gemini, YAML, audit state e conversione ordinata di immagini viewer in PDF. I test del preflight (`tests/test_flyer_ingestion_preflight.py` e `tests/test_flyers_router.py`) verificano hash, impronte visive, copertura target parziale, assenza di scritture e autorizzazione admin/manager.
+I test del preflight (`tests/test_flyer_ingestion_preflight.py` e `tests/test_flyers_router.py`) verificano hash, impronte visive, copertura target parziale, assenza di scritture e autorizzazione admin/manager.
 
 ### Test di integrazione (stack Docker isolato)
 

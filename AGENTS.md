@@ -27,12 +27,9 @@
 - Seed/check admin: `.venv/bin/python -m scripts.seed_admin` / `.venv/bin/python -m scripts.seed_admin --check`
 - Run:
   - `.venv/bin/python -m pytest tests -v --ignore=tests/integration --ignore=tests/performance`
-  - `.venv/bin/python -m pytest tests/integration -v`
+- `.venv/bin/python -m pytest tests/integration -v`
   - `RUN_PERFORMANCE_TESTS=1 .venv/bin/python -m pytest tests/performance -v -s` for opt-in benchmarks
 - Manage integration stack manually: `.venv/bin/python -m scripts.integration_stack up|down|status|env`
-- Validate configured Codex flyer sources: `.venv/bin/python -m scripts.flyer_ingestion.cli validate-config --config ../.agents/skills/girospesa-volantini/flyer-sources.yaml`
-- Provision the separate local flyer bot once: `.venv/bin/python -m scripts.flyer_ingestion.cli provision-agent --email volantini-bot@local.test`; its generated password stays in the macOS Keychain.
-- Run one acquired flyer without the admin UI: `.venv/bin/python -m scripts.flyer_ingestion.cli ingest --config ../.agents/skills/girospesa-volantini/flyer-sources.yaml --source-id <id> --input <pdf> --valid-from <YYYY-MM-DD> --valid-to <YYYY-MM-DD>`.
 
 ## Data Access
 
@@ -42,7 +39,6 @@
 - Keep raw SQL, PostgREST, Supabase service-role access, and schema-specific branching inside backend repositories/services, never inside frontend code.
 - No endpoint may trust client-supplied `admin`, `manager`, `role`, or similar flags for privileges or data scope. Authorization must derive from validated server-side auth context.
 - Public contact flows (`/contact-requests`) are mail-first: do not reintroduce app tables or client-side inserts for bug reports, collaboration requests, or missing-flyer requests.
-- Codex flyer ingestion is an explicit, user-started skill. Do not add scheduler jobs, cron triggers or backend automation for it; the preflight must remain read-only before any signed Storage upload. The skill authenticates as its dedicated Keychain-backed technical admin, never by reading a browser session or using the service-role key for daily ingestion.
 
 ## Integration Test Isolation
 
