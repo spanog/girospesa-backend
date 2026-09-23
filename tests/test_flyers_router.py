@@ -99,6 +99,7 @@ import pytest
 
 import api.routers.flyers as _flyers_module
 from api.routers.flyers import router
+from services.flyer_ingestion_preflight import FlyerPreflightDecision, FlyerPreflightStatus
 from tests.snapshot_utils import assert_matches_json_snapshot
 
 _DEP_GET_USER_ID = _flyers_module.get_current_user_id
@@ -153,6 +154,24 @@ async def _post_upload(dep_overrides: dict, data: dict | None = None) -> httpx.R
     transport = httpx.ASGITransport(app=test_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         return await client.post("/flyers/upload/complete", json=body)
+
+
+async def _post_preflight(
+    dep_overrides: dict,
+    supermarket_id: str = "sup-1",
+) -> httpx.Response:
+    test_app.dependency_overrides = dep_overrides
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.post(
+            "/flyers/ingestion-preflight",
+            data={
+                "supermarket_ids": supermarket_id,
+                "valid_from": "2026-09-21",
+                "valid_to": "2026-09-30",
+            },
+            files={"file": ("candidate.pdf", _SMALL_PDF, "application/pdf")},
+        )
 
 
 async def _get(url: str, dep_overrides: dict | None = None) -> httpx.Response:
@@ -628,6 +647,43 @@ class TestFlyerPreview:
 
 
 class TestUploadFlyerDuplicate:
+    def test_preflight_hash_conflicts_ignore_expired_flyers(self):
+        flyers_table = MagicMock()
+        flyers_query = flyers_table.select.return_value
+        flyers_query.eq.return_value = flyers_query
+        flyers_query.execute.return_value = MagicMock(
+            data=[
+                {
+                    "id": "source-expired",
+                    "flyer_kind": "source",
+                    "valid_from": "2000-01-01",
+                    "valid_to": "2000-01-02",
+                },
+                {
+                    "id": "source-current",
+                    "flyer_kind": "source",
+                    "valid_from": "2000-01-01",
+                    "valid_to": "9999-01-01",
+                },
+            ]
+        )
+        targets_table = MagicMock()
+        targets_query = targets_table.select.return_value
+        targets_query.in_.return_value = targets_query
+        targets_query.execute.return_value = MagicMock(data=[{"supermarket_id": "sup-1"}])
+        sb = MagicMock()
+        sb.table.side_effect = lambda name: flyers_table if name == "flyers" else targets_table
+
+        conflicts = _flyers_module._duplicate_target_conflicts(
+            sb,
+            file_hash="a" * 64,
+            supermarket_ids=["sup-1"],
+            active_only=True,
+        )
+
+        assert conflicts == {"sup-1"}
+        targets_query.in_.assert_any_call("flyer_id", ["source-current"])
+
     @pytest.mark.asyncio
     async def test_duplicate_hash_and_supermarket_returns_409(self):
         """Uploading the same file+supermarket twice returns 409 Conflict."""
@@ -658,6 +714,82 @@ class TestUploadFlyerDuplicate:
 
         assert resp.status_code == 201
         assert sb.table.return_value.insert.call_count >= 1
+
+
+class TestFlyerIngestionPreflight:
+    @pytest.mark.asyncio
+    async def test_known_hash_skips_storage_fingerprint_reads(self):
+        sb = _mock_supabase_for_upload()
+        documents = MagicMock()
+        decision = FlyerPreflightDecision(
+            FlyerPreflightStatus.KNOWN,
+            "a" * 64,
+            frozenset({"sup-1"}),
+            frozenset(),
+        )
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._duplicate_target_conflicts", return_value={"sup-1"}),
+            patch("api.routers.flyers._preflight_documents", documents),
+            patch("api.routers.flyers.FlyerIngestionPreflightService.decide", return_value=decision),
+        ):
+            response = await _post_preflight({_DEP_PROFILE: lambda: ADMIN_PROFILE})
+
+        assert response.status_code == 200
+        documents.assert_not_called()
+        sb.storage.from_.return_value.download.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_preflight_is_read_only_and_returns_new_candidate(self):
+        sb = _mock_supabase_for_upload()
+        decision = FlyerPreflightDecision(
+            FlyerPreflightStatus.NEW,
+            "a" * 64,
+            frozenset(),
+            frozenset({"sup-1"}),
+        )
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._duplicate_target_conflicts", return_value=set()),
+            patch("api.routers.flyers._preflight_documents", return_value=()),
+            patch("api.routers.flyers.FlyerIngestionPreflightService.decide", return_value=decision),
+        ):
+            response = await _post_preflight({_DEP_PROFILE: lambda: ADMIN_PROFILE})
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "new"
+        assert response.json()["upload_supermarket_ids"] == ["sup-1"]
+        sb.storage.from_.return_value.upload.assert_not_called()
+        sb.table.return_value.insert.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_preflight_response_matches_snapshot(self, request):
+        sb = _mock_supabase_for_upload()
+        decision = FlyerPreflightDecision(
+            FlyerPreflightStatus.KNOWN,
+            "a" * 64,
+            frozenset({"sup-1"}),
+            frozenset(),
+        )
+        with (
+            patch("api.routers.flyers.get_supabase", return_value=sb),
+            patch("api.routers.flyers._duplicate_target_conflicts", return_value={"sup-1"}),
+            patch("api.routers.flyers._preflight_documents", return_value=()),
+            patch("api.routers.flyers.FlyerIngestionPreflightService.decide", return_value=decision),
+        ):
+            response = await _post_preflight({_DEP_PROFILE: lambda: ADMIN_PROFILE})
+
+        assert response.status_code == 200
+        assert_matches_json_snapshot(request, "flyer_ingestion_preflight_response", response.json())
+
+    @pytest.mark.asyncio
+    async def test_preflight_rejects_targets_outside_manager_scope(self):
+        response = await _post_preflight(
+            {_DEP_PROFILE: lambda: MANAGER_PROFILE},
+            supermarket_id="sup-2",
+        )
+
+        assert response.status_code == 403
 
 
 class TestPublicFlyersVisibility:

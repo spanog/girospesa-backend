@@ -6,7 +6,7 @@ import uuid
 import hashlib
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from pydantic import BaseModel, Field
@@ -31,6 +31,11 @@ from services.extraction.normalizer import format_unit_price_label, normalize_un
 from services.notification_jobs import enqueue_flyer_published, reschedule_flyer_published
 from services.product_format import ProductFormat, build_format_bundle
 from services.flyer_preview import render_flyer_preview
+from services.flyer_ingestion_preflight import (
+    DocumentFingerprintError,
+    ExistingFlyerDocument,
+    FlyerIngestionPreflightService,
+)
 from services.offer_visibility import apply_current_offer_window
 from services.runtime_memory import current_rss_mib, peak_rss_mib
 from api.routers._offer_utils import (
@@ -113,6 +118,13 @@ class FlyerUploadCompleteRequest(BaseModel):
     supermarket_ids: list[str] = Field(default_factory=list)
     valid_from: str | None = None
     valid_to: str | None = None
+
+
+class FlyerIngestionPreflightResponse(BaseModel):
+    status: str
+    file_hash: str
+    processed_supermarket_ids: list[str]
+    upload_supermarket_ids: list[str]
 
 
 def _parse_timestamp(value: object) -> datetime | None:
@@ -532,17 +544,21 @@ def _duplicate_target_conflicts(
     file_hash: str,
     supermarket_ids: list[str],
     exclude_source_flyer_id: str | None = None,
+    active_only: bool = False,
 ) -> set[str]:
     if not supermarket_ids:
         return set()
 
     flyers_resp = (
         sb.table("flyers")
-        .select("id, flyer_kind, supermarket_id, source_flyer_id")
+        .select("id, flyer_kind, supermarket_id, source_flyer_id, valid_from, valid_to")
         .eq("file_hash", file_hash)
         .execute()
     )
     rows = flyers_resp.data or []
+    if active_only:
+        today = datetime.now(timezone.utc).date()
+        rows = [row for row in rows if not _is_flyer_expired(row, today)]
     conflicts = {
         row["supermarket_id"]
         for row in rows
@@ -571,6 +587,82 @@ def _duplicate_target_conflicts(
             if row.get("supermarket_id")
         )
     return conflicts
+
+
+def _validate_preflight_validity(valid_from: str, valid_to: str) -> None:
+    try:
+        starts = date.fromisoformat(valid_from)
+        ends = date.fromisoformat(valid_to)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Preflight requires ISO valid_from and valid_to dates",
+        ) from exc
+    if starts > ends:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="valid_from must not be after valid_to",
+        )
+
+
+def _preflight_source_target_ids(sb, flyer_id: str) -> frozenset[str]:
+    result = (
+        sb.table("flyer_targets")
+        .select("supermarket_id")
+        .eq("flyer_id", flyer_id)
+        .execute()
+    )
+    return frozenset(row["supermarket_id"] for row in (result.data or []) if row.get("supermarket_id"))
+
+
+def _preflight_document_content(sb, flyer: dict) -> bytes | None:
+    storage_path = _flyer_storage_path(flyer)
+    if storage_path is None:
+        return None
+    try:
+        return bytes(sb.storage.from_("flyers").download(storage_path))
+    except Exception:
+        # The Storage adapter exposes provider-specific error types only at runtime.
+        # A failed read is deliberately mapped to the conservative preflight state.
+        logger.warning("Could not read flyer %s during ingestion preflight", flyer.get("id"))
+        return None
+
+
+def _preflight_documents(
+    sb,
+    target_ids: frozenset[str],
+    valid_from: str,
+    valid_to: str,
+) -> tuple[ExistingFlyerDocument, ...]:
+    rows = (
+        sb.table("flyers")
+        .select("id, file_url, file_hash, valid_from, valid_to")
+        .eq("flyer_kind", "source")
+        .execute()
+        .data
+        or []
+    )
+    today = datetime.now(timezone.utc).date()
+    documents: list[ExistingFlyerDocument] = []
+    for flyer in rows:
+        if _is_flyer_expired(flyer, today) or not _same_preflight_validity(flyer, valid_from, valid_to):
+            continue
+        source_targets = _preflight_source_target_ids(sb, flyer["id"]).intersection(target_ids)
+        if source_targets:
+            documents.append(_preflight_document(sb, flyer, source_targets))
+    return tuple(documents)
+
+
+def _same_preflight_validity(flyer: dict, valid_from: str, valid_to: str) -> bool:
+    return flyer.get("valid_from") == valid_from and flyer.get("valid_to") == valid_to
+
+
+def _preflight_document(
+    sb,
+    flyer: dict,
+    target_ids: frozenset[str],
+) -> ExistingFlyerDocument:
+    return ExistingFlyerDocument(flyer["id"], target_ids, _preflight_document_content(sb, flyer))
 
 
 def _replace_flyer_targets(
@@ -1238,6 +1330,63 @@ async def complete_flyer_upload(
     except HTTPException:
         _remove_flyer_object(sb, payload.storage_path)
         raise
+
+
+@router.post("/ingestion-preflight")
+async def preflight_flyer_ingestion(
+    file: Annotated[UploadFile, File()],
+    supermarket_ids: Annotated[list[str], Form()],
+    valid_from: Annotated[str, Form()],
+    valid_to: Annotated[str, Form()],
+    profile: dict = Depends(require_admin_or_manager),
+) -> FlyerIngestionPreflightResponse:
+    """Classify a PDF before creating a signed Storage upload target."""
+    _validate_preflight_validity(valid_from, valid_to)
+    content_type = file.content_type or ""
+    if content_type != "application/pdf":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Ingestion preflight accepts PDF files only",
+        )
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File exceeds 50 MB limit",
+        )
+    _assert_file_signature(content, content_type)
+    requested_ids = _normalize_requested_supermarkets(profile, supermarket_ids)
+    if not requested_ids:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Select at least one supermarket",
+        )
+    sb = get_supabase()
+    target_ids = frozenset(requested_ids)
+    exact_ids = frozenset(
+        _duplicate_target_conflicts(
+            sb,
+            file_hash=hashlib.sha256(content).hexdigest(),
+            supermarket_ids=requested_ids,
+            active_only=True,
+        )
+    )
+    remaining_ids = target_ids - exact_ids
+    documents = (
+        _preflight_documents(sb, remaining_ids, valid_from, valid_to)
+        if remaining_ids
+        else ()
+    )
+    try:
+        decision = FlyerIngestionPreflightService().decide(content, target_ids, exact_ids, documents)
+    except DocumentFingerprintError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return FlyerIngestionPreflightResponse(
+        status=decision.status.value,
+        file_hash=decision.file_hash,
+        processed_supermarket_ids=sorted(decision.processed_target_ids),
+        upload_supermarket_ids=sorted(decision.upload_target_ids),
+    )
 
 
 @router.get("/{flyer_id}")

@@ -48,6 +48,7 @@ Profili, cookie guest e filiali accettano solo il codice ISTAT del Comune. Il ba
 | `GET` | `/flyers/{flyer_id}/file` | Stesso accesso di `/file-url` | Redirect di compatibilità all'URL Storage firmato; non restituisce byte PDF dal backend. |
 | `GET` | `/flyers/{flyer_id}/preview` | Stesso accesso del download | Restituisce la thumbnail WebP tramite backend; le preview pubbliche sono cacheabili, senza URL Supabase esposto. Per file storici la genera e persiste alla prima richiesta. |
 | `GET` | `/flyers/{flyer_id}/preview-url` | Stesso accesso del download | Restituisce URL firmato breve della thumbnail WebP per workflow amministrativi privati. |
+| `POST` | `/flyers/ingestion-preflight` | Admin/manager | Riceve un PDF, date ISO e sedi target; senza scrivere righe o oggetti Storage classifica il candidato come `known`, `partial`, `new` o `indeterminate`. |
 | `POST` | `/flyers/upload-url` | Admin/manager | Crea upload firmato per il bucket privato `flyers`. |
 | `POST` | `/flyers/upload/complete` | Admin/manager | Valida il file e crea il volantino `pending`. |
 | `POST` | `/flyers/{flyer_id}/extract` | Admin/manager | Avvia o riprende l'estrazione AI. |
@@ -57,6 +58,8 @@ Profili, cookie guest e filiali accettano solo il codice ISTAT del Comune. Il ba
 | `POST` | `/flyers/{flyer_id}/offers/confirm` | Admin/manager | Conferma e pubblica le offerte del volantino. |
 
 L'estrazione salva subito le bozze di ogni chunk riuscito. In caso di errore, `extraction_metadata` indica il checkpoint riprendibile; una nuova richiesta `extract` continua dal chunk successivo senza duplicare le offerte. Il crop estratto, quando disponibile, viene salvato in `offers.image_url`.
+
+`POST /flyers/ingestion-preflight` è una protezione privata per il flusso Codex e la UI amministrativa. Accetta multipart con `file` PDF, uno o più `supermarket_ids`, `valid_from` e `valid_to`; entrambe le date sono obbligatorie e ISO (`YYYY-MM-DD`). Confronta prima SHA-256 e poi, soltanto se necessario, data, numero di pagine e impronte visive di ogni pagina dei PDF sorgente già presenti nelle sedi target. Risponde con `file_hash`, `processed_supermarket_ids` e `upload_supermarket_ids`. `known` non richiede upload, `partial` consente l'upload solo nelle sedi restanti, `new` abilita tutte le sedi e `indeterminate` blocca l'upload. Il controllo legge soltanto database e Storage e non crea URL firmati, oggetti o volantini.
 
 ## Liste
 

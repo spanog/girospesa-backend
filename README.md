@@ -12,6 +12,8 @@ Il frontend web usa Supabase Auth con `@supabase/ssr`: browser, proxy Next.js e 
 
 Il backend valida i bearer token utente tramite signing keys/JWKS di Supabase e usa `SUPABASE_SECRET_KEY` per operazioni server-side privilegiate su Auth, Database e Storage. Non esiste un cookie sessione backend per auth applicativa o stream SSE; i guest ricevono soltanto un cookie tecnico firmato e `HttpOnly` per mantenere il filtro geografico delle discovery pubbliche. Per client HTTPS esterni, incluso Capacitor, il cookie usa `SameSite=None; Secure`.
 
+L'operatività quotidiana dei volantini è una skill Codex avviata manualmente, non un job backend. Dopo un provisioning una tantum, la skill usa un account tecnico admin con password nel Portachiavi macOS e chiama gli endpoint privati di preflight, upload, estrazione e conferma senza richiedere interazioni nella UI amministrativa. Il dettaglio operativo è in [docs/flyer-ingestion-skill.md](docs/flyer-ingestion-skill.md).
+
 Le notifiche di pubblicazione volantino sono accodate in `notification_jobs` e drenate fuori dalle richieste utente da APScheduler o da `POST /ops/cron/notifications`. Per volantini con data di inizio futura, il job diventa eseguibile alle 10:00 `Europe/Rome` del giorno di validità; senza data, è subito eseguibile. Un job padre individua tutti gli admin, il manager della sede pubblicata e i customer la cui area Comune+raggio include la filiale; job figli indipendenti persistono l'inbox e inviano il push solo quando l'account lo ha abilitato. Il messaggio usa il titolo `Nuovo volantino` e indica numero offerte, sede e Comune della filiale.
 
 L'accettazione di un invito a una lista condivisa crea subito una notifica inbox/push per chi ha inviato l'invito, con il nome dell'utente che entra nella lista.
@@ -74,6 +76,7 @@ I template di conferma account e recupero password sono in `supabase/templates/`
 | Variabili env, servizi esterni e logging | [docs/configuration.md](docs/configuration.md) |
 | Schema, RLS, Storage e Analytics B2B | [docs/data-model.md](docs/data-model.md) |
 | Scheduled jobs e cleanup | [docs/jobs.md](docs/jobs.md) |
+| Skill Codex per ingestione volantini | [docs/flyer-ingestion-skill.md](docs/flyer-ingestion-skill.md) |
 | Deploy produzione backend | [docs/deploy-production.md](docs/deploy-production.md) |
 | Deploy Render locale senza GitHub Actions | [docs/deploy-render-local.md](docs/deploy-render-local.md) |
 | Assessment sicurezza e follow-up staging | [docs/security-assessment-2026-07-29.md](docs/security-assessment-2026-07-29.md) |
