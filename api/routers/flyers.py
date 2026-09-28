@@ -172,10 +172,12 @@ def _is_flyer_expired(flyer: dict, today: date) -> bool:
     return bool(valid_to and date.fromisoformat(str(valid_to)) < today)
 
 
-def _public_flyer_expiry_sort_key(flyer: dict) -> date:
-    """Keep flyers without an expiry date after dated flyers."""
-    valid_to = flyer.get("valid_to")
-    return date.fromisoformat(str(valid_to)) if valid_to else date.max
+def _public_flyer_start_sort_key(flyer: dict) -> tuple[int, int]:
+    """Prioritize flyers with the most recent validity start date."""
+    valid_from = flyer.get("valid_from")
+    if not valid_from:
+        return (1, 0)
+    return (0, -date.fromisoformat(str(valid_from)).toordinal())
 
 
 def _public_flyers(sb, supermarket_ids: list[str]) -> list[dict]:
@@ -253,7 +255,7 @@ def _public_flyer_sort_key(flyer: dict, distances: dict[str, float | None]) -> t
     positions = {supermarket_id: index for index, supermarket_id in enumerate(distances)}
     return (
         positions[flyer["supermarket_id"]],
-        _public_flyer_expiry_sort_key(flyer),
+        _public_flyer_start_sort_key(flyer),
         flyer["id"],
     )
 

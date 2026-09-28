@@ -1703,16 +1703,16 @@ def test_public_flyer_representation_hides_storage_url():
     assert _flyers_module._public_flyer_representation(flyer) == {"id": "flyer-1"}
 
 
-def test_public_flyer_expiry_sort_key_prioritizes_nearest_expiry():
+def test_public_flyer_start_sort_key_prioritizes_most_recent_start():
     flyers = [
-        {"id": "undated", "valid_to": None},
-        {"id": "later", "valid_to": "2026-08-20"},
-        {"id": "sooner", "valid_to": "2026-08-10"},
+        {"id": "undated", "valid_from": None},
+        {"id": "older", "valid_from": "2026-08-10"},
+        {"id": "newer", "valid_from": "2026-08-20"},
     ]
 
-    assert [flyer["id"] for flyer in sorted(flyers, key=_flyers_module._public_flyer_expiry_sort_key)] == [
-        "sooner",
-        "later",
+    assert [flyer["id"] for flyer in sorted(flyers, key=_flyers_module._public_flyer_start_sort_key)] == [
+        "newer",
+        "older",
         "undated",
     ]
 
