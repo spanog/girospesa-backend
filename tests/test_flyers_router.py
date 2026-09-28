@@ -174,6 +174,20 @@ async def _post_preflight(
         )
 
 
+async def _post_metadata_preflight(dep_overrides: dict) -> httpx.Response:
+    test_app.dependency_overrides = dep_overrides
+    fields = [
+        ("source_id", (None, "rossotono-gioia-tauro")),
+        ("source_title", (None, "Convenienza d'Autunno")),
+        ("supermarket_ids", (None, "sup-1")),
+        ("valid_from", (None, "2026-09-24")),
+        ("valid_to", (None, "2026-10-04")),
+    ]
+    transport = httpx.ASGITransport(app=test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.post("/flyers/ingestion-preflight", files=fields)
+
+
 async def _get(url: str, dep_overrides: dict | None = None) -> httpx.Response:
     test_app.dependency_overrides = dep_overrides or {}
     transport = httpx.ASGITransport(app=test_app)
@@ -717,6 +731,34 @@ class TestUploadFlyerDuplicate:
 
 
 class TestFlyerIngestionPreflight:
+    @pytest.mark.asyncio
+    async def test_metadata_preflight_needs_no_pdf_and_returns_known_targets(self):
+        with patch(
+            "api.routers.flyers.get_supabase", return_value=MagicMock()
+        ), patch(
+            "api.routers.flyers._metadata_preflight_target_ids", return_value=frozenset({"sup-1"})
+        ):
+            response = await _post_metadata_preflight({_DEP_PROFILE: lambda: ADMIN_PROFILE})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "known",
+            "file_hash": "",
+            "processed_supermarket_ids": ["sup-1"],
+            "upload_supermarket_ids": [],
+        }
+
+    def test_metadata_preflight_reads_targets_from_source_flyers(self):
+        sb = MagicMock()
+        query = sb.table.return_value.select.return_value
+        query.eq.return_value = query
+        query.execute.return_value = MagicMock(data=[{"id": "source-1"}, {"id": "source-2"}])
+        with patch("api.routers.flyers._preflight_source_target_ids", side_effect=[frozenset({"sup-1"}), frozenset({"sup-2"})]):
+            known = _flyers_module._metadata_preflight_target_ids(
+                sb, "source", "  CONVENIENZA   D'AUTUNNO ", "2026-09-24", "2026-10-04"
+            )
+
+        assert known == frozenset({"sup-1", "sup-2"})
     @pytest.mark.asyncio
     async def test_known_hash_skips_storage_fingerprint_reads(self):
         sb = _mock_supabase_for_upload()

@@ -617,6 +617,32 @@ def _preflight_source_target_ids(sb, flyer_id: str) -> frozenset[str]:
     return frozenset(row["supermarket_id"] for row in (result.data or []) if row.get("supermarket_id"))
 
 
+def _normalized_source_title(source_title: str) -> str:
+    return " ".join(source_title.split()).casefold()
+
+
+def _metadata_preflight_target_ids(
+    sb,
+    source_id: str,
+    source_title: str,
+    valid_from: str,
+    valid_to: str,
+) -> frozenset[str]:
+    rows = (
+        sb.table("flyers")
+        .select("id")
+        .eq("flyer_kind", "source")
+        .eq("source_id", source_id.strip())
+        .eq("source_title", _normalized_source_title(source_title))
+        .eq("valid_from", valid_from)
+        .eq("valid_to", valid_to)
+        .execute()
+        .data
+        or []
+    )
+    return frozenset().union(*(_preflight_source_target_ids(sb, row["id"]) for row in rows))
+
+
 def _preflight_document_content(sb, flyer: dict) -> bytes | None:
     storage_path = _flyer_storage_path(flyer)
     if storage_path is None:
@@ -904,8 +930,8 @@ def _create_uploaded_flyer(
             "file_name": file_name,
             "valid_from": valid_from,
             "valid_to": valid_to,
-            "source_id": source_id,
-            "source_title": source_title,
+            "source_id": source_id.strip() if source_id else None,
+            "source_title": _normalized_source_title(source_title) if source_title else None,
             "status": "pending",
             "is_public": False,
             "file_hash": file_hash,
@@ -1357,8 +1383,7 @@ async def preflight_flyer_ingestion(
         if not source_id or not source_title:
             raise HTTPException(status_code=422, detail="Metadata preflight requires source_id and source_title")
         requested_ids = _normalize_requested_supermarkets(profile, supermarket_ids)
-        existing = sb.table("flyers").select("id, supermarket_id").eq("source_id", source_id).eq("source_title", source_title).eq("valid_from", valid_from).eq("valid_to", valid_to).execute().data or []
-        known = frozenset(str(row["supermarket_id"]) for row in existing if row.get("supermarket_id"))
+        known = _metadata_preflight_target_ids(sb, source_id, source_title, valid_from, valid_to)
         targets = frozenset(requested_ids)
         upload = sorted(targets - known)
         return FlyerIngestionPreflightResponse(status="known" if not upload else ("partial" if known else "new"), file_hash="", processed_supermarket_ids=sorted(known), upload_supermarket_ids=upload)
