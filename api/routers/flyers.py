@@ -118,6 +118,8 @@ class FlyerUploadCompleteRequest(BaseModel):
     supermarket_ids: list[str] = Field(default_factory=list)
     valid_from: str | None = None
     valid_to: str | None = None
+    source_id: str | None = None
+    source_title: str | None = None
 
 
 class FlyerIngestionPreflightResponse(BaseModel):
@@ -870,6 +872,8 @@ def _create_uploaded_flyer(
     file_name: str | None,
     valid_from: str | None,
     valid_to: str | None,
+    source_id: str | None,
+    source_title: str | None,
 ) -> dict:
     conflicts = _duplicate_target_conflicts(
         sb,
@@ -900,6 +904,8 @@ def _create_uploaded_flyer(
             "file_name": file_name,
             "valid_from": valid_from,
             "valid_to": valid_to,
+            "source_id": source_id,
+            "source_title": source_title,
             "status": "pending",
             "is_public": False,
             "file_hash": file_hash,
@@ -1317,6 +1323,8 @@ async def complete_flyer_upload(
             file_name=payload.file_name,
             valid_from=payload.valid_from,
             valid_to=payload.valid_to,
+            source_id=payload.source_id,
+            source_title=payload.source_title,
         )
         preview_path = _save_flyer_preview(
             sb,
@@ -1334,14 +1342,26 @@ async def complete_flyer_upload(
 
 @router.post("/ingestion-preflight")
 async def preflight_flyer_ingestion(
-    file: Annotated[UploadFile, File()],
     supermarket_ids: Annotated[list[str], Form()],
     valid_from: Annotated[str, Form()],
     valid_to: Annotated[str, Form()],
+    file: Annotated[UploadFile | None, File()] = None,
+    source_id: Annotated[str | None, Form()] = None,
+    source_title: Annotated[str | None, Form()] = None,
     profile: dict = Depends(require_admin_or_manager),
 ) -> FlyerIngestionPreflightResponse:
     """Classify a PDF before creating a signed Storage upload target."""
     _validate_preflight_validity(valid_from, valid_to)
+    sb = get_supabase()
+    if file is None:
+        if not source_id or not source_title:
+            raise HTTPException(status_code=422, detail="Metadata preflight requires source_id and source_title")
+        requested_ids = _normalize_requested_supermarkets(profile, supermarket_ids)
+        existing = sb.table("flyers").select("id, supermarket_id").eq("source_id", source_id).eq("source_title", source_title).eq("valid_from", valid_from).eq("valid_to", valid_to).execute().data or []
+        known = frozenset(str(row["supermarket_id"]) for row in existing if row.get("supermarket_id"))
+        targets = frozenset(requested_ids)
+        upload = sorted(targets - known)
+        return FlyerIngestionPreflightResponse(status="known" if not upload else ("partial" if known else "new"), file_hash="", processed_supermarket_ids=sorted(known), upload_supermarket_ids=upload)
     content_type = file.content_type or ""
     if content_type != "application/pdf":
         raise HTTPException(
@@ -1361,7 +1381,6 @@ async def preflight_flyer_ingestion(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Select at least one supermarket",
         )
-    sb = get_supabase()
     target_ids = frozenset(requested_ids)
     exact_ids = frozenset(
         _duplicate_target_conflicts(
