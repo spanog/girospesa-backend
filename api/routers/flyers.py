@@ -643,6 +643,29 @@ def _metadata_preflight_target_ids(
     return frozenset().union(*(_preflight_source_target_ids(sb, row["id"]) for row in rows))
 
 
+def _legacy_source_id(file_name: object, valid_from: str, valid_to: str) -> str | None:
+    if not isinstance(file_name, str):
+        return None
+    marker = f"-{valid_from}-{valid_to}"
+    source_id, separator, _ = file_name.partition(marker)
+    return source_id if separator and source_id else None
+
+
+def _legacy_metadata_preflight_target_ids(
+    sb,
+    source_id: str,
+    valid_from: str,
+    valid_to: str,
+) -> frozenset[str]:
+    rows = (
+        sb.table("flyers").select("id, file_name").eq("flyer_kind", "source")
+        .eq("valid_from", valid_from).eq("valid_to", valid_to).is_("source_id", "null")
+        .execute().data or []
+    )
+    source_rows = (row for row in rows if _legacy_source_id(row.get("file_name"), valid_from, valid_to) == source_id.strip())
+    return frozenset().union(*(_preflight_source_target_ids(sb, row["id"]) for row in source_rows))
+
+
 def _preflight_document_content(sb, flyer: dict) -> bytes | None:
     storage_path = _flyer_storage_path(flyer)
     if storage_path is None:
@@ -1384,6 +1407,7 @@ async def preflight_flyer_ingestion(
             raise HTTPException(status_code=422, detail="Metadata preflight requires source_id and source_title")
         requested_ids = _normalize_requested_supermarkets(profile, supermarket_ids)
         known = _metadata_preflight_target_ids(sb, source_id, source_title, valid_from, valid_to)
+        known |= _legacy_metadata_preflight_target_ids(sb, source_id, valid_from, valid_to)
         targets = frozenset(requested_ids)
         upload = sorted(targets - known)
         return FlyerIngestionPreflightResponse(status="known" if not upload else ("partial" if known else "new"), file_hash="", processed_supermarket_ids=sorted(known), upload_supermarket_ids=upload)

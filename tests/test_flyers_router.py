@@ -759,6 +759,24 @@ class TestFlyerIngestionPreflight:
             )
 
         assert known == frozenset({"sup-1", "sup-2"})
+
+    def test_metadata_preflight_recognizes_a_legacy_source_filename(self):
+        sb = MagicMock()
+        query = sb.table.return_value.select.return_value
+        query.eq.return_value = query
+        query.is_.return_value = query
+        query.execute.return_value = MagicMock(
+            data=[
+                {"id": "legacy-rossotono", "file_name": "rossotono-gioia-tauro-2026-09-24-2026-10-04-compressed.pdf"},
+                {"id": "other", "file_name": "conad-calabria-2026-09-24-2026-10-04.pdf"},
+            ]
+        )
+        with patch("api.routers.flyers._preflight_source_target_ids", return_value=frozenset({"sup-1"})):
+            known = _flyers_module._legacy_metadata_preflight_target_ids(
+                sb, "rossotono-gioia-tauro", "2026-09-24", "2026-10-04"
+            )
+
+        assert known == frozenset({"sup-1"})
     @pytest.mark.asyncio
     async def test_known_hash_skips_storage_fingerprint_reads(self):
         sb = _mock_supabase_for_upload()
