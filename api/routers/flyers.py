@@ -116,8 +116,8 @@ class FlyerUploadCompleteRequest(BaseModel):
     file_name: str = Field(..., min_length=1)
     content_type: str = Field(..., min_length=1)
     supermarket_ids: list[str] = Field(default_factory=list)
-    valid_from: str | None = None
-    valid_to: str | None = None
+    valid_from: str
+    valid_to: str
     source_id: str | None = None
     source_title: str | None = None
 
@@ -623,21 +623,18 @@ def _normalized_source_title(source_title: str) -> str:
     return " ".join(source_title.split()).casefold()
 
 
-def _metadata_preflight_target_ids(
-    sb,
-    source_id: str,
-    source_title: str,
-    valid_from: str,
-    valid_to: str,
-) -> frozenset[str]:
+def _publication_key(supermarket_ids: list[str], valid_from: str, valid_to: str) -> str:
+    """Canonical identity shared by manual and automated flyer uploads."""
+    return "|".join((*sorted(set(supermarket_ids)), valid_from, valid_to))
+
+
+def _metadata_preflight_target_ids(sb, supermarket_ids: list[str], valid_from: str, valid_to: str) -> frozenset[str]:
+    publication_key = _publication_key(supermarket_ids, valid_from, valid_to)
     rows = (
         sb.table("flyers")
         .select("id")
         .eq("flyer_kind", "source")
-        .eq("source_id", source_id.strip())
-        .eq("source_title", _normalized_source_title(source_title))
-        .eq("valid_from", valid_from)
-        .eq("valid_to", valid_to)
+        .eq("publication_key", publication_key)
         .execute()
         .data
         or []
@@ -955,6 +952,7 @@ def _create_uploaded_flyer(
             "file_name": file_name,
             "valid_from": valid_from,
             "valid_to": valid_to,
+            "publication_key": _publication_key(requested_ids, valid_from, valid_to),
             "source_id": source_id.strip() if source_id else None,
             "source_title": _normalized_source_title(source_title) if source_title else None,
             "status": "pending",
@@ -1339,6 +1337,7 @@ async def complete_flyer_upload(
 ) -> dict:
     """Validate uploaded Storage object and create pending flyer source."""
     _assert_upload_file_type(payload.content_type)
+    _validate_preflight_validity(payload.valid_from, payload.valid_to)
     if not payload.storage_path.startswith(f"{user_id}/"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1397,19 +1396,14 @@ async def preflight_flyer_ingestion(
     valid_from: Annotated[str, Form()],
     valid_to: Annotated[str, Form()],
     file: Annotated[UploadFile | None, File()] = None,
-    source_id: Annotated[str | None, Form()] = None,
-    source_title: Annotated[str | None, Form()] = None,
     profile: dict = Depends(require_admin_or_manager),
 ) -> FlyerIngestionPreflightResponse:
     """Classify a PDF before creating a signed Storage upload target."""
     _validate_preflight_validity(valid_from, valid_to)
     sb = get_supabase()
     if file is None:
-        if not source_id or not source_title:
-            raise HTTPException(status_code=422, detail="Metadata preflight requires source_id and source_title")
         requested_ids = _normalize_requested_supermarkets(profile, supermarket_ids)
-        known = _metadata_preflight_target_ids(sb, source_id, source_title, valid_from, valid_to)
-        known |= _legacy_metadata_preflight_target_ids(sb, source_id, valid_from, valid_to)
+        known = _metadata_preflight_target_ids(sb, requested_ids, valid_from, valid_to)
         targets = frozenset(requested_ids)
         upload = sorted(targets - known)
         return FlyerIngestionPreflightResponse(status="known" if not upload else ("partial" if known else "new"), file_hash="", processed_supermarket_ids=sorted(known), upload_supermarket_ids=upload)

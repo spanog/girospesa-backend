@@ -149,6 +149,8 @@ async def _post_upload(dep_overrides: dict, data: dict | None = None) -> httpx.R
         "file_name": "test.pdf",
         "content_type": "application/pdf",
         "supermarket_ids": ["sup-1"],
+        "valid_from": "2026-09-21",
+        "valid_to": "2026-09-30",
     }
     body.update(data or {})
     transport = httpx.ASGITransport(app=test_app)
@@ -172,6 +174,12 @@ async def _post_preflight(
             },
             files={"file": ("candidate.pdf", _SMALL_PDF, "application/pdf")},
         )
+
+
+def test_publication_key_uses_sorted_unique_targets_and_validity() -> None:
+    assert _flyers_module._publication_key(
+        ["sup-2", "sup-1", "sup-2"], "2026-09-24", "2026-10-04"
+    ) == "sup-1|sup-2|2026-09-24|2026-10-04"
 
 
 async def _post_metadata_preflight(dep_overrides: dict) -> httpx.Response:
@@ -755,7 +763,7 @@ class TestFlyerIngestionPreflight:
         query.execute.return_value = MagicMock(data=[{"id": "source-1"}, {"id": "source-2"}])
         with patch("api.routers.flyers._preflight_source_target_ids", side_effect=[frozenset({"sup-1"}), frozenset({"sup-2"})]):
             known = _flyers_module._metadata_preflight_target_ids(
-                sb, "source", "  CONVENIENZA   D'AUTUNNO ", "2026-09-24", "2026-10-04"
+                sb, ["sup-1", "sup-2"], "2026-09-24", "2026-10-04"
             )
 
         assert known == frozenset({"sup-1", "sup-2"})
