@@ -263,6 +263,35 @@ def test_hard_deadline_terminates_a_stalled_gemini_request(monkeypatch: pytest.M
         )
 
 
+def test_stop_deadline_process_kills_a_child_that_survives_termination() -> None:
+    from services.extraction.providers import gemini
+
+    class _Process:
+        pid = 1
+        alive = True
+        terminated = False
+        killed = False
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+            self.alive = False
+
+        def join(self, timeout: float) -> None:
+            assert timeout == gemini.GEMINI_PROCESS_STOP_TIMEOUT_S
+
+    process = _Process()
+    gemini._stop_deadline_process(process)
+
+    assert process.terminated is True
+    assert process.killed is True
+
+
 def test_extract_products_chunks_pdf_larger_than_inline_limit() -> None:
     fake_client = _FakeClient(responses=[json.dumps({"products": []})])
     _install_google_stub(fake_client)

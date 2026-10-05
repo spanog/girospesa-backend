@@ -30,6 +30,7 @@ LOW_COVERAGE_MAX_PRODUCTS = 1
 LOW_COVERAGE_MIN_SIBLING_PRODUCTS = 4
 GEMINI_REQUEST_TIMEOUT_MS = 8 * 60 * 1000
 GEMINI_REQUEST_TIMEOUT_S = GEMINI_REQUEST_TIMEOUT_MS / 1000
+GEMINI_PROCESS_STOP_TIMEOUT_S = 10
 _RETRY_DELAY_RE = re.compile(r"'retryDelay':\s*'(\d+)s'")
 _UNAVAILABLE_RE = re.compile(r"503|UNAVAILABLE", re.IGNORECASE)
 _TRANSIENT_SERVER_ERROR_RE = re.compile(r"500|502|504|INTERNAL|BAD_GATEWAY|GATEWAY_TIMEOUT", re.IGNORECASE)
@@ -155,7 +156,10 @@ def _stop_deadline_process(process: object) -> None:
         return
     if process.is_alive():  # type: ignore[union-attr]
         process.terminate()  # type: ignore[union-attr]
-    process.join()  # type: ignore[union-attr]
+    process.join(GEMINI_PROCESS_STOP_TIMEOUT_S)  # type: ignore[union-attr]
+    if process.is_alive():  # type: ignore[union-attr]
+        process.kill()  # type: ignore[union-attr]
+        process.join(GEMINI_PROCESS_STOP_TIMEOUT_S)  # type: ignore[union-attr]
 
 
 def _retry_delay(exc: Exception, attempt: int = 0) -> float:
