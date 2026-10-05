@@ -51,7 +51,9 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 ALLOWED_CONTENT_TYPES = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+# Official retailer PDFs can exceed 50 MB even when their page count is modest.
+# Keep a bounded cap while accepting these production flyers.
+MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 ALLOWED_PRODUCT_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 MAX_PRODUCT_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 OFFER_KIND_SOURCE_MASTER = "source_master"
@@ -1357,7 +1359,7 @@ async def complete_flyer_upload(
         _remove_flyer_object(sb, payload.storage_path)
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File exceeds 50 MB limit",
+            detail="File exceeds 100 MB limit",
         )
     _assert_file_signature(content, payload.content_type)
 
@@ -1417,7 +1419,7 @@ async def preflight_flyer_ingestion(
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File exceeds 50 MB limit",
+            detail="File exceeds 100 MB limit",
         )
     _assert_file_signature(content, content_type)
     requested_ids = _normalize_requested_supermarkets(profile, supermarket_ids)

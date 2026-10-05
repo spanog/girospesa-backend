@@ -587,9 +587,9 @@ class TestUploadFlyerValidation:
 
     @pytest.mark.asyncio
     async def test_oversized_file_rejected(self):
-        """Files exceeding 50 MB return 413."""
+        """Files exceeding the 100 MB flyer cap return 413."""
         sb = _mock_supabase_for_upload()
-        sb.storage.from_.return_value.download.return_value = b"x" * (50 * 1024 * 1024 + 1)
+        sb.storage.from_.return_value.download.return_value = b"x" * (100 * 1024 * 1024 + 1)
         with patch("api.routers.flyers.get_supabase", return_value=sb):
             resp = await _post_upload({_DEP_GET_USER_ID: lambda: "admin-456", _DEP_PROFILE: lambda: ADMIN_PROFILE})
         assert resp.status_code == 413
