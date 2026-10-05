@@ -43,15 +43,6 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 
-def _resume_processing_flyer(flyer_id: str) -> None:
-    from core.database import get_supabase
-    from services.extraction.service import ExtractionService
-
-    sb = get_supabase()
-    sb.table("flyers").update({"status": "processing", "error_message": None}).eq("id", flyer_id).execute()
-    ExtractionService().run(flyer_id)
-
-
 async def _drain_notification_jobs() -> None:
     await asyncio.to_thread(NotificationJobWorker().run_pending)
 
@@ -115,8 +106,7 @@ def _allow_origins() -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    for flyer_id in ExtractionStartupRecoveryService().run():
-        asyncio.create_task(asyncio.to_thread(_resume_processing_flyer, flyer_id))
+    ExtractionStartupRecoveryService().run()
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(

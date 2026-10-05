@@ -1,4 +1,4 @@
-"""Recover extraction jobs left in processing after a web-service restart."""
+"""Mark interrupted extraction jobs recoverable after a web-service restart."""
 
 from __future__ import annotations
 
@@ -30,22 +30,18 @@ class ExtractionStartupRecoveryService:
             logger.info("Extraction startup recovery: no processing flyers found")
             return []
 
-        resumable_ids: list[str] = []
         for flyer in flyers:
-            flyer_id = flyer["id"]
             metadata = flyer.get("extraction_metadata")
             if self._is_resumable(metadata):
-                resumable_ids.append(flyer_id)
                 self._mark_resumable(sb, flyer)
                 continue
             self._mark_interrupted_without_checkpoint(sb, flyer)
 
         logger.info(
-            "Extraction startup recovery: %d resumable, %d terminal",
-            len(resumable_ids),
-            len(flyers) - len(resumable_ids),
+            "Extraction startup recovery: marked %d interrupted flyers for explicit retry",
+            len(flyers),
         )
-        return resumable_ids
+        return []
 
     def _is_resumable(self, metadata: object) -> bool:
         if not isinstance(metadata, dict):
@@ -60,7 +56,7 @@ class ExtractionStartupRecoveryService:
         sb.table("flyers").update(  # type: ignore[union-attr]
             {
                 "status": "error",
-                "error_message": "Extraction interrupted by backend restart; automatic resume queued.",
+                "error_message": "Extraction interrupted by backend restart; explicit resume required.",
                 "extraction_metadata": current,
             }
         ).eq("id", flyer["id"]).execute()
@@ -77,4 +73,3 @@ class ExtractionStartupRecoveryService:
                 "extraction_metadata": current,
             }
         ).eq("id", flyer["id"]).execute()
-

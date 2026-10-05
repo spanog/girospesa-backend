@@ -24,7 +24,7 @@ def _make_sb(flyers: list[dict]) -> MagicMock:
     return sb
 
 
-def test_run_marks_resumable_processing_flyer_and_returns_id():
+def test_run_marks_resumable_processing_flyer_for_explicit_retry():
     flyer = {
         "id": "flyer-1",
         "file_name": "demo.pdf",
@@ -43,12 +43,12 @@ def test_run_marks_resumable_processing_flyer_and_returns_id():
         now_factory=lambda: now,
     )
 
-    resumable = service.run()
+    recovered = service.run()
 
-    assert resumable == ["flyer-1"]
+    assert recovered == []
     update_payload = sb.table.return_value.update.call_args[0][0]
     assert update_payload["status"] == "error"
-    assert "automatic resume queued" in update_payload["error_message"]
+    assert "explicit resume required" in update_payload["error_message"]
     assert update_payload["extraction_metadata"]["resume_available"] is True
     assert update_payload["extraction_metadata"]["extraction_finished_at"] == "2026-06-20T12:00:00Z"
 
@@ -86,4 +86,3 @@ def test_run_no_processing_flyers_returns_empty():
 
     assert service.run() == []
     assert sb.table.return_value.update.call_count == 0
-
