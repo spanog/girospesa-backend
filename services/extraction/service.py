@@ -43,6 +43,7 @@ from services.extraction.pdf_utils import PdfSource, count_pdf_pages, is_pdf, mi
 from services.extraction.packshots import iter_page_packshots
 from services.extraction.providers import ExtractionProvider, get_provider
 from services.extraction.providers.base import PdfChunkExtractionError
+from services.extraction.bounding_box import stored_box, BoundingBoxVersion
 from services.extraction.extraction_log import ERROR, SUCCESS, WARNING, log_event
 from services.product_format import NormalizedFormatBundle
 from services.push_notify import notify_extraction_complete
@@ -540,7 +541,7 @@ class ExtractionService:
     def _save_pending_packshots(self, sb: object, flyer_id: str, pdf_source: PdfSource) -> None:
         pending = (
             sb.table("offers")  # type: ignore[union-attr]
-            .select("id, image_url, packshot_source_page, packshot_bbox")
+            .select("id, image_url, packshot_source_page, packshot_bbox, packshot_bbox_version")
             .eq("flyer_id", flyer_id)
             .is_("image_url", "null")
             .not_.is_("packshot_source_page", "null")
@@ -554,7 +555,7 @@ class ExtractionService:
         self, sb: object, flyer_id: str, pdf_source: PdfSource, source_page: int, offers: list[dict]
     ) -> None:
         offers_by_id = {offer["id"]: offer for offer in offers}
-        boxes = {offer_id: offer["packshot_bbox"] for offer_id, offer in offers_by_id.items()}
+        boxes = {offer_id: stored_box(offer) for offer_id, offer in offers_by_id.items()}
         try:
             for offer_id, image in iter_page_packshots(pdf_source, source_page, boxes):
                 self._upload_packshot(sb, offers_by_id[offer_id], image)
@@ -999,6 +1000,7 @@ class ExtractionService:
             "is_confirmed": False,
             "packshot_source_page": p.get("source_page"),
             "packshot_bbox": p.get("packshot_bbox"),
+            "packshot_bbox_version": int(BoundingBoxVersion.XY),
         }
 
     def _handle_error(

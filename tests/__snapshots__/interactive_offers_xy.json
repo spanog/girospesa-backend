@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "brand": "Coop",
+      "format_label": "1 L",
+      "id": "offer-valid",
+      "image_url": null,
+      "name": "Latte",
+      "packshot_bbox": [
+        200,
+        100,
+        600,
+        500
+      ],
+      "price_offer": 1.99,
+      "source_page": 1
+    }
+  ]
+}

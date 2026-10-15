@@ -16,10 +16,13 @@ import os
 import sys
 from pathlib import Path
 from typing import Sequence
+from types import SimpleNamespace
 
 from services.extraction.normalizer import deduplicate_products, normalize_products
 from services.extraction.pdf_utils import count_pdf_pages, is_pdf, mime_type_for_filename
-from services.extraction.providers import GeminiProvider
+from services.extraction.providers import ExtractionProvider, GeminiProvider, get_provider
+from services.extraction.providers.base import PdfChunkExtractionError
+from services.extraction.providers.ollama_client import OllamaExtractionError
 from services.product_format import build_extraction_format_bundle
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -38,7 +41,6 @@ def _ensure_format_label(product: dict) -> dict:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    default_gemini_model = os.getenv("GEMINI_MODEL", "gemma-4-31b-it")
     default_api_key = os.getenv("GOOGLE_API_KEY", "")
 
     parser = argparse.ArgumentParser(description="Extract product offers from a local flyer file.")
@@ -47,69 +49,86 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--valid-from", dest="valid_from", help="Offer start date YYYY-MM-DD")
     parser.add_argument("--valid-to", dest="valid_to", help="Offer end date YYYY-MM-DD")
     parser.add_argument("-o", "--output", help="Output JSON file path")
-    parser.add_argument("--model", default=None, help=f"Gemini model name (default: {default_gemini_model})")
+    parser.add_argument("--model", default=None, help="Model tag for selected provider")
+    parser.add_argument("--provider", choices=("gemini", "ollama"), default=os.getenv("LLM_PROVIDER", "gemini"))
+    _add_ollama_args(parser)
     parser.add_argument("--api-key", default=default_api_key, help="Google API key (default: $GOOGLE_API_KEY)")
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> None:
-    try:
-        from dotenv import load_dotenv
+def _add_ollama_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--chunk-pages", type=int, choices=(1, 2), default=int(os.getenv("OLLAMA_CHUNK_SIZE_PAGES", "1")))
+    parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"))
+    parser.add_argument("--timeout", type=float, default=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "600")))
+    parser.add_argument("--dpi", type=int, default=int(os.getenv("OLLAMA_IMAGE_DPI", "150")))
+    parser.add_argument("--context", type=int, default=int(os.getenv("OLLAMA_CONTEXT_TOKENS", "16384")))
+    parser.add_argument("--max-output", type=int, default=int(os.getenv("OLLAMA_MAX_OUTPUT_TOKENS", "8192")))
 
-        load_dotenv()
-    except ImportError:
-        pass
 
-    default_gemini_model = os.getenv("GEMINI_MODEL", "gemma-4-31b-it")
-    args = parse_args(argv)
+def _provider(args: argparse.Namespace) -> tuple[ExtractionProvider, str]:
+    if args.provider == "gemini":
+        if not args.api_key:
+            raise ValueError("Google API key required for Gemini; use --provider ollama for local extraction")
+        model = args.model or os.getenv("GEMINI_MODEL", "gemma-4-31b-it")
+        return GeminiProvider(api_key=args.api_key, model=model), model
+    if args.timeout <= 0 or args.context < 1024 or args.max_output <= 0 or not 72 <= args.dpi <= 300:
+        raise ValueError("Invalid Ollama timeout, context, output budget or DPI (72–300)")
+    model = args.model or os.getenv("OLLAMA_MODEL", "gemma4:31b-mlx")
+    config = SimpleNamespace(llm_provider="ollama", ollama_model=model, ollama_base_url=args.ollama_url,
+                             ollama_timeout_seconds=args.timeout, ollama_image_dpi=args.dpi,
+                             ollama_context_tokens=args.context, ollama_max_output_tokens=args.max_output,
+                             ollama_chunk_size_pages=args.chunk_pages)
+    return get_provider(config), model
 
-    source_path = Path(args.file)
-    if not source_path.exists():
-        logger.error("File not found: %s", args.file)
-        sys.exit(1)
 
-    suffix = source_path.suffix.lower()
-    if suffix not in SUPPORTED_EXTENSIONS:
-        logger.error("Unsupported format '%s'. Supported: %s", suffix, ", ".join(sorted(SUPPORTED_EXTENSIONS)))
-        sys.exit(1)
+def _source(args: argparse.Namespace) -> Path:
+    path = Path(args.file)
+    if not path.is_file():
+        raise ValueError(f"File not found: {path}")
+    if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        raise ValueError(f"Unsupported format: {path.suffix}")
+    return path
 
-    if not args.api_key:
-        logger.error("Google API key required. Set GOOGLE_API_KEY env var or pass --api-key.")
-        sys.exit(1)
 
-    model = args.model or default_gemini_model
-    provider = GeminiProvider(api_key=args.api_key, model=model)
-
-    file_bytes = source_path.read_bytes()
-    mime_type = mime_type_for_filename(source_path.name)
-    pages_count = count_pdf_pages(file_bytes) if is_pdf(source_path.name) else 1
-    logger.info("Sending %s to Gemini (%s, %d page(s))", source_path.name, mime_type, pages_count)
-
-    all_products, retry_errors = provider.extract_products(file_bytes, mime_type)
-    for error in retry_errors:
+def _extract(provider: ExtractionProvider, path: Path) -> tuple[list[dict], int]:
+    mime_type = mime_type_for_filename(path.name)
+    content = path.read_bytes()
+    pages = count_pdf_pages(content) if is_pdf(path.name) else 1
+    products, errors = provider.extract_products(content, mime_type)
+    for error in errors:
         logger.warning(error)
-
-    normalized = normalize_products(all_products)
-    normalized = [p for p in normalized if p.get("name") and p.get("price_offer")]
-    unique = [_ensure_format_label(product) for product in deduplicate_products(normalized)]
+    normalized = [p for p in normalize_products(products) if p.get("name") and p.get("price_offer")]
+    unique = [_ensure_format_label(p) for p in deduplicate_products(normalized)]
     if not unique:
-        logger.error("No products extracted from file.")
-        sys.exit(1)
+        raise ValueError("No products extracted from file")
+    return unique, pages
 
+
+def _write_output(args: argparse.Namespace, source: Path, model: str, products: list[dict], pages: int) -> None:
     output = {
-        "supermarket": args.supermarket,
-        "source_file": str(source_path.resolve()),
-        "valid_from": args.valid_from,
-        "valid_to": args.valid_to,
-        "model": model,
-        "pages_count": pages_count,
-        "products_count": len(unique),
-        "products": unique,
+        "supermarket": args.supermarket, "source_file": str(source.resolve()),
+        "valid_from": args.valid_from, "valid_to": args.valid_to,
+        "model": model, "provider": args.provider, "pages_count": pages,
+        "products_count": len(products), "products": products,
     }
+    destination = Path(args.output) if args.output else Path(f"extracted_{source.stem}.json")
+    destination.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("Done — %d product(s) extracted → %s", len(products), destination)
 
-    output_path = Path(args.output) if args.output else Path(f"extracted_{source_path.stem}.json")
-    output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info("Done — %d product(s) extracted → %s", len(unique), output_path)
+
+def main(argv: Sequence[str] | None = None) -> None:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+    try:
+        args = parse_args(argv)
+        source = _source(args)
+        provider, model = _provider(args)
+        logger.info("Extracting %s with %s (%s)", source.name, args.provider, model)
+        products, pages = _extract(provider, source)
+        _write_output(args, source, model, products, pages)
+    except (ValueError, OSError, PdfChunkExtractionError, OllamaExtractionError) as exc:
+        logger.error("Extraction failed: %s", exc)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     llm_provider: str = "gemini"
     google_api_key: str = ""
     gemini_model: str = "gemma-4-31b-it"
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "gemma4:31b-mlx"
+    ollama_timeout_seconds: float = Field(default=600, gt=0)
+    ollama_context_tokens: int = Field(default=16384, ge=1024)
+    ollama_max_output_tokens: int = Field(default=8192, gt=0)
+    ollama_chunk_size_pages: int = Field(default=1, ge=1, le=2)
+    ollama_image_dpi: int = Field(default=150, ge=72, le=300)
     vapid_private_key: str = ""
     vapid_public_key: str = ""
     vapid_mailto: str = "mailto:info@girospesa.it"

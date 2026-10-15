@@ -29,11 +29,13 @@ def test_offer_response_hides_internal_packshot_metadata() -> None:
             "name": "Passata",
             "packshot_source_page": 3,
             "packshot_bbox": [100, 200, 900, 800],
+            "packshot_bbox_version": 2,
         }
     )
 
     assert "packshot_source_page" not in offer
     assert "packshot_bbox" not in offer
+    assert "packshot_bbox_version" not in offer
 
 
 def test_manual_draft_row_is_self_contained_offer() -> None:
