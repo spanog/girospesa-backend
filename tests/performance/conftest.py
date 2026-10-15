@@ -131,6 +131,10 @@ def seeded_10k_dataset(supabase_client, perf_supermarkets):
         for idx in range(10_000)
     ]
     offers = _batch_insert(supabase_client, "offers", offers_payload)
+    run_compose(
+        "exec", "-T", "db", "psql", "-U", "postgres", "-d", "postgres",
+        "-v", "ON_ERROR_STOP=1", "-c", "ANALYZE public.offers; ANALYZE public.supermarkets;",
+    )
 
     yield {"offers": offers, "supermarkets": perf_supermarkets}
     _delete_perf_data(supabase_client)
