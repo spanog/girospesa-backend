@@ -93,3 +93,4 @@
 - Coprire anche gusti yogurt accorpati con vero multipack 2x125 g: raggruppamento non deve ridurre quantità a 125 g o sommare alternative a 4x125 g.
 
 - `OLLAMA_CHUNK_SIZE_PAGES=2` deve inviare entrambe le immagini in una sola chiamata. Coprire mapping pagine relativo/assoluto, indici invalidi, resume e pagina finale dispari. Non assegnare arbitrariamente prodotti batch a pagina 1. CLI: `--chunk-pages 1|2`.
+- Upload integration/performance fixtures must provide required validity dates; oversized-file checks must follow `MAX_FILE_SIZE`, not the historical 50 MB limit.

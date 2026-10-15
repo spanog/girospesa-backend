@@ -48,4 +48,5 @@ RUN_PERFORMANCE_TESTS=1 .venv/bin/python -m pytest tests/performance -v -s
 ```
 
 Performance benchmarks use the same isolated integration stack as integration tests. Normal `pytest tests` runs skip them to avoid machine-dependent timing failures.
+Upload performance fixtures must include the required flyer validity dates. Oversized-file checks use the configured `MAX_FILE_SIZE` rather than a historical fixed limit.
 GitHub Actions exposes backend CI only as a manual `workflow_dispatch` workflow. The same workflow includes the performance suite as a manual job.
