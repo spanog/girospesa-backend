@@ -118,3 +118,5 @@ I ritagli delle nuove estrazioni usano coordinate interne `[x_min, y_min, x_max,
 L’estrazione accorpa in una sola offerta le varianti della stessa marca e linea, nello stesso gruppo promozionale, quando formato, prezzo, validità e condizioni coincidono. Il nome conserva le alternative e il ritaglio comprende tutte le confezioni; formati o condizioni differenti restano offerte distinte.
 
 Il provider Ollama supporta tecnicamente anche due pagine per richiesta, ma questa modalità resta sperimentale e non deve essere usata con `gemma4:26b-mlx` nel flusso locale ordinario. Il backend non impone ancora il vincolo per modello: mantenerlo esplicitamente nella configurazione e negli argomenti CLI.
+
+Failed first-request discovery benchmarks emit a read-only PostgreSQL execution plan after measurement; the diagnostic does not warm the timed request or change thresholds.

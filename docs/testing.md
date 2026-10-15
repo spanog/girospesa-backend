@@ -51,3 +51,5 @@ Performance benchmarks use the same isolated integration stack as integration te
 Upload performance fixtures must include the required flyer validity dates. Oversized-file checks use the configured `MAX_FILE_SIZE` rather than a historical fixed limit.
 The 10,000-offer fixture runs `ANALYZE` after bulk insertion so first-query benchmarks use statistics for the actual dataset without waiting for autovacuum. Query thresholds remain unchanged, and the measured discovery request is not warmed up.
 GitHub Actions exposes backend CI only as a manual `workflow_dispatch` workflow. The same workflow includes the performance suite as a manual job.
+
+Failed first-request discovery benchmarks emit a read-only PostgreSQL execution plan after measurement; the diagnostic does not warm the timed request or change thresholds.

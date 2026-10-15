@@ -96,3 +96,5 @@
 
 - `OLLAMA_CHUNK_SIZE_PAGES=2` deve inviare entrambe le immagini in una sola chiamata. Coprire mapping pagine relativo/assoluto, indici invalidi, resume e pagina finale dispari. Non assegnare arbitrariamente prodotti batch a pagina 1. CLI: `--chunk-pages 1|2`.
 - Upload integration/performance fixtures must provide required validity dates; oversized-file checks must follow `MAX_FILE_SIZE`, not the historical 50 MB limit.
+
+- Discovery performance failures collect `EXPLAIN (ANALYZE, BUFFERS)` only after the timed assertion fails; preserve first-request timing and existing thresholds.

@@ -17,6 +17,8 @@ import time
 
 import pytest
 
+from tests.performance.query_diagnostics import explain_discovery
+
 # ---------------------------------------------------------------------------
 # Thresholds (ms)
 # ---------------------------------------------------------------------------
@@ -167,7 +169,7 @@ class TestDatabaseQueryPerformance:
         ).execute()
         elapsed_ms = (time.perf_counter() - start) * 1000
 
-        assert elapsed_ms < DISCOVERY_LIMIT_MS
+        assert elapsed_ms < DISCOVERY_LIMIT_MS, explain_discovery(supermarkets)
         assert len(result.data) == 20
         assert result.data[0]["total"] == 10_000
         assert sum(result.data[0]["counts_by_supermarket_id"].values()) == 10_000
@@ -193,3 +195,10 @@ class TestDatabaseQueryPerformance:
 
         assert elapsed_ms < DISCOVERY_LIMIT_MS
         assert len(result.data) == len(perf_public_flyers)
+
+    def test_discovery_plan_diagnostic(self, seeded_10k_dataset):
+        """Diagnostic SQL remains executable against the seeded schema."""
+        plan = explain_discovery(seeded_10k_dataset["supermarkets"])
+        assert "Execution Time:" in plan
+        assert "Buffers:" in plan
+        print(plan)
