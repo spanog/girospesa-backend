@@ -4,12 +4,10 @@ Verifies that POST /flyers/upload/complete can process a large Storage object
 (≈ 10 MB, simulating a 40-page volantino) within acceptable latency. Storage
 is mocked so this measures FastAPI download, SHA-256 computation, DB insert.
 
-Does NOT require `supabase start` for the upload endpoint itself (DB insert
-is fast), but the Supabase guard in the session conftest will still require it.
+Uses the isolated integration stack; Storage is mocked, while DB writes are real.
 
 Run:
-    supabase start
-    pytest tests/performance/test_upload_performance.py -v -s
+    RUN_PERFORMANCE_TESTS=1 .venv/bin/python -m pytest tests/performance/test_upload_performance.py -v -s
 """
 
 from __future__ import annotations
@@ -21,7 +19,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from api.routers.flyers import router as flyers_router
+from api.routers.flyers import MAX_FILE_SIZE, router as flyers_router
 from core.auth import get_current_user, get_current_user_id, require_admin_or_manager
 
 app = FastAPI()
@@ -85,6 +83,8 @@ async def _complete_upload(
             "file_name": "volantino_grande.pdf",
             "content_type": "application/pdf",
             "supermarket_ids": [supermarket_id],
+            "valid_from": "2026-10-01",
+            "valid_to": "2026-10-31",
         },
     )
 
@@ -198,8 +198,8 @@ class TestUploadPerformance:
     async def test_file_size_at_limit_is_rejected_quickly(
         self, perf_upload_supermarket
     ):
-        """Files exceeding 50 MB are rejected before any DB access — should be < 500ms."""
-        oversized = b"%PDF-1.4\n" + b"x" * (51 * 1024 * 1024)
+        """Files exceeding the configured upload limit are rejected in < 500ms."""
+        oversized = _make_large_pdf(size_mb=(MAX_FILE_SIZE + 1) / (1024 * 1024))
 
         sb = _make_supabase_real_db_mock_storage(oversized)
         user_id = app.dependency_overrides[get_current_user_id]()

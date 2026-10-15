@@ -19,6 +19,8 @@
 - Cookie località guest: richieste da origin HTTPS Capacitor devono ricevere `SameSite=None; Secure`; mantenere test endpoint per questo contratto cross-site.
 - Notification delivery: mantenere batch e concorrenza configurabili; ogni chiamata push deve avere una deadline e un worker terminato non può lasciare job `processing` senza recovery.
 
+- Upload integration/performance fixtures must provide required validity dates; oversized-file checks must follow `MAX_FILE_SIZE`, not the historical 50 MB limit.
+
 ## Commands
 
 - Setup local env files: `cp .env.example .env && cp .env.test.example .env.test`
