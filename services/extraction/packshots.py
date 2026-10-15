@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from io import BytesIO
-from typing import Mapping, Sequence
+from typing import Mapping
 
 from PIL import Image
 
 from services.extraction.pdf_utils import PdfSource
+from services.extraction.bounding_box import BoundingBox, InvalidBoundingBox
 
 _BOX_GRID_SIZE = 1000
 _PACKSHOT_RENDER_SCALE = 2
@@ -16,15 +17,11 @@ _PACKSHOT_WEBP_QUALITY = 82
 
 
 def normalized_box(value: object) -> tuple[int, int, int, int] | None:
-    if not isinstance(value, Sequence) or isinstance(value, str) or len(value) != 4:
-        return None
+    """Accept canonical [x_min, y_min, x_max, y_max] grid coordinates."""
     try:
-        y1, x1, y2, x2 = (int(float(item)) for item in value)
-    except (TypeError, ValueError):
+        return BoundingBox.parse(value).as_tuple()
+    except InvalidBoundingBox:
         return None
-    if not 0 <= y1 < y2 <= _BOX_GRID_SIZE or not 0 <= x1 < x2 <= _BOX_GRID_SIZE:
-        return None
-    return y1, x1, y2, x2
 
 
 def render_packshot(pdf_source: PdfSource, page_number: int, box: object) -> bytes | None:
@@ -92,18 +89,18 @@ def _render_page(pdf_source: PdfSource, page_number: int) -> Image.Image | None:
 
 def _pixel_box(size: tuple[int, int], box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     width, height = size
-    y1, x1, y2, x2 = box
+    x1, y1, x2, y2 = box
     return x1 * width // _BOX_GRID_SIZE, y1 * height // _BOX_GRID_SIZE, x2 * width // _BOX_GRID_SIZE, y2 * height // _BOX_GRID_SIZE
 
 
 def expanded_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     """Add safe context so visual detection does not sever a packshot edge."""
-    y1, x1, y2, x2 = box
+    x1, y1, x2, y2 = box
     height, width = y2 - y1, x2 - x1
     portrait = height > width * 1.4
     horizontal = max(35, round(width * (0.45 if portrait else 0.18)))
     vertical = max(20, round(height * 0.10))
-    return max(0, y1 - vertical), max(0, x1 - horizontal), min(1000, y2 + vertical), min(1000, x2 + horizontal)
+    return max(0, x1 - horizontal), max(0, y1 - vertical), min(1000, x2 + horizontal), min(1000, y2 + vertical)
 
 
 def _webp_bytes(image: Image.Image) -> bytes:

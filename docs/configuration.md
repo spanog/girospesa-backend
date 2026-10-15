@@ -102,3 +102,60 @@ Flow identica in locale, test, prod: cambia solo valore env.
 - Gli errori dei contact form (`POST /contact-requests`) vengono loggati esplicitamente come `warning` per misconfigurazioni e `exception` per failure SMTP, cosi' i log `Render` mostrano la causa reale del `500`.
 
 ---
+
+## Provider di estrazione locale
+
+`LLM_PROVIDER` accetta `gemini` (predefinito, API Google) oppure `ollama` (inferenza locale).
+La configurazione di produzione resta su Gemini finché non viene modificata esplicitamente.
+
+| Variabile | Default | Descrizione |
+|---|---|---|
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Indirizzo del server Ollama raggiungibile dal backend. |
+| `OLLAMA_MODEL` | `gemma4:31b-mlx` | Tag di un modello con capacità visive già installato. |
+| `OLLAMA_TIMEOUT_SECONDS` | `600` | Timeout HTTP in secondi, maggiore di zero. |
+| `OLLAMA_CONTEXT_TOKENS` | `16384` | Budget di contesto, almeno 1024 token. |
+| `OLLAMA_MAX_OUTPUT_TOKENS` | `8192` | Limite positivo per i token generati. |
+| `OLLAMA_IMAGE_DPI` | `150` | Risoluzione di rasterizzazione PDF, da 72 a 300 DPI. |
+| `OLLAMA_CHUNK_SIZE_PAGES` | `1` | Pagine per richiesta/checkpoint; accetta 1 o 2. Con `gemma4:26b-mlx` usare obbligatoriamente 1 nel flusso locale ordinario. |
+
+Ollama riceve immagini e prompt tramite `/api/chat`, senza streaming e con output JSON.
+Il backend richiede `think=false` e temperatura 0,1. Questi valori rendono il confronto
+riproducibile a livello di configurazione, ma non garantiscono risposte identiche.
+La quantizzazione e il motore di inferenza dipendono dal tag installato, non dal provider Python.
+Vedere [la guida locale](local-development.md#estrazione-locale-con-ollama) per comandi e cambio modello.
+
+## Coordinate dei ritagli
+
+Il contratto del modello usa `packshot_bbox` come oggetto con `x_min`, `y_min`,
+`x_max`, `y_max`, oppure `null` quando la localizzazione è incerta. X è orizzontale
+(da sinistra), Y verticale (dall'alto); griglia normalizzata 0–1000. Ollama riceve
+uno schema JSON che impone i campi nominati e rifiuta gli array nella risposta.
+I campi nominati eliminano l'ambiguità dell'ordine, ma non garantiscono che il modello
+individui il prodotto corretto.
+
+Il backend normalizza le nuove estrazioni in `[x_min, y_min, x_max, y_max]` e salva
+`offers.packshot_bbox_version=2`. Le righe storiche mantengono coordinate e immagini
+originali, con versione 1 (`[y_min, x_min, y_max, x_max]`). Vengono convertite in X/Y
+in lettura per ritagli pendenti e API delle offerte interattive. Le copie pubblicate
+conservano la versione del sorgente. Nessun riordino automatico tenta di riparare
+le coordinate miste già prodotte da Qwen3.6: quelle bozze richiedono nuova estrazione.
+
+Applicare `20261014160000_version_packshot_xy_coordinates.sql` prima di usare il nuovo
+backend. Distribuire backend e lettore frontend insieme: `/interactive-offers` restituisce
+sempre array X/Y, indipendentemente dalla versione conservata nel database.
+I vecchi payload di estrazione con array senza versione restano leggibili come Y/X;
+un array già normalizzato deve indicare versione 2 per evitare una seconda conversione.
+
+## Granularità delle offerte estratte
+
+Il prompt condiviso da Gemini e Ollama definisce l’offerta come gruppo promozionale, non come singola confezione visibile. Varianti di gusto, profumazione o tipologia della stessa marca e linea vengono accorpate solo con formato, prezzo, validità e condizioni identici e descrizione/prezzo comuni. Il formato resta quello della singola alternativa acquistabile; non si crea un multipack sommando le confezioni mostrate. `format.varianti` resta riservato alle differenze di formato. Il box deve comprendere il gruppo completo. Anche il prompt di recupero delle pagine sparse conserva questa regola. La regola orienta il modello, ma richiede verifica sulle nuove estrazioni; non modifica automaticamente le offerte esistenti.
+
+L’accorpamento non cambia i multipack dichiarati nel testo: yogurt “125X2” resta `2x125 g` anche quando sono illustrati gusti alternativi. Le confezioni alternative non vengono sommate e il multipack reale non viene ridotto alla singola unità.
+
+## Richieste Ollama multipagina
+
+**Vincolo operativo per `gemma4:26b-mlx`: una pagina per chunk.** Il 15 ottobre 2026 la prova con due immagini per richiesta ha prodotto numerosi box sul prodotto sbagliato. La stessa configurazione a pagina singola ha migliorato localizzazione e dati nel campione ed è risultata più veloce. Il vincolo è documentato e non ancora imposto automaticamente dal codice. I limiti osservati e i parametri della configurazione verificata sono nel [resoconto delle prove locali](local-model-evaluation.md).
+
+Il numero totale di pagine del PDF non cambia questo vincolo: 50 pagine con chunk da 1 comportano 50 richieste singole. La validità sintattica del box e di `source_page` non dimostra che il ritaglio corrisponda al prodotto. Verificare anche immagini effettive, completezza dei gruppi e condizioni commerciali.
+
+`OLLAMA_CHUNK_SIZE_PAGES` accetta 1 (default) oppure 2. Con 2, il provider invia due immagini in ordine nella stessa richiesta `/api/chat`, non due chiamate separate. Lo schema richiede `source_page` relativo al chunk (1 o 2), poi il provider lo converte in numero assoluto del PDF. Indici mancanti, fuori intervallo o non interi fanno fallire il chunk; nessun ritaglio viene associato per ipotesi a una pagina. La pagina finale dispari usa una sola immagine. I checkpoint ripresi mantengono la dimensione salvata nel job originale. Per misurare la modalità a due pagine, avviare una nuova estrazione.

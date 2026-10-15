@@ -172,3 +172,27 @@ def test_settings_reject_non_positive_app_session_ttl_seconds(
 
     with pytest.raises(ValidationError):
         Settings(_env_file=env_file)
+
+
+@pytest.mark.parametrize("model", ["qwen3.8:27b-nvfp4", "gemma4:26b-mlx"])
+def test_local_ollama_settings_load_without_google_key(monkeypatch, model):
+    monkeypatch.setenv("SUPABASE_URL", "http://127.0.0.1:54321")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "test-secret-key")
+    monkeypatch.setenv("APP_SESSION_SECRET", "test-session-secret")
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_MODEL", model)
+    monkeypatch.delenv("OLLAMA_CONTEXT_TOKENS", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "")
+    config = Settings(_env_file=None)
+    assert config.llm_provider == "ollama"
+    assert config.ollama_model == model
+    assert config.google_api_key == ""
+    assert config.ollama_context_tokens == 16384
+
+
+@pytest.mark.parametrize("field,value", [("ollama_timeout_seconds", 0), ("ollama_context_tokens", 0),
+                                         ("ollama_max_output_tokens", 0), ("ollama_image_dpi", 301)])
+def test_invalid_ollama_runtime_limits_rejected(field, value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, supabase_url="http://localhost", supabase_secret_key="test",
+                 app_session_secret="test", **{field: value})

@@ -4,9 +4,45 @@ EXTRACTION_PROMPT = """
 
 Sei un assistente specializzato nell'analisi minuziosa di volantini promozionali di **qualsiasi tipologia di supermercato italiano** (catene nazionali, discount, supermercati locali o negozi di prossimità).
 
-Il tuo compito è analizzare ogni singola pagina del documento ed **estrarre ogni singolo prodotto che presenti un prezzo di vendita**, limitatamente alle categorie alimentari e di prima necessità.
+Il tuo compito è analizzare ogni singola pagina del documento ed **estrarre ogni offerta acquistabile che presenti un prezzo di vendita**, limitatamente alle categorie alimentari e di prima necessità.
 
 **ATTENZIONE: Ignora esplicitamente** offerte relative a: abbigliamento e tessile, articoli di bricolage, mobili e arredo, piante e giardinaggio, articoli per il tempo libero (giocattoli, sport), elettronica (grandi e piccoli elettrodomestici, smartphone), e pacchetti viaggi/soggiorni.
+
+---
+
+## Unità di estrazione: offerta promozionale, non singola confezione visibile
+
+Una sola offerta per gruppo promozionale quando le confezioni rappresentano varianti
+**della stessa marca e linea di prodotto**, con **stesso formato, prezzo, validità e condizioni**
+e sono collegate da descrizione comune e prezzo unico nello stesso riquadro.
+Gusti, profumazioni o tipologie alternative (anche percentuali di grassi) non creano
+righe separate se tutti questi requisiti sono uguali.
+
+- Emetti un solo oggetto in `products`, con nome comune e varianti nel `name`.
+- Mantieni un solo `format`; NON usare `format.varianti` per differenze di gusto o
+  tipologia che non cambiano formato: quel campo espande le varianti in offerte separate.
+- Usa un solo `packshot_bbox` che comprenda tutte le confezioni alternative del gruppo,
+  senza tagliare alcuna confezione. Le alternative non sono un multipack: non sommare
+  quantità, pesi o volumi delle confezioni mostrate.
+- Accorpare gusti NON modifica mai il formato dichiarato: conserva multipack, quantità
+  e peso della singola unità indicati nel testo. Esempio “MÜLLER YOGURT VARI TIPI GR 125X2”:
+  UNA offerta, `format: {"tipo": "multipack_omogeneo", "quantita": 2,
+  "peso_volume": 125, "unita_misura": "g"}` (250 g totali), anche se immagini mostrano
+  bianco e mirtillo. NON ridurre a 125 g e NON sommare le due alternative in 4x125 g.
+- Non emettere contemporaneamente una riga generica “vari tipi” e righe per i suoi gusti.
+- Se cambiano formato, prezzo, validità o condizioni, mantieni offerte distinte;
+  per i formati diversi segui le regole di `format.varianti`.
+- Non accorpare prodotti di marche o linee diverse solo perché hanno lo stesso prezzo;
+  non unire riquadri indipendenti usando soltanto la vicinanza delle immagini.
+
+Esempio corretto: “GRANAROLO LATTE UHT ACCADÌ 1% / SENZA GRASSI LT 1”, prezzo unico 1,09 €,
+due confezioni visibili → UNA offerta: `brand: "Granarolo"`,
+`name: "Latte UHT Accadì 1% / senza grassi"`, `price_current: 1.09`,
+`format: {"tipo": "confezione_singola", "peso_volume": 1, "unita_misura": "L"}`.
+Il box racchiude entrambe le confezioni; NON emettere due offerte o un formato 2x1 L.
+Stessa regola per tè pesca/limone da 1,5 L a prezzo unico.
+Controesempio: due confezioni da 500 g e 1 kg, oppure prezzi o condizioni diversi,
+richiedono offerte distinte anche se affiancate nello stesso riquadro.
 
 ---
 
@@ -90,7 +126,7 @@ Restituisci un JSON con questa struttura esatta:
       "valid_from": "YYYY-MM-DD",
       "valid_to": "YYYY-MM-DD",
       "source_page": 1,
-      "packshot_bbox": [y_min, x_min, y_max, x_max]
+      "packshot_bbox": {"x_min": 730, "y_min": 120, "x_max": 950, "y_max": 340}
     }
   ]
 }
@@ -227,14 +263,18 @@ Esempio:
 
 ### Ritratto prodotto dal volantino
 Per ogni prodotto, restituisci `source_page` e `packshot_bbox` per permettere
-il ritaglio della sola confezione/prodotto mostrato nel volantino. `packshot_bbox`
-usa coordinate normalizzate nella griglia 0-1000, ordinate `[y_min, x_min, y_max,
-x_max]`. Includi sempre l'intero prodotto, con un piccolo margine di sicurezza:
+il ritaglio del prodotto o dell’intero gruppo di varianti accorpate nel volantino. `packshot_bbox`
+è un oggetto con campi nominati `x_min`, `y_min`, `x_max`, `y_max`, mai un array.
+Le coordinate sono nella griglia 0-1000: x misura posizione ORIZZONTALE da sinistra
+verso destra; y misura posizione VERTICALE dall'alto verso il basso.
+`x_min < x_max` e `y_min < y_max`. Esempio: un prodotto nell'angolo in alto a destra
+può avere {"x_min": 730, "y_min": 120, "x_max": 950, "y_max": 340}.
+Non scambiare assi x e y. Includi sempre l'intero prodotto, con un piccolo margine di sicurezza:
 non tagliare mai lati, tappo, collo, base o confezioni dello stesso multipack.
 Escludi prezzo, testo, bollini e loghi del supermercato quando possibile.
 `source_page` deve essere sempre relativa al PDF ricevuto: 1 = prima pagina del
 chunk, 2 = seconda pagina. Se non puoi localizzare con affidabilità il packshot,
-ometti entrambi i campi.
+imposta `packshot_bbox` a null anziché inventare coordinate.
 
 ### Filtro Categorie
 Estrai solo i prodotti appartenenti ai 7 punti della tassonomia.

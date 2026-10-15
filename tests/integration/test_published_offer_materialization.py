@@ -45,7 +45,8 @@ def _source_offer_payload(source_flyer: dict, supermarket: dict, index: int) -> 
         "price_original": 2.99,
         "image_url": f"https://storage.test/source-{index}.webp",
         "packshot_source_page": 1,
-        "packshot_bbox": [100, 100, 900, 900],
+        "packshot_bbox": [730, 120, 950, 340],
+        "packshot_bbox_version": 2,
         "format": {"tipo": "confezione_singola"},
         "format_key": "confezione_singola",
         "format_label": "Confezione singola",
@@ -118,6 +119,11 @@ def test_materialization_keeps_clone_lifecycle_and_counts(supabase_client, clean
     assert _clone_counts(supabase_client, target_flyers) == {
         flyer["id"]: _SOURCE_COUNT for flyer in target_flyers
     }
+
+    clones = supabase_client.table("offers").select("packshot_bbox, packshot_bbox_version").eq(
+        "source_offer_id", inserted_sources[0]["id"]
+    ).execute().data
+    assert clones == [{"packshot_bbox": [730, 120, 950, 340], "packshot_bbox_version": 2}] * _TARGET_COUNT
 
     changed_source = inserted_sources[0]
     supabase_client.table("offers").update(

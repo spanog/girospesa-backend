@@ -38,7 +38,9 @@ LOW_COVERAGE_RETRY_PROMPT = (
     "\n\nControllo qualità: questo PDF contiene una sola pagina. "
     "Rileva in modo esaustivo ogni singola offerta acquistabile visibile, "
     "anche quando più prodotti sono disposti nella stessa griglia. "
-    "Non omettere prodotti per raggrupparli o perché appartengono alla stessa categoria."
+    "Non omettere offerte distinte perché appartengono alla stessa categoria. "
+    "Mantieni accorpate le varianti della stessa linea con formato, prezzo e condizioni uguali, "
+    "come richiesto dal prompt principale."
 )
 
 

@@ -72,3 +72,29 @@
 - Never commit local secrets or machine-specific env files.
 - Track `.env.example` and `.env.test.example`.
 - Ignore `.env`, `.env.local`, `.env.test`, Python caches, coverage artifacts, editor files, macOS files, and Supabase local state.
+
+## Local extraction provider
+
+- `LLM_PROVIDER=ollama` selects the local `/api/chat` vision adapter; Gemini remains the default for deployment.
+- Test Ollama HTTP contracts with `httpx.MockTransport`; unit tests must never download models or contact a real inference server.
+- Preserve PDF chunk callbacks, absolute page indices and resume metadata when changing providers.
+- Standalone extraction: `.venv/bin/python -m scripts.extraction.submit_flyer <file> --provider ollama --model <tag> --output /tmp/extraction.json` (no Supabase writes).
+- Live model smoke tests are manual checks, separate from automated tests; record model tag and avoid claiming quality from a single sample.
+- Settings tests that assert defaults must clear the corresponding environment variables; `_env_file=None` does not disable values already loaded into the process environment.
+- `gemma4:26b-mlx`: local operational constraint is `OLLAMA_CHUNK_SIZE_PAGES=1` / CLI `--chunk-pages 1`. Two-page inference produced wrong-product boxes; single-page run improved sampled localization. Do not increase chunk size for longer PDFs. This is a documented constraint, not a runtime guard. Preserve named XY coordinates and grouped-offer prompt; rollback needs a controlled comparison, never reinterpret stored version-2 boxes as legacy YX. Evidence: `docs/local-model-evaluation.md`.
+
+## Bounding-box contract
+
+- Internal/new storage coordinates are `[x_min, y_min, x_max, y_max]` on the 0–1000 grid, version 2. Model responses use named fields.
+- Never infer an old row’s axis order from model identity: use `packshot_bbox_version`, defaulting missing historical values to version 1 (YX).
+- Preserve crop geometry for old rows and copy version metadata during SQL publication. Test asymmetric boxes on non-square pages and both API storage versions.
+- Apply coordinate migration before running new extraction code; deploy canonical interactive-offer API and frontend reader together.
+
+- Granularità estrazione: prompt principale e recovery devono accorpare alternative della stessa linea solo a formato/prezzo/validità/condizioni uguali. Coprire Accadì 1%/senza grassi come singola offerta da 1 L, senza falso multipack e senza `format.varianti`.
+
+- Coprire anche gusti yogurt accorpati con vero multipack 2x125 g: raggruppamento non deve ridurre quantità a 125 g o sommare alternative a 4x125 g.
+
+- `OLLAMA_CHUNK_SIZE_PAGES=2` deve inviare entrambe le immagini in una sola chiamata. Coprire mapping pagine relativo/assoluto, indici invalidi, resume e pagina finale dispari. Non assegnare arbitrariamente prodotti batch a pagina 1. CLI: `--chunk-pages 1|2`.
+- Upload integration/performance fixtures must provide required validity dates; oversized-file checks must follow `MAX_FILE_SIZE`, not the historical 50 MB limit.
+
+- Discovery performance failures collect `EXPLAIN (ANALYZE, BUFFERS)` only after the timed assertion fails; preserve first-request timing and existing thresholds.

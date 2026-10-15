@@ -36,6 +36,15 @@ Il frontend web usa Supabase Auth con `@supabase/ssr`: browser, proxy Next.js e 
 
 ---
 
+## Extraction providers
+
+`ExtractionService` seleziona il provider tramite `LLM_PROVIDER`. Gemini invia i documenti
+alle API Google; Ollama rasterizza i PDF per pagina e invia le immagini al server locale.
+Entrambi rispettano `ExtractionProvider`, inclusi progressi, checkpoint persistiti e ripresa
+dal chunk fallito. `OllamaClient` contiene il trasporto HTTP e valida il JSON completo, mentre
+`OllamaProvider` gestisce pagine e callback. Normalizzazione, salvataggio offerte e crop restano
+nel workflow applicativo esistente.
+
 ## Project Structure
 
 ```
@@ -77,3 +86,7 @@ girospesa-backend/
 ```
 
 ---
+
+## Coordinate immagini
+
+`BoundingBox` è un value object privo di dipendenze infrastrutturali: valida coordinate normalizzate e rende espliciti assi X/Y. La normalizzazione produce array X/Y versione 2. Il confine di persistenza interpreta anche le righe versione 1 senza modificarle. Ritaglio e lettore condividono la convenzione X/Y; il lettore riceve sempre coordinate canoniche dall’API.

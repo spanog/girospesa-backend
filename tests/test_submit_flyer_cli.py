@@ -75,6 +75,8 @@ def test_main_writes_normalized_output(tmp_path: Path, monkeypatch: pytest.Monke
             "Conad",
             "-o",
             str(output_path),
+            "--provider",
+            "gemini",
             "--api-key",
             "test-key",
         ]
@@ -85,3 +87,30 @@ def test_main_writes_normalized_output(tmp_path: Path, monkeypatch: pytest.Monke
     assert result["products_count"] == 1
     assert result["products"][0]["name"] == "Pasta Barilla"
     assert result["products"][0]["format_label"] == "500 g"
+
+
+def test_ollama_cli_uses_selected_model_without_google_key(tmp_path, monkeypatch):
+    source, output = tmp_path / "flyer.png", tmp_path / "output.json"
+    source.write_bytes(b"image")
+    provider = MagicMock()
+    provider.extract_products.return_value = ([{"name": "Latte", "price_current": 1.29}], [])
+    configs = []
+    monkeypatch.setattr(submit_flyer, "get_provider", lambda settings: configs.append(settings) or provider)
+    submit_flyer.main([str(source), "--provider", "ollama", "--model", "qwen3.8:27b-nvfp4", "--api-key", "", "-o", str(output)])
+    result = json.loads(output.read_text())
+    assert result["provider"] == "ollama"
+    assert result["model"] == "qwen3.8:27b-nvfp4"
+    assert result["products_count"] == 1
+    assert configs[0].ollama_model == result["model"]
+
+
+def test_failed_local_extraction_does_not_write_success(tmp_path, monkeypatch):
+    source, output = tmp_path / "flyer.png", tmp_path / "output.json"
+    source.write_bytes(b"image")
+    provider = MagicMock()
+    provider.extract_products.return_value = ([], ["Ollama offline"])
+    monkeypatch.setattr(submit_flyer, "get_provider", lambda settings: provider)
+    with pytest.raises(SystemExit) as error:
+        submit_flyer.main([str(source), "--provider", "ollama", "-o", str(output)])
+    assert error.value.code == 1
+    assert not output.exists()

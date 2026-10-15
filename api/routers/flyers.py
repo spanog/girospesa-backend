@@ -1,4 +1,6 @@
 from __future__ import annotations
+from services.extraction.bounding_box import stored_box
+
 
 from datetime import date, datetime, timedelta, timezone
 import logging
@@ -1139,17 +1141,6 @@ def _public_flyer_representation(flyer: dict) -> dict:
     return {key: value for key, value in flyer.items() if key != "file_url"}
 
 
-def _interactive_packshot_bbox(value: object) -> list[float] | None:
-    if not isinstance(value, list) or len(value) != 4:
-        return None
-    if not all(isinstance(coordinate, (int, float)) for coordinate in value):
-        return None
-    y_min, x_min, y_max, x_max = [float(coordinate) for coordinate in value]
-    if not (0 <= y_min < y_max <= 1000 and 0 <= x_min < x_max <= 1000):
-        return None
-    return [y_min, x_min, y_max, x_max]
-
-
 @router.get("/{flyer_id}/interactive-offers")
 async def list_interactive_offers(flyer_id: str) -> dict[str, list[dict]]:
     """Return public, active offers with a valid image localization for a flyer."""
@@ -1164,7 +1155,7 @@ async def list_interactive_offers(flyer_id: str) -> dict[str, list[dict]]:
         sb.table("offers")
         .select(
             "id, name, brand, image_url, flyer_id, price_offer, format_label, "
-            "packshot_source_page, packshot_bbox"
+            "packshot_source_page, packshot_bbox, packshot_bbox_version"
         )
         .eq("flyer_id", flyer_id)
         .eq("offer_kind", OFFER_KIND_PUBLISHED_TARGET)
@@ -1173,7 +1164,7 @@ async def list_interactive_offers(flyer_id: str) -> dict[str, list[dict]]:
     rows = apply_current_offer_window(query).execute().data or []
     items: list[dict] = []
     for row in rows:
-        bbox = _interactive_packshot_bbox(row.get("packshot_bbox"))
+        bbox = stored_box(row)
         page = row.get("packshot_source_page")
         if bbox is None or not isinstance(page, int) or page < 1:
             continue

@@ -58,6 +58,8 @@ Il tag annotato `v.0.1-product-catalog` conserva l'architettura precedente basat
 
 Guida completa: [docs/local-development.md](docs/local-development.md).
 
+Per estrarre volantini sul Mac con Ollama, la configurazione locale verificata usa `LLM_PROVIDER=ollama`, `OLLAMA_MODEL=gemma4:26b-mlx` e **`OLLAMA_CHUNK_SIZE_PAGES=1`**. Per questo modello, una pagina per richiesta è un vincolo operativo: la prova multipagina ha prodotto localizzazioni errate e offerte associate al ritaglio di altri prodotti. Riavviare FastAPI dopo il cambio di configurazione. Il vincolo riguarda le pagine nella singola richiesta, non la lunghezza totale del PDF. È disponibile anche una CLI che genera JSON senza database. Comandi e limiti sono nella [guida all’estrazione locale](docs/local-development.md#estrazione-locale-con-ollama) e nel [resoconto delle prove](docs/local-model-evaluation.md).
+
 ## Template email Auth
 
 I template di conferma account e recupero password sono in `supabase/templates/`. Usano il logo raster pubblico ufficiale per compatibilità con i client email. In Supabase hosted vanno pubblicati manualmente da **Authentication → Emails → Templates** dopo ogni modifica; `config.toml` applica questi file soltanto allo stack locale.
@@ -110,3 +112,11 @@ girospesa-backend/
 ├── tests/
 └── docs/
 ```
+
+I ritagli delle nuove estrazioni usano coordinate interne `[x_min, y_min, x_max, y_max]`. Il modello restituisce campi nominati e il backend conserva la compatibilità con le coordinate storiche tramite una versione esplicita. Prima di usare il codice aggiornato in altri ambienti, applicare la migrazione `20261014160000_version_packshot_xy_coordinates.sql` e aggiornare anche il lettore frontend. Dettagli in [docs/configuration.md](docs/configuration.md#coordinate-dei-ritagli).
+
+L’estrazione accorpa in una sola offerta le varianti della stessa marca e linea, nello stesso gruppo promozionale, quando formato, prezzo, validità e condizioni coincidono. Il nome conserva le alternative e il ritaglio comprende tutte le confezioni; formati o condizioni differenti restano offerte distinte.
+
+Il provider Ollama supporta tecnicamente anche due pagine per richiesta, ma questa modalità resta sperimentale e non deve essere usata con `gemma4:26b-mlx` nel flusso locale ordinario. Il backend non impone ancora il vincolo per modello: mantenerlo esplicitamente nella configurazione e negli argomenti CLI.
+
+Failed first-request discovery benchmarks emit a read-only PostgreSQL execution plan after measurement; the diagnostic does not warm the timed request or change thresholds.

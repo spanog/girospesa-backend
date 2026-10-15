@@ -202,3 +202,86 @@ I CLI di valutazione e QA vivono in `scripts/extraction/`. Il runtime ufficiale 
 | Servizio esterno | SMTP server | No | Necessario solo per invio mail da `/contact-requests` |
 
 ---
+
+## Estrazione locale con Ollama
+
+FastAPI può usare Ollama sul Mac anche per l'estrazione avviata dall'interfaccia web.
+Avviare Ollama e configurare il `.env` locale:
+
+```dotenv
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=gemma4:26b-mlx
+OLLAMA_CHUNK_SIZE_PAGES=1
+OLLAMA_TIMEOUT_SECONDS=1200
+OLLAMA_CONTEXT_TOKENS=32768
+OLLAMA_MAX_OUTPUT_TOKENS=16384
+OLLAMA_IMAGE_DPI=150
+```
+
+Riavviare FastAPI dopo aver modificato il `.env`:
+
+```bash
+.venv/bin/python -m uvicorn main:app --reload --port 8000
+```
+
+Il normale caricamento e l'avvio dell'estrazione dalla webapp usano il provider selezionato.
+Con Ollama non serve `GOOGLE_API_KEY`. Il modello deve essere già installato e supportare immagini.
+Con `gemma4:26b-mlx`, mantenere **una pagina per chunk e per richiesta**. La prova a due pagine ha associato numerose offerte a coordinate di altri prodotti; la successiva prova a pagina singola ha eliminato questi scambi nel campione verificato. Il modello è utilizzabile in locale con revisione delle bozze, ma non garantisce formati o ritagli sempre corretti. Un PDF più lungo resta compatibile: aumentano le richieste, non le pagine di ciascuna richiesta. Vedere [risultati e limiti delle prove](local-model-evaluation.md).
+Per cambiare modello, impostare `OLLAMA_MODEL=qwen3.8:27b-nvfp4` oppure
+`OLLAMA_MODEL=qwen3.6:35b-a3b-nvfp4` e riavviare il backend.
+Il provider non esegue fallback verso Google e non scarica modelli automaticamente.
+
+### Elaborare un file senza database
+
+Dalla directory del backend, questo comando produce un JSON locale senza scrivere su Supabase:
+
+```bash
+.venv/bin/python -m scripts.extraction.submit_flyer \
+  tests/extraction_eval/fixtures/volantino-conad-ridotto.pdf \
+  --provider ollama --model gemma4:26b-mlx --chunk-pages 1 \
+  --supermarket Conad --output /tmp/conad-gemma4.json
+```
+
+Ripetere con gli altri modelli cambiando `--model` e `--output`.
+Il comando legge il `.env` del backend anche se viene avviato da un'altra directory.
+Le opzioni `--ollama-url`, `--timeout`, `--dpi`, `--context` e `--max-output` sovrascrivono
+la configurazione per la sola esecuzione CLI.
+
+I PDF sono rasterizzati a 150 DPI e analizzati una pagina alla volta. La numerazione
+`source_page` viene assegnata dal provider alla pagina originale, indipendentemente dal modello.
+Il workflow web salva risultati e checkpoint per chunk; in caso di errore può riprendere
+l'estrazione dal chunk fallito. La CLI termina con errore e non scrive un risultato di successo
+se un chunk fallisce. Un JSON malformato o un output troncato non viene trattato come estrazione vuota valida.
+
+Se Ollama non risponde, verificarne l'avvio e `ollama list`. Per un modello mancante eseguire
+`ollama pull <tag>`. In caso di timeout aumentare `OLLAMA_TIMEOUT_SECONDS`; per output troncati,
+aumentare `OLLAMA_MAX_OUTPUT_TOKENS` mantenendo spazio sufficiente nel contesto anche per prompt e immagini.
+
+### Aggiornamento del contratto coordinate
+
+La migrazione `20261014160000_version_packshot_xy_coordinates.sql` è necessaria per le nuove estrazioni. Aggiunge una versione alle coordinate e aggiorna la materializzazione delle offerte pubblicate. Non modifica coordinate o immagini storiche. Dopo aggiornamento schema e codice, riavviare backend e aggiornare la pagina web prima di avviare una nuova estrazione. Il modello selezionato e gli altri parametri restano invariati.
+
+## Prova sperimentale Gemma 31B MLX con due pagine per richiesta
+
+Questa configurazione documenta la prova del 31B; non è una raccomandazione per il 26B. Con `gemma4:26b-mlx` mantenere `OLLAMA_CHUNK_SIZE_PAGES=1` e `--chunk-pages 1`. Non aumentare il chunk per accelerare o perché il PDF contiene più pagine. Un eventuale nuovo confronto multipagina richiede una verifica esplicita delle associazioni offerta/pagina/ritaglio prima dell'uso ordinario.
+
+Configurazione locale per il confronto:
+
+```dotenv
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=gemma4:31b-mlx
+OLLAMA_CHUNK_SIZE_PAGES=2
+OLLAMA_CONTEXT_TOKENS=32768
+OLLAMA_MAX_OUTPUT_TOKENS=16384
+OLLAMA_TIMEOUT_SECONDS=1200
+OLLAMA_IMAGE_DPI=150
+```
+
+Il prompt corrente, la temperatura 0,1 e la quantizzazione restano invariati.
+Contesto, limite output e timeout sono aumentati rispetto alla prova a pagina singola
+per contenere due pagine e tutte le offerte senza troncamenti. Registrare questa
+configurazione nel confronto: eventuali differenze non vanno attribuite soltanto al chunk.
+Per la CLI, usare `--chunk-pages 2` insieme al modello Gemma; i budget vengono letti dal `.env`
+o sovrascritti con `--context`, `--max-output` e `--timeout`.
+La modalità normale si ripristina con `OLLAMA_CHUNK_SIZE_PAGES=1` e riavvio del backend.

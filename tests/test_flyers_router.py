@@ -1742,7 +1742,8 @@ def test_materialize_source_targets_uses_database_result_without_offer_payloads(
 
 
 @pytest.mark.asyncio
-async def test_interactive_offers_excludes_invalid_localizations_and_drafts():
+@pytest.mark.parametrize("box,version", [([100, 200, 500, 600], 1), ([200, 100, 600, 500], 2)])
+async def test_interactive_offers_excludes_invalid_localizations_and_drafts(request, box, version):
     sb = MagicMock()
     flyer = {
         "id": "flyer-1",
@@ -1768,7 +1769,8 @@ async def test_interactive_offers_excludes_invalid_localizations_and_drafts():
             "price_offer": 1.99,
             "format_label": "1 L",
             "packshot_source_page": 1,
-            "packshot_bbox": [100, 200, 500, 600],
+            "packshot_bbox": box,
+            "packshot_bbox_version": version,
         },
         {
             "id": "offer-invalid",
@@ -1795,7 +1797,9 @@ async def test_interactive_offers_excludes_invalid_localizations_and_drafts():
                 "price_offer": 1.99,
                 "format_label": "1 L",
                 "source_page": 1,
-                "packshot_bbox": [100.0, 200.0, 500.0, 600.0],
+                "packshot_bbox": [200, 100, 600, 500],
             }
         ]
     }
+
+    assert_matches_json_snapshot(request, "interactive_offers_xy", response)

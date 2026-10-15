@@ -25,7 +25,7 @@ def test_normalized_box_rejects_invalid_coordinates() -> None:
 
 
 def test_expanded_box_adds_extra_horizontal_margin_to_portrait_packshots() -> None:
-    assert expanded_box((100, 400, 800, 500)) == (30, 355, 870, 545)
+    assert expanded_box((400, 100, 500, 800)) == (355, 30, 545, 870)
 
 
 def test_normalizer_keeps_valid_packshot_metadata() -> None:
@@ -36,7 +36,7 @@ def test_normalizer_keeps_valid_packshot_metadata() -> None:
     })
 
     assert product["source_page"] == 2
-    assert product["packshot_bbox"] == [100, 200, 900, 800]
+    assert product["packshot_bbox"] == [200, 100, 800, 900]
 
 
 def test_normalizer_discards_invalid_packshot_metadata() -> None:
@@ -81,7 +81,7 @@ def test_pending_packshots_are_uploaded_from_persisted_metadata() -> None:
     with patch("services.extraction.service.iter_page_packshots", return_value=iter([("offer-1", b"png")])) as render, patch.object(ExtractionService, "_upload_packshot") as upload:
         ExtractionService()._save_pending_packshots(sb, "flyer-1", b"%PDF")
 
-    render.assert_called_once_with(b"%PDF", 2, {"offer-1": [1, 2, 3, 4]})
+    render.assert_called_once_with(b"%PDF", 2, {"offer-1": [2, 1, 4, 3]})
     upload.assert_called_once_with(sb, pending.execute.return_value.data[0], b"png")
 
 
