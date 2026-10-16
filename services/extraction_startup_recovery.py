@@ -32,6 +32,8 @@ class ExtractionStartupRecoveryService:
 
         for flyer in flyers:
             metadata = flyer.get("extraction_metadata")
+            if isinstance(metadata, dict) and metadata.get("execution_mode") == "local":
+                continue
             if self._is_resumable(metadata):
                 self._mark_resumable(sb, flyer)
                 continue

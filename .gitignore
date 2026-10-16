@@ -39,3 +39,6 @@ supabase/.branches/
 supabase/.temp/
 # Generated from kong.integration.yml.tmpl at stack startup
 supabase/kong.integration.yml
+
+# Machine-owned production/Ollama worker, configuration, checkpoints and tests
+/local_extraction/

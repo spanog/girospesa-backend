@@ -86,3 +86,11 @@ def test_run_no_processing_flyers_returns_empty():
 
     assert service.run() == []
     assert sb.table.return_value.update.call_count == 0
+
+
+def test_backend_restart_does_not_interrupt_local_worker():
+    flyer = {'id': 'local', 'extraction_metadata': {'execution_mode': 'local',
+             'last_completed_chunk': 1, 'next_chunk_index': 2}}
+    sb = _make_sb([flyer])
+    ExtractionStartupRecoveryService(supabase_factory=lambda: sb).run()
+    sb.table.return_value.update.assert_not_called()

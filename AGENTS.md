@@ -98,3 +98,12 @@
 - Upload integration/performance fixtures must provide required validity dates; oversized-file checks must follow `MAX_FILE_SIZE`, not the historical 50 MB limit.
 
 - Discovery performance failures collect `EXPLAIN (ANALYZE, BUFFERS)` only after the timed assertion fails; preserve first-request timing and existing thresholds.
+
+## Production data with local inference
+
+- Keep machine-owned scripts, credentials, checkpoints and worker tests inside ignored `/local_extraction/`; never add them with `git add -f`. Only backend API/application/domain/infrastructure changes are deployable.
+- Local extraction endpoints require real server-side admin authorization. Use `DB_DSN` transactions locking the flyer row; offers and chunk receipt must commit atomically. No direct production database access from the Mac.
+- Preserve named XY coordinates, absolute source pages, shared normalization, chunk idempotency and fencing of expired/replaced workers. Cloud starts use optimistic status/updated_at concurrency checks and must reject local sessions.
+- Backend restart recovery must not interrupt local inference. Cover lease expiration, concurrent claims, rollback, replay, authorization and incomplete completion in domain/integration tests.
+- Worker tests: `.venv/bin/python -m pytest local_extraction/tests -q` (ignored, on this Mac). Skill tests: `.venv/bin/python -m pytest ../.agents/skills/girospesa-volantini/runtime/tests -q`. Use mocked inference, never production mutation in automated checks.
+- Operational contract and deployment prerequisite: `docs/local-production-extraction.md`. The skill fails closed before acquisition if local mode is enabled but production protocol is unavailable.

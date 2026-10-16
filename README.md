@@ -120,3 +120,7 @@ L’estrazione accorpa in una sola offerta le varianti della stessa marca e line
 Il provider Ollama supporta tecnicamente anche due pagine per richiesta, ma questa modalità resta sperimentale e non deve essere usata con `gemma4:26b-mlx` nel flusso locale ordinario. Il backend non impone ancora il vincolo per modello: mantenerlo esplicitamente nella configurazione e negli argomenti CLI.
 
 Failed first-request discovery benchmarks emit a read-only PostgreSQL execution plan after measurement; the diagnostic does not warm the timed request or change thresholds.
+
+## Inferenza sul Mac con dati in produzione
+
+Il worker locale può estrarre tramite Ollama e inviare bozze, ritagli e avanzamento alle API autenticate di produzione. Gli script della macchina risiedono in `local_extraction/`, esclusa da Git; il backend conserva controllo accessi, checkpoint atomici e conferma editoriale. Configurazione, attivazione della skill e ripresa sono descritte in [docs/local-production-extraction.md](docs/local-production-extraction.md).
