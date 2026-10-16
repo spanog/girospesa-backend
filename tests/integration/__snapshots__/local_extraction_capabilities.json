@@ -1,0 +1,8 @@
+{
+  "chunk_size_pages": [
+    1,
+    2
+  ],
+  "lease_seconds": 600,
+  "protocol_version": 1
+}

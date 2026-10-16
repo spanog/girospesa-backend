@@ -1616,6 +1616,9 @@ async def trigger_extraction(
     _source_flyer_required(flyer)
     _assert_flyer_access(sb, profile, flyer)
 
+    if (flyer.get("extraction_metadata") or {}).get("execution_mode") == "local":
+        raise HTTPException(409, "Resume this flyer with the local worker")
+
     resumable_processing = _can_resume_stale_processing(flyer)
     allowed_statuses = {"pending", "error"}
     if flyer.get("status") not in allowed_statuses and not resumable_processing:
@@ -1624,7 +1627,11 @@ async def trigger_extraction(
             detail=f"Cannot trigger extraction: flyer status is '{flyer.get('status')}'",
         )
 
-    sb.table("flyers").update({"status": "processing", "error_message": None}).eq("id", flyer_id).execute()
+    claimed = (sb.table("flyers").update({"status": "processing", "error_message": None})
+               .eq("id", flyer_id).eq("status", flyer["status"])
+               .eq("updated_at", flyer["updated_at"]).execute())
+    if not claimed.data:
+        raise HTTPException(409, "Flyer was claimed by another extraction")
 
     from services.extraction.service import ExtractionService
     background_tasks.add_task(ExtractionService().run, flyer_id)

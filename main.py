@@ -21,6 +21,7 @@ from api.routers import (
     flyers,
     guest_location,
     lists,
+    local_extraction,
     municipalities,
     notifications,
     ops,
@@ -157,6 +158,7 @@ app.add_middleware(RequestTimingMiddleware)
 app.include_router(auth.router)
 app.include_router(guest_location.router, prefix="/guest-location", tags=["guest-location"])
 app.include_router(municipalities.router, prefix="/municipalities", tags=["municipalities"])
+app.include_router(local_extraction.router, prefix="/flyers", tags=["local-extraction"])
 app.include_router(flyers.router, prefix="/flyers", tags=["flyers"])
 app.include_router(supermarkets.router, prefix="/supermarkets", tags=["supermarkets"])
 app.include_router(lists.router, prefix="/lists", tags=["lists"])

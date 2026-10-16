@@ -32,6 +32,7 @@ def _import_main(monkeypatch):
         "guest_location",
         "invite",
         "lists",
+        "local_extraction",
         "municipalities",
         "notifications",
         "ops",

@@ -481,6 +481,32 @@ class ExtractionService:
             "chunk_failures": resume_state["chunk_failures"],
         }
 
+    def local_pdf_page_count(self, flyer: dict) -> int:
+        sb = self._supabase_factory()
+        downloaded = self._download_file(sb, flyer["file_url"], flyer["file_name"])
+        try:
+            return count_pdf_pages(downloaded.content)
+        finally:
+            downloaded.cleanup()
+
+    def save_local_packshots(self, flyer: dict) -> None:
+        sb = self._supabase_factory()
+        downloaded = self._download_file(sb, flyer["file_url"], flyer["file_name"])
+        try:
+            self._save_pending_packshots(sb, flyer["id"], downloaded.content)
+        finally:
+            downloaded.cleanup()
+
+    def prepare_local_offer_rows(self, products: list[dict], flyer: dict) -> list[dict]:
+        """Apply the shared variant, normalization and offer identity rules."""
+        expanded = expand_products(products)
+        normalized = [normalize_product(p) for p in expanded
+                      if p.get("name") and (p.get("price_offer") or p.get("price_current"))]
+        valid = deduplicate_products([p for p in normalized if p.get("name") and p.get("price_offer")])
+        rows = self._build_offer_rows(valid, flyer, flyer.get("supermarket_id"),
+                                      flyer.get("supermarket_name") or "Sconosciuto")
+        return self._deduplicate_offer_rows(rows)
+
     def _persist_products(
         self,
         sb: object,

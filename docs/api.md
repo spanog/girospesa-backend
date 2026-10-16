@@ -91,3 +91,7 @@ La conferma di un volantino accoda un job idempotente `flyer_published` e rispon
 - `/purchases`: storico acquisti.
 - `/analytics/b2b`: analytics con API key.
 - `/ops/cron/daily-maintenance`: manutenzione giornaliera.
+
+## Estrazione da worker locale
+
+Gli endpoint admin `/flyers/{id}/local-extraction/*` accettano chunk estratti sul Mac mantenendo bozze e avanzamento in produzione. Contratto, autorizzazione, concorrenza e recupero: [local-production-extraction.md](local-production-extraction.md#contratto-api).
