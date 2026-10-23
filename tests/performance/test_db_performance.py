@@ -147,8 +147,9 @@ class TestDatabaseQueryPerformance:
         assert elapsed_ms < DISCOVERY_LIMIT_MS
         assert len(result.data) == 20
 
+    @pytest.mark.parametrize("filter_query", [None, "PERF_Prodotto_"])
     def test_nearby_offer_page_returns_only_requested_rows(
-        self, supabase_client, seeded_10k_dataset
+        self, supabase_client, seeded_10k_dataset, filter_query
     ):
         """Comune discovery deduplicates and pages 10k offers inside PostgreSQL."""
         supermarkets = seeded_10k_dataset["supermarkets"]
@@ -158,7 +159,7 @@ class TestDatabaseQueryPerformance:
             {
                 "candidate_supermarket_ids": [market["id"] for market in supermarkets],
                 "candidate_distances_km": [float(index) for index in range(len(supermarkets))],
-                "filter_query": "PERF_Prodotto_",
+                "filter_query": filter_query,
                 "filter_category": None,
                 "filter_subcategory": None,
                 "filter_supermarket_id": None,
@@ -169,7 +170,7 @@ class TestDatabaseQueryPerformance:
         ).execute()
         elapsed_ms = (time.perf_counter() - start) * 1000
 
-        assert elapsed_ms < DISCOVERY_LIMIT_MS, explain_discovery(supermarkets)
+        assert elapsed_ms < DISCOVERY_LIMIT_MS, explain_discovery(supermarkets, filter_query)
         assert len(result.data) == 20
         assert result.data[0]["total"] == 10_000
         assert sum(result.data[0]["counts_by_supermarket_id"].values()) == 10_000

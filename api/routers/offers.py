@@ -66,28 +66,6 @@ def _public_offers_query(sb, *, exact_count: bool):
     return apply_current_offer_window(query)
 
 
-def _filter_public_offers(
-    query,
-    *,
-    q: str | None,
-    category: str | None,
-    subcategory: str | None,
-    supermarket_id: str | None,
-    supermarket_ids: list[str],
-):
-    if q:
-        query = query.ilike("name", f"%{q.strip()}%")
-    if category:
-        query = query.eq("category", category)
-    if subcategory:
-        query = query.eq("subcategory", subcategory)
-    if supermarket_id:
-        query = query.eq("supermarket_id", supermarket_id)
-    if supermarket_ids:
-        query = query.in_("supermarket_id", list(dict.fromkeys(supermarket_ids)))
-    return query
-
-
 def _public_offers_response(
     sb,
     *,
@@ -120,19 +98,11 @@ def _public_offers_response(
 def _all_public_offers_response(
     sb, q, category, subcategory, supermarket_id, supermarket_ids, limit, offset
 ) -> dict:
-    query = _filter_public_offers(
-        _public_offers_query(sb, exact_count=True),
-        q=q,
-        category=category,
-        subcategory=subcategory,
-        supermarket_id=supermarket_id,
-        supermarket_ids=supermarket_ids,
+    page = _nearby_offer_page_from_database(
+        sb, q, category, subcategory, supermarket_id, supermarket_ids, limit, offset, None
     )
-    ordered_query = query.order("name")
-    response = ordered_query.range(offset, offset + limit - 1).execute()
-    items = _serialize_offers(response.data or [])
-    total = response.count or 0
-    return _offer_page(items, total, offset, limit)
+    items = _nearby_offer_items(sb, page.offer_ids, page.distances_by_offer_id)
+    return _offer_page(items, page.total, offset, limit)
 
 
 def _offer_page(items: list[dict], total: int, offset: int, limit: int) -> dict:
@@ -171,8 +141,8 @@ def _nearby_offer_page_parameters(
     q, category, subcategory, supermarket_id, supermarket_ids, limit, offset, distances
 ) -> dict:
     return {
-        "candidate_supermarket_ids": list(distances),
-        "candidate_distances_km": list(distances.values()),
+        "candidate_supermarket_ids": list(distances) if distances is not None else None,
+        "candidate_distances_km": list(distances.values()) if distances is not None else None,
         "filter_query": q,
         "filter_category": category,
         "filter_subcategory": subcategory,
