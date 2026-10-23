@@ -44,13 +44,11 @@ AS $$
       offer.supermarket_id,
       candidate.distance_km,
       query_terms.raw_query,
-      public.offer_search_document(
-        offer.name,
-        offer.brand,
-        offer.category,
-        offer.subcategory,
-        offer.format_label
-      ) AS search_document,
+      CASE WHEN query_terms.raw_query IS NOT NULL THEN
+        public.offer_search_document(
+          offer.name, offer.brand, offer.category, offer.subcategory, offer.format_label
+        )
+      END AS search_document,
       CASE
         WHEN query_terms.raw_query IS NULL THEN NULL
         ELSE websearch_to_tsquery('italian', query_terms.raw_query)
@@ -76,19 +74,24 @@ AS $$
         OR offer.supermarket_id = ANY(filter_supermarket_ids)
       )
   ),
+  matched_documents AS MATERIALIZED (
+    -- Keep area/visibility and text predicates eligible for index pushdown,
+    -- then cache matching documents for ranking and the fuzzy fallback check.
+    SELECT * FROM scoped_offers
+    WHERE raw_query IS NULL
+      OR name ILIKE '%' || raw_query || '%'
+      OR search_document @@ semantic_query
+  ),
   direct_matches AS NOT MATERIALIZED (
     SELECT
-      scoped_offers.*,
+      matched_documents.*,
       CASE
         WHEN raw_query IS NULL THEN 0::real
         WHEN search_document @@ semantic_query
           THEN ts_rank_cd(search_document, semantic_query)
         ELSE 0::real
       END AS relevance
-    FROM scoped_offers
-    WHERE raw_query IS NULL
-      OR search_document @@ semantic_query
-      OR name ILIKE '%' || raw_query || '%'
+    FROM matched_documents
   ),
   fuzzy_matches AS (
     SELECT
@@ -116,11 +119,11 @@ AS $$
       offer.category,
       offer.valid_from,
       -- Conservative display signature only: never merge independent offers.
-      jsonb_build_array(
+      CASE WHEN search_match.raw_query IS NULL THEN jsonb_build_array(
         lower(regexp_replace(btrim(offer.name), '\s+', ' ', 'g')),
         lower(regexp_replace(btrim(COALESCE(offer.brand, '')), '\s+', ' ', 'g')),
         COALESCE(offer.format_key, '')
-      ) AS display_signature,
+      ) END AS display_signature,
       row_number() OVER (
         PARTITION BY COALESCE(offer.source_offer_id, offer.id)
         ORDER BY

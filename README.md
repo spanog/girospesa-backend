@@ -124,6 +124,7 @@ L’estrazione accorpa in una sola offerta le varianti della stessa marca e line
 Il provider Ollama supporta tecnicamente anche due pagine per richiesta, ma questa modalità resta sperimentale e non deve essere usata con `gemma4:26b-mlx` nel flusso locale ordinario. Il backend non impone ancora il vincolo per modello: mantenerlo esplicitamente nella configurazione e negli argomenti CLI.
 
 Failed first-request discovery benchmarks emit a read-only PostgreSQL execution plan after measurement; the diagnostic does not warm the timed request or change thresholds.
+Discovery benchmarks cover browsing, literal name matches, and linguistic matches across 10,000 offers. Matching full-text documents are reused during ranking and fallback checks to avoid repeated text processing within the same query.
 
 ## Inferenza sul Mac con dati in produzione
 

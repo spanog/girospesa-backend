@@ -100,6 +100,7 @@
 - Upload integration/performance fixtures must provide required validity dates; oversized-file checks must follow `MAX_FILE_SIZE`, not the historical 50 MB limit.
 
 - Discovery performance failures collect `EXPLAIN (ANALYZE, BUFFERS)` only after the timed assertion fails; preserve first-request timing and existing thresholds.
+- Offer discovery benchmarks must cover browsing, broad literal name searches and broad linguistic searches; reuse matched full-text documents across ranking/fallback rather than recomputing them per expression.
 
 ## Production data with local inference
 

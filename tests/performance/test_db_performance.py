@@ -147,7 +147,7 @@ class TestDatabaseQueryPerformance:
         assert elapsed_ms < DISCOVERY_LIMIT_MS
         assert len(result.data) == 20
 
-    @pytest.mark.parametrize("filter_query", [None, "PERF_Prodotto_"])
+    @pytest.mark.parametrize("filter_query", [None, "PERF_Prodotto_", "dispensa"])
     def test_nearby_offer_page_returns_only_requested_rows(
         self, supabase_client, seeded_10k_dataset, filter_query
     ):
