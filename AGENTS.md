@@ -110,3 +110,5 @@
 - Backend restart recovery must not interrupt local inference. Cover lease expiration, concurrent claims, rollback, replay, authorization and incomplete completion in domain/integration tests.
 - Worker tests: `.venv/bin/python -m pytest local_extraction/tests -q` (ignored, on this Mac). Skill tests: `.venv/bin/python -m pytest ../.agents/skills/girospesa-volantini/runtime/tests -q`. Use mocked inference, never production mutation in automated checks.
 - Operational contract and deployment prerequisite: `docs/local-production-extraction.md`. The skill fails closed before acquisition if local mode is enabled but production protocol is unavailable.
+
+- Contratto feed offerte: `tests/integration/test_offer_feed_api.py` deve confrontare `/offers/discovery` e `/offers` con database reale per filtri singoli/combinati, area, pagine complete, conteggi e termine paginazione. Usare client HTTP asincrono function-scoped per isolare cookie e loop dei test.
