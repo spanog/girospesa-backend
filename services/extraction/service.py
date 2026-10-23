@@ -20,8 +20,10 @@ resumes from the first failed chunk.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 import logging
+import shutil
 from pathlib import Path
 import tempfile
 import time
@@ -32,6 +34,8 @@ import requests
 
 from core.config import settings
 from core.database import get_supabase
+from core.flyer_cache import create_flyer_source_cache
+from services.repositories.flyer_source_cache import FlyerSourceCache
 
 from services.extraction.normalizer import (
     deduplicate_products,
@@ -53,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 _FLYER_SELECT = (
     "id, file_url, file_name, supermarket_id, supermarket_name, valid_from, valid_to, "
-    "user_id, status, extraction_metadata"
+    "user_id, status, extraction_metadata, file_hash"
 )
 
 _DOWNLOAD_CHUNK_BYTES = 1_048_576
@@ -64,8 +68,11 @@ _SIGNED_DOWNLOAD_TTL_SECONDS = 900
 class DownloadedFlyer:
     content: bytes | Path
     temporary_path: Path | None = None
+    cache_lease: AbstractContextManager | None = None
 
     def cleanup(self) -> None:
+        if self.cache_lease is not None:
+            self.cache_lease.__exit__(None, None, None)
         if self.temporary_path is not None:
             self.temporary_path.unlink(missing_ok=True)
 
@@ -88,9 +95,11 @@ class ExtractionService:
         self,
         provider: ExtractionProvider | None = None,
         supabase_factory: Callable[[], object] | None = None,
+        source_cache: FlyerSourceCache | None = None,
     ) -> None:
         self._provider: ExtractionProvider = provider or get_provider(settings)
         self._supabase_factory = supabase_factory or get_supabase
+        self._source_cache = source_cache
 
     def run(self, flyer_id: str) -> None:
         """Download, extract, normalize, and persist self-contained draft offers."""
@@ -110,7 +119,7 @@ class ExtractionService:
         user_id: str | None = flyer.get("user_id")
         downloaded: DownloadedFlyer | None = None
         try:
-            downloaded = self._download_file(sb, flyer["file_url"], flyer.get("file_name", ""))
+            downloaded = self._download_source(sb, flyer)
             self._log_memory(flyer_id, "downloaded")
             self._run_pipeline(
                 sb,
@@ -483,7 +492,7 @@ class ExtractionService:
 
     def local_pdf_page_count(self, flyer: dict) -> int:
         sb = self._supabase_factory()
-        downloaded = self._download_file(sb, flyer["file_url"], flyer["file_name"])
+        downloaded = self._download_source(sb, flyer)
         try:
             return count_pdf_pages(downloaded.content)
         finally:
@@ -491,7 +500,7 @@ class ExtractionService:
 
     def save_local_packshots(self, flyer: dict) -> None:
         sb = self._supabase_factory()
-        downloaded = self._download_file(sb, flyer["file_url"], flyer["file_name"])
+        downloaded = self._download_source(sb, flyer)
         try:
             self._save_pending_packshots(sb, flyer["id"], downloaded.content)
         finally:
@@ -949,6 +958,28 @@ class ExtractionService:
         if not result.data:
             raise ValueError(f"Flyer not found: {flyer_id}")
         return result.data
+
+    def _download_source(self, sb: object, flyer: dict) -> DownloadedFlyer:
+        file_hash = flyer.get("file_hash")
+        storage_path = _flyer_storage_path(flyer["file_url"])
+        if not storage_path or not isinstance(file_hash, str) or len(file_hash) != 64:
+            return self._download_file(sb, flyer["file_url"], flyer.get("file_name", ""))
+        cache = self._source_cache or create_flyer_source_cache()
+        lease = cache.lease(storage_path, file_hash, lambda path: self._populate_source(sb, flyer, path))
+        if not is_pdf(flyer.get("file_name", "")):
+            with lease as path:
+                return DownloadedFlyer(path.read_bytes())
+        return DownloadedFlyer(lease.__enter__(), cache_lease=lease)
+
+    def _populate_source(self, sb: object, flyer: dict, destination: Path) -> None:
+        downloaded = self._download_file(sb, flyer["file_url"], flyer.get("file_name", ""))
+        try:
+            if isinstance(downloaded.content, Path):
+                shutil.copyfile(downloaded.content, destination)
+            else:
+                destination.write_bytes(downloaded.content)
+        finally:
+            downloaded.cleanup()
 
     def _download_file(self, sb: object, file_url: str, file_name: str) -> DownloadedFlyer:
         storage_path = _flyer_storage_path(file_url)

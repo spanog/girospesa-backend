@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import os
 import types
+from hashlib import sha256
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -26,6 +27,7 @@ sys.modules["core.config"] = _config_mod
 sys.modules["core.database"] = MagicMock()
 
 import pytest
+from services.repositories.flyer_source_cache import FlyerSourceCache
 
 
 def test_resume_keeps_checkpointed_pdf_chunk_size() -> None:
@@ -239,6 +241,43 @@ def test_storage_path_recovers_legacy_signed_flyer_url() -> None:
     )
 
     assert path == "user/flyer.pdf"
+
+
+def test_local_claim_and_per_page_crops_share_one_verified_download(tmp_path) -> None:
+    from services.extraction.service import DownloadedFlyer, ExtractionService
+    content = b"%PDF-original"
+    flyer = {"id": "flyer-1", "file_url": "user/source.pdf", "file_name": "source.pdf",
+             "file_hash": sha256(content).hexdigest()}
+    cache = FlyerSourceCache(tmp_path, 1024, 60)
+    with (
+        patch.object(ExtractionService, "_download_file", return_value=DownloadedFlyer(content)) as download,
+        patch("services.extraction.service.count_pdf_pages", return_value=30),
+        patch.object(ExtractionService, "_save_pending_packshots") as crops,
+    ):
+        service = ExtractionService(provider=object(), supabase_factory=MagicMock(), source_cache=cache)
+        assert service.local_pdf_page_count(flyer) == 30
+        for _ in range(30):
+            service = ExtractionService(provider=object(), supabase_factory=MagicMock(), source_cache=cache)
+            service.save_local_packshots(flyer)
+        service.save_local_packshots(flyer)  # finish also reuses the same original.
+    download.assert_called_once()
+    assert crops.call_count == 31
+    assert list(tmp_path.glob("*.bin"))[0].read_bytes() == content
+
+
+def test_cached_image_keeps_provider_bytes_contract(tmp_path) -> None:
+    from services.extraction.service import DownloadedFlyer, ExtractionService
+
+    content = b"image-content"
+    flyer = {"file_url": "user/flyer.png", "file_name": "flyer.png", "file_hash": sha256(content).hexdigest()}
+    service = ExtractionService(provider=object(), source_cache=FlyerSourceCache(tmp_path, 1024, 60))
+    with patch.object(service, "_download_file", return_value=DownloadedFlyer(content)) as download:
+        for _ in range(2):
+            source = service._download_source(MagicMock(), flyer)
+            assert isinstance(source.content, bytes)
+            assert source.content == content
+            source.cleanup()
+    download.assert_called_once()
 
 
 class TestExtractionServiceStatusTransitions:

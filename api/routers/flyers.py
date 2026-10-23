@@ -28,6 +28,7 @@ from api.routers._nearby_supermarkets import (
 )
 from core.config import settings
 from core.database import get_supabase
+from core.flyer_cache import create_flyer_source_cache
 from core.guest_location import GUEST_LOCATION_COOKIE, guest_location_required, read_guest_location
 from services.extraction.normalizer import format_unit_price_label, normalize_unit_price_measure
 from services.notification_jobs import enqueue_flyer_published, reschedule_flyer_published
@@ -674,12 +675,34 @@ def _preflight_document_content(sb, flyer: dict) -> bytes | None:
     if storage_path is None:
         return None
     try:
-        return bytes(sb.storage.from_("flyers").download(storage_path))
+        return _read_flyer_source(sb, flyer, storage_path)
     except Exception:
         # The Storage adapter exposes provider-specific error types only at runtime.
         # A failed read is deliberately mapped to the conservative preflight state.
         logger.warning("Could not read flyer %s during ingestion preflight", flyer.get("id"))
         return None
+
+
+def _read_flyer_source(sb, flyer: dict, storage_path: str) -> bytes:
+    file_hash = flyer.get("file_hash")
+    download = lambda: bytes(sb.storage.from_("flyers").download(storage_path))
+    if not isinstance(file_hash, str) or len(file_hash) != 64:
+        return download()  # Legacy sources have no trusted cache identity.
+    with create_flyer_source_cache().lease(
+        storage_path, file_hash, lambda path: path.write_bytes(download())
+    ) as path:
+        return path.read_bytes()
+
+
+def _cache_uploaded_source(storage_path: str, content: bytes) -> None:
+    try:
+        with create_flyer_source_cache().lease(
+            storage_path, hashlib.sha256(content).hexdigest(), lambda path: path.write_bytes(content)
+        ):
+            pass
+    except OSError:
+        # Upload is already committed; an optional cache failure must not cause a retry.
+        logger.warning("Could not warm flyer source cache after upload", exc_info=True)
 
 
 def _preflight_documents(
@@ -798,7 +821,7 @@ def _ensure_flyer_preview(sb, flyer: dict) -> str | None:
     storage_path = _flyer_storage_path(flyer)
     if storage_path is None:
         return None
-    content = bytes(sb.storage.from_("flyers").download(storage_path))
+    content = _read_flyer_source(sb, flyer, storage_path)
     return _save_flyer_preview(
         sb,
         flyer_id=flyer["id"],
@@ -1377,6 +1400,7 @@ async def complete_flyer_upload(
         )
         if preview_path is not None:
             flyer["preview_path"] = preview_path
+        _cache_uploaded_source(payload.storage_path, content)
         return flyer
     except HTTPException:
         _remove_flyer_object(sb, payload.storage_path)

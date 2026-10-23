@@ -3,6 +3,9 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
+from unittest.mock import Mock
+import fitz
 import os
 import psycopg2
 import httpx
@@ -13,7 +16,8 @@ from core.auth import get_current_user_profile
 from services.extraction.local.application import LocalExtractionApplication
 from services.extraction.local.repository import LocalExtractionRepository
 from services.extraction.local.session import LocalExtractionConflict
-from services.extraction.service import ExtractionService
+from services.extraction.service import DownloadedFlyer, ExtractionService
+from services.repositories.flyer_source_cache import FlyerSourceCache, FlyerSourceIntegrityError
 
 OWNER = str(uuid4())
 WORKER = str(uuid4())
@@ -40,6 +44,63 @@ def fixture(supabase_client, clean_db):
     app.dependency_overrides[application] = lambda: app_service
     app.dependency_overrides[get_current_user_profile] = lambda: dict(id=OWNER, role='admin')
     return app, app_service, flyer, supabase_client
+
+
+@pytest.mark.asyncio
+async def test_local_lifecycle_reuses_pdf_across_claim_chunks_and_finish(fixture, tmp_path, monkeypatch):
+    app, _, flyer, sb = fixture
+    content = _two_page_pdf()
+    config = dict(CONFIG, file_hash=sha256(content).hexdigest())
+    sb.table('flyers').update({'file_hash': config['file_hash']}).eq('id', flyer['id']).execute()
+    extraction, download = _cached_extraction(sb, tmp_path, content, monkeypatch)
+    repository = LocalExtractionRepository(partial(psycopg2.connect, os.environ['DB_DSN']))
+    service = LocalExtractionApplication(repository, extraction.prepare_local_offer_rows,
+                                         extraction.save_local_packshots, extraction.local_pdf_page_count)
+    app.dependency_overrides[application] = lambda: service
+    await _run_cached_pdf_lifecycle(app, flyer['id'], config)
+    download.assert_called_once()
+    assert len(sb.table('offers').select('id').eq('flyer_id', flyer['id']).execute().data) == 2
+    assert list(tmp_path.glob('*.bin'))[0].read_bytes() == content
+
+
+def _two_page_pdf():
+    with fitz.open() as document:
+        document.new_page().insert_text((40, 40), "First offer")
+        document.new_page().insert_text((40, 40), "Second offer")
+        return document.tobytes()
+
+
+def _cached_extraction(sb, tmp_path, content, monkeypatch):
+    extraction = ExtractionService(provider=object(), supabase_factory=lambda: sb,
+                                   source_cache=FlyerSourceCache(tmp_path, 1024 * 1024, 60))
+    download = Mock(return_value=DownloadedFlyer(content))
+    monkeypatch.setattr(extraction, '_download_file', download)
+    monkeypatch.setattr(extraction, '_upload_packshot', Mock())
+    return extraction, download
+
+
+async def _run_cached_pdf_lifecycle(app, flyer_id, config):
+    prefix = f'/flyers/{flyer_id}/local-extraction'
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        assert (await client.post(prefix+'/claim', json=dict(worker_id=WORKER, **config))).status_code == 200
+        for index in (1, 2):
+            body = dict(worker_id=WORKER, products=[dict(PRODUCT, source_page=index, name=f'Offer {index}')])
+            assert (await client.put(prefix+f'/chunks/{index}', json=body)).status_code == 200
+        assert (await client.post(prefix+'/finish', json=dict(worker_id=WORKER))).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_cache_integrity_failure_rejects_claim_without_mutating_session(fixture):
+    app, service, flyer, sb = fixture
+    service._inspect_pdf = Mock(side_effect=FlyerSourceIntegrityError('Source fingerprint mismatch'))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.post(f"/flyers/{flyer['id']}/local-extraction/claim",
+                                     json=dict(worker_id=WORKER, **CONFIG))
+    assert response.status_code == 409
+    assert response.json()['detail'] == 'Source fingerprint mismatch'
+    stored = sb.table('flyers').select('status, extraction_metadata').eq('id', flyer['id']).single().execute().data
+    assert stored['status'] == flyer['status']
+    assert stored['extraction_metadata'] == flyer['extraction_metadata']
 
 
 @pytest.mark.asyncio

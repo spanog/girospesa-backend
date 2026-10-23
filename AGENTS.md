@@ -56,6 +56,7 @@
 - RLS-only helper functions that need `SECURITY DEFINER` privileges must live in a non-exposed schema such as `private`; do not publish them from `public` or document them as client-callable RPCs.
 - Public Storage buckets (`avatars`, `logos`, `product-images`) rely on signed-less `/storage/v1/object/public/...` URLs only. Do not depend on anonymous bucket listing via `storage.objects` policies.
 - Le anteprime dei volantini pubblici passano da `GET /flyers/{id}/preview`: restituire binario WebP con cache HTTP, mai URL Storage al browser. Conservare gli URL firmati brevi esclusivamente in endpoint separati per workflow admin privati.
+- Source downloads: use `ExtractionService._download_source` or the router source-cache helper when the server-recorded SHA-256 exists. Preserve project/path/hash isolation, hash verification, bounded disk retention and reader leases; never use cache existence as authorization. Keep metadata/exact-hash preflight free of existing-document downloads. Cache tests must use temporary directories and mocked Storage; cover repeated local chunk crops across service instances with one source download.
 
 ## Deploy / CI conventions
 

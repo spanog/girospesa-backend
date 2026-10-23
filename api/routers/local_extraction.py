@@ -13,6 +13,7 @@ from services.extraction.local.application import LocalExtractionApplication
 from services.extraction.local.repository import LocalExtractionRepository, LocalFlyerNotFound
 from services.extraction.local.session import LocalExtractionConflict
 from services.extraction.service import ExtractionService
+from services.repositories.flyer_source_cache import FlyerSourceIntegrityError
 
 router = APIRouter()
 
@@ -67,7 +68,7 @@ def invoke(operation, *args):
         return operation(*args)
     except LocalFlyerNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
-    except LocalExtractionConflict as exc:
+    except (LocalExtractionConflict, FlyerSourceIntegrityError) as exc:
         raise HTTPException(409, str(exc)) from exc
 
 

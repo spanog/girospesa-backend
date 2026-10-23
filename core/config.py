@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     ollama_max_output_tokens: int = Field(default=8192, gt=0)
     ollama_chunk_size_pages: int = Field(default=1, ge=1, le=2)
     ollama_image_dpi: int = Field(default=150, ge=72, le=300)
+    flyer_source_cache_dir: str = "/tmp/girospesa-flyer-sources"
+    flyer_source_cache_max_bytes: int = Field(default=256 * 1024 * 1024, ge=100 * 1024 * 1024)
+    flyer_source_cache_ttl_seconds: int = Field(default=86400, ge=60)
     vapid_private_key: str = ""
     vapid_public_key: str = ""
     vapid_mailto: str = "mailto:info@girospesa.it"

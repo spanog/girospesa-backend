@@ -102,6 +102,49 @@ from api.routers.flyers import router
 from services.flyer_ingestion_preflight import FlyerPreflightDecision, FlyerPreflightStatus
 from tests.snapshot_utils import assert_matches_json_snapshot
 
+
+@pytest.fixture(autouse=True)
+def isolated_source_cache(tmp_path):
+    from services.repositories.flyer_source_cache import FlyerSourceCache
+    with patch("api.routers.flyers.create_flyer_source_cache", return_value=FlyerSourceCache(tmp_path, 1024 * 1024, 60)):
+        yield
+
+
+def test_visual_preflight_reuses_source_without_remote_writes():
+    from hashlib import sha256
+    content = b"%PDF-source"
+    flyer = {"id": "source", "file_url": "user/source.pdf", "file_hash": sha256(content).hexdigest()}
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.return_value = content
+    assert _flyers_module._preflight_document_content(sb, flyer) == content
+    assert _flyers_module._preflight_document_content(sb, flyer) == content
+    sb.storage.from_.return_value.download.assert_called_once_with("user/source.pdf")
+    sb.table.assert_not_called()
+    sb.storage.from_.return_value.upload.assert_not_called()
+
+
+def test_preflight_mismatching_download_remains_indeterminate():
+    flyer = {"id": "source", "file_url": "user/source.pdf", "file_hash": "a" * 64}
+    sb = MagicMock()
+    sb.storage.from_.return_value.download.return_value = b"changed"
+    assert _flyers_module._preflight_document_content(sb, flyer) is None
+
+
+def test_upload_validation_bytes_warm_cache_for_visual_preflight():
+    from hashlib import sha256
+    content = b"%PDF-source"
+    _flyers_module._cache_uploaded_source("user/source.pdf", content)
+    flyer = {"id": "source", "file_url": "user/source.pdf", "file_hash": sha256(content).hexdigest()}
+    sb = MagicMock()
+    assert _flyers_module._preflight_document_content(sb, flyer) == content
+    sb.storage.from_.return_value.download.assert_not_called()
+
+
+def test_optional_cache_failure_does_not_fail_committed_upload():
+    with patch("api.routers.flyers.create_flyer_source_cache", side_effect=OSError("Disk unavailable")):
+        _flyers_module._cache_uploaded_source("user/source.pdf", b"%PDF-source")
+
+
 _DEP_GET_USER_ID = _flyers_module.get_current_user_id
 _DEP_PROFILE = _flyers_module.require_admin_or_manager
 
