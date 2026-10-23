@@ -13,6 +13,22 @@ Il backend FastAPI è l'unica API applicativa. Le chiamate autenticate usano un 
 
 Un'offerta contiene i propri dati, validità, prezzo, formato strutturato e `image_url`. Il backend determina la disponibilità corrente esclusivamente da `valid_from` e `valid_to`, usando il giorno `Europe/Rome`; nessun client calcola autonomamente lo stato dell'offerta. Non esistono endpoint per catalogo prodotti, dettagli prodotto o preferiti prodotto.
 
+### Ordinamento bilanciato offerte
+
+Senza `q` (oppure con testo vuoto), `/offers` e `/offers/discovery` applicano lo stesso ordinamento nel database, prima di `LIMIT` e `OFFSET`:
+
+1. Dopo i filtri di area, validità, categoria e supermercato e la deduplicazione delle copie pubblicate dalla stessa sorgente, identificano le occorrenze con lo stesso nome, marca e `format_key`. Nome e marca ignorano maiuscole e spazi ripetuti. Questa firma serve soltanto alla presentazione: non crea prodotti canonici e non elimina offerte indipendenti.
+2. Presentano una prima occorrenza di ogni firma, poi le seconde e così via. Una firma ripetuta può quindi apparire più avanti, anche se proviene da un negozio diverso.
+3. All'interno di ogni passaggio, ruotano tra i supermercati; in ciascun supermercato ruotano tra le categorie finché disponibili. Esaurite le alternative, proseguono con le offerte rimaste.
+4. Nella stessa combinazione di passaggio, supermercato e categoria, precedono le offerte iniziate nel giorno corrente o nei sei giorni precedenti, secondo `Europe/Rome`. La data di estrazione non conta; una validità senza inizio non riceve priorità. Il criterio influenza anche la scelta della prima occorrenza della firma.
+5. Gli spareggi usano hash deterministici e ID, senza ordinamento alfabetico o casualità per sessione.
+
+Con una ricerca non vuota resta l'ordinamento per rilevanza, poi nome e ID. Conteggi, filtri e formato delle risposte rimangono compatibili. Anche il percorso globale per profili senza località usa la stessa RPC; una lista di sedi vuota continua a restituire zero risultati.
+
+Stessi dati, area, filtri e giorno restituiscono lo stesso ordine, indipendentemente dalla dimensione della pagina. Pubblicazioni, scadenze, cambi di filtri o di giorno possono modificarlo; non viene mantenuta una fotografia della sessione. Le occorrenze simili con nomi diversi possono ancora risultare vicine: il confronto prudente non riconosce automaticamente equivalenze tra estrazioni indipendenti.
+
+Applicare `20261023120000_balance_public_offer_browsing.sql` prima del deploy backend. La migrazione sostituisce la RPC service-role esistente, conserva i permessi e non richiede modifiche frontend, mobile o ai tipi TypeScript.
+
 ### Ricerca linguistica offerte
 
 `q` usa il dizionario full-text italiano su nome, marca, categoria, sottocategoria e formato: normalizza maiuscole e accenti, riduce singolare/plurale alla stessa radice e ordina i risultati per rilevanza. Un fallback trigrammi entra in funzione soltanto se non esiste alcun match linguistico o letterale, per recuperare piccoli refusi senza inquinare risultati corretti.

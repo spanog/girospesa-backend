@@ -268,6 +268,32 @@ def test_nearby_offer_items_fetches_only_page_ids():
     query.in_.assert_called_once_with("id", ["offer-1", "offer-2"])
 
 
+def test_global_offer_fallback_uses_database_order_and_preserves_page_contract(request):
+    from tests.snapshot_utils import assert_matches_json_snapshot
+
+    sb = MagicMock()
+    page = _offers_module.NearbyOfferPage(["z", "a"], {}, 5, 2, {}, {})
+    items = [{"id": "z", "name": "Zucchine"}, {"id": "a", "name": "Acqua"}]
+    with (
+        patch("api.routers.offers._nearby_offer_page_from_database", return_value=page) as query,
+        patch("api.routers.offers._nearby_offer_items", return_value=items),
+    ):
+        result = _offers_module._all_public_offers_response(sb, None, None, None, None, [], 2, 2)
+    query.assert_called_once_with(sb, None, None, None, None, [], 2, 2, None)
+    assert [item["id"] for item in result["items"]] == ["z", "a"]
+    assert result["nextPage"] == 4
+    assert_matches_json_snapshot(request, "balanced_offers_page", result)
+
+
+def test_offer_page_parameters_distinguish_global_fallback_from_empty_area():
+    global_params = _offers_module._nearby_offer_page_parameters(None, None, None, None, [], 20, 0, None)
+    empty_params = _offers_module._nearby_offer_page_parameters(None, None, None, None, [], 20, 0, {})
+    assert global_params["candidate_supermarket_ids"] is None
+    assert global_params["candidate_distances_km"] is None
+    assert empty_params["candidate_supermarket_ids"] == []
+    assert empty_params["candidate_distances_km"] == []
+
+
 @pytest.mark.asyncio
 async def test_offer_discovery_reuses_one_nearby_lookup_for_page_and_stores():
     sb = MagicMock()

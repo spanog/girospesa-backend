@@ -15,6 +15,7 @@
 - Supabase schema or RLS changes must keep `supabase db advisors --local` clean for touched areas; wrap `auth.uid()` / `auth.jwt()` as `select` expressions in policies when possible to avoid advisor performance warnings.
 - Snapshot tests support, not replace, explicit assertions on permissions, ordering, lifecycle transitions, and domain invariants.
 - `GET /offers` deve risolvere l'area soltanto dal Comune firmato guest o dal profilo e applicare il raggio prima di paginare le offerte.
+- Ordinamento offerte: modificare la RPC tramite migrazione forward-only; applicare bilanciamento prima di LIMIT/OFFSET, mantenere rilevanza ricerca e deduplicazione sorgenti. Coprire rotazione sedi/categorie, ripetizioni, recenza e continuità pagine in `tests/integration/test_balanced_offer_browsing.py`; nessun caricamento completo dell'area in Python.
 - `append_list_item` deve incrementare atomically una riga attiva con lo stesso `pinned_offer_id`, senza unire righe già acquistate.
 - Cookie località guest: richieste da origin HTTPS Capacitor devono ricevere `SameSite=None; Secure`; mantenere test endpoint per questo contratto cross-site.
 - Notification delivery: mantenere batch e concorrenza configurabili; ogni chiamata push deve avere una deadline e un worker terminato non può lasciare job `processing` senza recovery.
@@ -99,6 +100,7 @@
 - Upload integration/performance fixtures must provide required validity dates; oversized-file checks must follow `MAX_FILE_SIZE`, not the historical 50 MB limit.
 
 - Discovery performance failures collect `EXPLAIN (ANALYZE, BUFFERS)` only after the timed assertion fails; preserve first-request timing and existing thresholds.
+- Offer discovery benchmarks must cover browsing, broad literal name searches and broad linguistic searches; reuse matched full-text documents across ranking/fallback rather than recomputing them per expression.
 
 ## Production data with local inference
 

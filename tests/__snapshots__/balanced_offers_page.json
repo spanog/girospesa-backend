@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": "z",
+      "name": "Zucchine"
+    },
+    {
+      "id": "a",
+      "name": "Acqua"
+    }
+  ],
+  "nextPage": 4,
+  "total": 5
+}
