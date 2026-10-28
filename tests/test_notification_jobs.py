@@ -128,7 +128,7 @@ def test_recipient_jobs_use_independent_clients_and_run_in_parallel():
 
 
 def test_run_pending_releases_stale_locks_before_claiming_jobs():
-    worker = NotificationJobWorker(MagicMock())
+    worker = NotificationJobWorker(MagicMock(), digest_repository=MagicMock())
 
     with (
         patch.object(worker, "_release_stale_jobs") as release,
@@ -189,3 +189,34 @@ def _job(job_id: str, user_id: str, attempts: int = 1) -> dict:
         "payload": {**_payload(), "user_id": user_id},
         "attempts": attempts, "max_attempts": 5,
     }
+
+
+def test_undated_or_old_flyer_waits_until_ten_today():
+    now = datetime(2026, 10, 28, 7, tzinfo=UTC)
+    expected = datetime(2026, 10, 28, 9, tzinfo=UTC)
+    assert _flyer_notification_available_at(None, now) == expected
+    assert _flyer_notification_available_at("2026-10-20", now) == expected
+
+
+def test_parent_batches_are_drained_before_any_recipient_summary():
+    worker = NotificationJobWorker(MagicMock(), digest_repository=MagicMock())
+    with patch.object(worker, "_claim_jobs", side_effect=[[{}, {}], [{}]]), patch.object(
+        worker, "_run_job", return_value=True
+    ) as run:
+        assert worker._drain_parents(2) == [True, True, True]
+    assert run.call_count == 3
+
+
+def test_prepared_digest_uses_reserved_delivery_without_legacy_push():
+    worker = NotificationJobWorker(MagicMock())
+    delivery = {"user_id": "u", "enabled": False}
+    with patch("services.notification_jobs.deliver_flyer_digest") as send:
+        worker._dispatch({"payload": {"flyers": []}, "delivery": delivery}, worker._sb)
+    send.assert_called_once_with(worker._sb, delivery, worker._fcm_token_provider)
+
+
+def test_already_reserved_digest_cannot_recreate_deleted_inbox_or_resend_push():
+    worker = NotificationJobWorker(MagicMock())
+    with patch("services.notification_jobs.deliver_flyer_digest") as send:
+        worker._dispatch({"payload": {"flyers": []}, "delivery": None}, worker._sb)
+    send.assert_not_called()

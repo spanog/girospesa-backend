@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
+from unittest.mock import patch
 
 import psycopg2
 import pytest
@@ -38,6 +40,8 @@ def notification_municipality_context():
             )
             cur.execute("DELETE FROM public.flyers WHERE supermarket_id = %s", (supermarket_id,))
             cur.execute("DELETE FROM auth.users WHERE id = ANY(%s::uuid[])", (list(user_ids.values()),))
+            cur.execute("DELETE FROM public.notification_jobs WHERE payload->>'user_id' = ANY(%s)", (list(user_ids.values()),))
+            cur.execute("DELETE FROM public.offers WHERE supermarket_id=%s", (supermarket_id,))
             cur.execute("DELETE FROM public.supermarkets WHERE id = %s", (supermarket_id,))
         conn.commit()
         conn.close()
@@ -71,12 +75,13 @@ def test_flyer_notification_jobs_persist_inbox_without_push(
         supermarket_name="Supermercato UAT",
         products_count=4,
     )
-    result = NotificationJobWorker(supabase_client).run_pending()
+    _make_due(supabase_client, flyer_id)
+    result = NotificationJobWorker(supabase_client, clock=_delivery_clock).run_pending()
     inbox = (
         supabase_client.table("app_notifications")
         .select("user_id")
         .eq("kind", "flyer_published")
-        .contains("data", {"aggregation_key": f"flyer-published:{flyer_id}"})
+        .contains("data", {"flyer_ids": [flyer_id]})
         .execute()
         .data
     )
@@ -100,7 +105,7 @@ def test_notification_worker_recovers_expired_processing_job(supabase_client):
     _insert_public_flyer(supabase_client, flyer_id)
 
     try:
-        result = NotificationJobWorker(supabase_client).run_pending()
+        result = NotificationJobWorker(supabase_client, clock=_delivery_clock).run_pending()
         row = (
             supabase_client.table("notification_jobs")
             .select("status")
@@ -118,7 +123,7 @@ def test_notification_worker_recovers_expired_processing_job(supabase_client):
             .data
         )
 
-        assert result == {"claimed": 1, "processed": 1, "failed": 0}
+        assert result == {"claimed": 0, "processed": 0, "failed": 0}
         assert row["status"] == "done"
         assert exhausted_row["status"] == "dead"
     finally:
@@ -178,6 +183,15 @@ def _insert_public_flyer(
             "is_public": True,
         }
     ).execute()
+    if supermarket_id:
+        supabase_client.table("offers").insert({
+            "flyer_id": flyer_id, "supermarket_id": supermarket_id,
+            "supermarket_name": "Supermercato UAT", "name": "Pasta",
+            "category": "Dispensa", "price_offer": 1.99,
+            "format": {"tipo": "confezione_singola"}, "format_key": "confezione_singola",
+            "format_label": "Confezione singola", "is_confirmed": True,
+            "offer_kind": "published_target", "offer_key": uuid.uuid4().hex,
+        }).execute()
 
 
 def _insert_supermarket(cur, supermarket_id: str) -> None:
@@ -229,3 +243,137 @@ def _configure_profiles(cur, supermarket_id: str, user_ids: dict[str, str]) -> N
            WHERE id = %s""",
         (user_ids["admin"],),
     )
+
+
+def _delivery_clock():
+    return datetime.now(ZoneInfo("Europe/Rome")).replace(hour=23, minute=0, second=0, microsecond=0)
+
+
+def _make_due(sb, flyer_id):
+    sb.table("notification_jobs").update({
+        "available_at": (datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+    }).eq("idempotency_key", f"flyer-published:{flyer_id}").execute()
+
+
+def _publish_event(sb, market):
+    flyer = str(uuid.uuid4())
+    _insert_public_flyer(sb, flyer, market)
+    enqueue_flyer_published(sb, flyer_id=flyer, supermarket_id=market,
+                            supermarket_name="Supermercato UAT", products_count=4)
+    _make_due(sb, flyer)
+    return flyer
+
+
+def _inbox(sb, user):
+    return sb.table("app_notifications").select("*").eq("user_id", user).eq("kind", "flyer_published").execute().data
+
+
+def test_daily_digest_survives_batches_deletion_restart_and_next_day(
+    notification_municipality_context, supabase_client, request,
+):
+    from tests.snapshot_utils import assert_matches_json_snapshot
+    _, market, users = notification_municipality_context
+    sb, user = supabase_client, users["same_municipality"]
+    for recipient in _recipient_ids(notification_municipality_context[0], market):
+        sb.table("user_profiles").update({"notifications_enabled": False}).eq("id", recipient).execute()
+    first, second = _publish_event(sb, market), _publish_event(sb, market)
+    worker = NotificationJobWorker(sb, clock=_delivery_clock)
+    for _ in range(len(users)):
+        worker.run_pending(limit=1)
+    rows = _inbox(sb, user)
+    assert len(rows) == 1
+    assert set(rows[0]["data"]["flyer_ids"]) == {first, second}
+    assert rows[0]["body"] == "Novità da Supermercato UAT."
+    payload = {"kind": rows[0]["kind"], "title": rows[0]["title"], "body": rows[0]["body"],
+               "data": {**rows[0]["data"], "aggregation_key": "<daily-key>"}}
+    assert_matches_json_snapshot(request, "flyer_daily_digest", payload)
+    sb.table("app_notifications").delete().eq("id", rows[0]["id"]).execute()
+    late = _publish_event(sb, market)
+    for _ in range(len(users)):
+        NotificationJobWorker(sb, clock=_delivery_clock).run_pending(limit=1)
+    assert _inbox(sb, user) == []
+    tomorrow = lambda: _delivery_clock() + timedelta(days=1)
+    for _ in range(len(users)):
+        NotificationJobWorker(sb, clock=tomorrow).run_pending(limit=1)
+    next_rows = _inbox(sb, user)
+    assert len(next_rows) == 1
+    assert next_rows[0]["data"]["flyer_ids"] == [late]
+
+
+def test_summary_planner_excludes_concurrent_cycles_and_rolls_back(
+    notification_municipality_context, supabase_client,
+):
+    from services.repositories.flyer_digest_repository import FlyerDigestRepository
+    _, market, users = notification_municipality_context
+    _publish_event(supabase_client, market)
+    repo = FlyerDigestRepository()
+    worker = NotificationJobWorker(supabase_client, clock=_delivery_clock)
+    with repo.cycle() as cursor:
+        assert cursor is not None
+        with repo.cycle() as competitor:
+            assert competitor is None
+        worker._drain_parents(1)
+        with patch.object(repo, "_insert", side_effect=ValueError("interrupted transaction")):
+            with pytest.raises(ValueError):
+                repo.prepare(cursor, _delivery_clock())
+        cursor.execute("SELECT count(*) AS n FROM public.notification_jobs WHERE payload ? 'flyers' AND payload->>'user_id'=%s", (users["same_municipality"],))
+        assert cursor.fetchone()["n"] == 0
+        repo.prepare(cursor, _delivery_clock())
+        cursor.execute("SELECT count(*) AS n FROM public.notification_jobs WHERE payload ? 'flyers' AND payload->>'user_id'=%s", (users["same_municipality"],))
+        assert cursor.fetchone()["n"] >= 1
+
+
+def test_summary_skips_expired_withdrawn_and_empty_flyers(
+    notification_municipality_context, supabase_client,
+):
+    _, market, users = notification_municipality_context
+    sb = supabase_client
+    flyers = [_publish_event(sb, market) for _ in range(3)]
+    sb.table("flyers").update({"is_public": False}).eq("id", flyers[0]).execute()
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+    sb.table("flyers").update({"valid_to": yesterday}).eq("id", flyers[1]).execute()
+    sb.table("offers").delete().eq("flyer_id", flyers[2]).execute()
+    NotificationJobWorker(sb, clock=_delivery_clock).run_pending()
+    assert _inbox(sb, users["same_municipality"]) == []
+
+
+def test_reserved_digest_recovery_cannot_repeat_push_or_deleted_inbox(
+    notification_municipality_context, supabase_client,
+):
+    _, market, users = notification_municipality_context
+    _publish_event(supabase_client, market)
+    with patch("services.notification_jobs.deliver_flyer_digest", side_effect=RuntimeError("ambiguous push outcome")) as send:
+        first = NotificationJobWorker(supabase_client, clock=_delivery_clock).run_pending()
+        assert first["failed"] > 0
+        calls = send.call_count
+        inbox = _inbox(supabase_client, users["same_municipality"])
+        assert len(inbox) == 1
+        supabase_client.table("app_notifications").delete().eq("id", inbox[0]["id"]).execute()
+        retry = NotificationJobWorker(supabase_client, clock=_delivery_clock).run_pending()
+        assert retry["failed"] == 0
+        assert send.call_count == calls
+        assert _inbox(supabase_client, users["same_municipality"]) == []
+
+
+def test_unattempted_summary_rolls_over_and_rechecks_withdrawn_flyers(
+    notification_municipality_context, supabase_client,
+):
+    from services.repositories.flyer_digest_repository import FlyerDigestRepository
+    _, market, users = notification_municipality_context
+    first, second = _publish_event(supabase_client, market), _publish_event(supabase_client, market)
+    repo = FlyerDigestRepository()
+    worker = NotificationJobWorker(supabase_client, clock=_delivery_clock)
+    with repo.cycle() as cursor:
+        worker._drain_parents(1)
+        repo.prepare(cursor, _delivery_clock())
+        supabase_client.table("flyers").update({"is_public": False}).eq("id", first).execute()
+        tomorrow = _delivery_clock() + timedelta(days=1)
+        repo.prepare(cursor, tomorrow)
+        cursor.execute("SELECT * FROM public.notification_jobs WHERE payload ? 'flyers' "
+                       "AND payload->>'user_id'=%s ORDER BY created_at", (users["same_municipality"],))
+        jobs = cursor.fetchall()
+        assert [job["status"] for job in jobs] == ["dead", "pending"]
+        assert [item["flyer_id"] for item in jobs[1]["payload"]["flyers"]] == [second]
+        delivery = repo.reserve_delivery(cursor, jobs[1], tomorrow)
+        assert delivery["data"]["flyer_ids"] == [second]
+        assert repo.reserve_delivery(cursor, jobs[1], tomorrow) is None

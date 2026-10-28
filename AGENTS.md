@@ -112,3 +112,10 @@
 - Operational contract and deployment prerequisite: `docs/local-production-extraction.md`. The skill fails closed before acquisition if local mode is enabled but production protocol is unavailable.
 
 - Contratto feed offerte: `tests/integration/test_offer_feed_api.py` deve confrontare `/offers/discovery` e `/offers` con database reale per filtri singoli/combinati, area, pagine complete, conteggi e termine paginazione. Usare client HTTP asincrono function-scoped per isolare cookie e loop dei test.
+
+## Daily flyer digests
+
+- `DB_DSN` required: planner uses session advisory lock and explicit transactions in `FlyerDigestRepository`; never restore individual recipient pushes as a fallback.
+- Reuse existing job kinds and JSON payloads; daily idempotency key survives inbox deletion. Do not delete current-day delivery jobs.
+- Reserve inbox + push attempt atomically; ambiguous delivery retries must not resend. Cover rollover of unattempted digests and batch sizes smaller than publication count.
+- Public target `created_at` is publication time: never replace it with source upload time or `updated_at` for sorting/badges.

@@ -98,7 +98,7 @@ L'estrazione salva subito le bozze di ogni chunk riuscito. In caso di errore, `e
 | `POST` | `/push/native/subscribe` | Autenticato | Registra token FCM. |
 | `POST` | `/ops/cron/notifications` | Ops secret | Drena i job di notifica. |
 
-La conferma di un volantino accoda un job idempotente `flyer_published` e risponde senza attendere consegne. Se `valid_from` è futura, il job viene eseguito alle 10:00 `Europe/Rome` di quel giorno; senza data, viene eseguito subito. Il worker ricontrolla che il volantino sia ancora pubblico e valido, poi materializza job figli per tutti gli admin, per il manager della sede pubblicata e per i customer la cui area Comune+raggio include la filiale, crea lo storico in `app_notifications`, invia Web Push/FCM solo con notifiche account abilitate e collega il tap a `/volantini?supermarket_id=<UUID-sede>`.
+La conferma accoda eventi idempotenti. Dalle 10:00 `Europe/Rome`, il worker li raggruppa in un solo riepilogo al giorno per destinatario; se manca un riepilogo di oggi, è possibile un primo invio dopo le 10. Le novità successive attendono il giorno seguente. Il tipo resta `flyer_published`; `data` contiene `aggregation_key`, `flyer_ids`, `supermarket_ids`, `kind` e `url: "/volantini"`. Nessuna colonna nuova; `DB_DSN` è obbligatorio per coordinamento e transazioni. Notifiche singole storiche mantengono il proprio deep link. Vedere [flyer-notifications.md](flyer-notifications.md) per eligibility, retry e compatibilità.
 
 ## Altri endpoint
 

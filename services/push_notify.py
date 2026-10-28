@@ -493,3 +493,23 @@ def _flyer_notification_data(
         "products_count": products_count,
         "url": _flyer_published_url(supermarket_id=supermarket_id),
     }
+
+
+def deliver_flyer_digest(sb: object, delivery: dict, provider: FcmAccessTokenProvider) -> None:
+    """Inbox and daily reservation have already committed atomically."""
+    if delivery["enabled"]:
+        _send_push_to_user(
+            sb, user_id=delivery["user_id"], title=delivery["title"],
+            body=delivery["body"], data=_digest_push_data(delivery), fcm_token_provider=provider,
+        )
+
+
+_DIGEST_PUSH_BUDGET_BYTES = 3000
+
+
+def _digest_push_data(delivery: dict) -> dict:
+    """FCM has a 4 KiB message limit; full membership stays in the inbox."""
+    data = delivery["data"]
+    if len(json.dumps(delivery, ensure_ascii=False).encode()) <= _DIGEST_PUSH_BUDGET_BYTES:
+        return data
+    return {key: data[key] for key in ("kind", "aggregation_key", "url", "flyer_id") if key in data}

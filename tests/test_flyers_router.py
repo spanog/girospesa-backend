@@ -1754,14 +1754,14 @@ def test_public_flyer_representation_hides_storage_url():
     assert _flyers_module._public_flyer_representation(flyer) == {"id": "flyer-1"}
 
 
-def test_public_flyer_start_sort_key_prioritizes_most_recent_start():
+def test_public_flyer_publication_sort_key_prioritizes_publication_over_validity():
     flyers = [
         {"id": "undated", "valid_from": None},
-        {"id": "older", "valid_from": "2026-08-10"},
-        {"id": "newer", "valid_from": "2026-08-20"},
+        {"id": "older", "valid_from": "2026-08-20", "created_at": "2026-08-10T10:00:00Z"},
+        {"id": "newer", "valid_from": "2026-08-10", "created_at": "2026-08-20T10:00:00Z"},
     ]
 
-    assert [flyer["id"] for flyer in sorted(flyers, key=_flyers_module._public_flyer_start_sort_key)] == [
+    assert [flyer["id"] for flyer in sorted(flyers, key=_flyers_module._public_flyer_publication_sort_key)] == [
         "newer",
         "older",
         "undated",
