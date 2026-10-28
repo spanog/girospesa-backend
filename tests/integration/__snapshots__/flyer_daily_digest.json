@@ -1,0 +1,18 @@
+{
+  "body": "Novit\u00e0 da Supermercato UAT.",
+  "data": {
+    "aggregation_key": "<daily-key>",
+    "flyer_id": "<uuid>",
+    "flyer_ids": [
+      "<uuid>",
+      "<uuid>"
+    ],
+    "kind": "flyer_published",
+    "supermarket_ids": [
+      "<uuid>"
+    ],
+    "url": "/volantini"
+  },
+  "kind": "flyer_published",
+  "title": "Nuovi volantini nella tua zona"
+}

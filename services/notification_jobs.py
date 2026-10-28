@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo
 from core.config import settings
 from core.database import get_postgres_cursor, get_supabase, has_direct_postgres
 from core.supabase_client import create_supabase_client
-from services.push_notify import FcmAccessTokenProvider, deliver_public_flyer_published_to_recipient
+from services.push_notify import FcmAccessTokenProvider, deliver_public_flyer_published_to_recipient, deliver_flyer_digest
+from services.repositories.flyer_digest_repository import FlyerDigestRepository
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,7 @@ def enqueue_flyer_published(
         kind=JOB_FLYER_PUBLISHED,
         idempotency_key=f"flyer-published:{flyer_id}",
         payload={
-            "flyer_id": flyer_id,
-            "supermarket_id": supermarket_id,
+            "flyer_id": flyer_id, "supermarket_id": supermarket_id,
             "supermarket_name": supermarket_name,
             "products_count": products_count,
         },
@@ -117,13 +117,12 @@ def _flyer_notification_available_at(
     now: datetime | None = None,
 ) -> datetime:
     current = (now or datetime.now(UTC)).astimezone(UTC)
-    if valid_from is None:
-        return current
-    start = date.fromisoformat(valid_from)
+    start = date.fromisoformat(valid_from) if valid_from else current.astimezone(_ROME_TZ).date()
     scheduled = datetime.combine(
         start, _FLYER_NOTIFICATION_TIME, _ROME_TZ
     ).astimezone(UTC)
-    return max(current, scheduled)
+    today_at_ten = datetime.combine(current.astimezone(_ROME_TZ).date(), _FLYER_NOTIFICATION_TIME, _ROME_TZ)
+    return max(current, scheduled, today_at_ten.astimezone(UTC))
 
 
 class NotificationJobWorker:
@@ -132,17 +131,27 @@ class NotificationJobWorker:
         sb: object | None = None,
         client_factory: Callable[[], object] | None = None,
         fcm_token_provider: FcmAccessTokenProvider | None = None,
+        digest_repository: FlyerDigestRepository | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._digest_repository = digest_repository or FlyerDigestRepository()
         self._sb = sb
         self._client_factory = client_factory or _new_service_client
         self._fcm_token_provider = fcm_token_provider or FcmAccessTokenProvider()
 
     def run_pending(self, limit: int | None = None) -> dict[str, int]:
         batch_limit = limit or settings.notification_delivery_batch_size
-        self._release_stale_jobs()
-        parents = self._claim_jobs(JOB_FLYER_PUBLISHED, batch_limit)
-        parent_results = [self._run_job(job, self._supabase()) for job in parents]
-        recipients = self._claim_jobs(JOB_FLYER_PUBLISHED_RECIPIENT, batch_limit)
+        with self._digest_repository.cycle() as cursor:
+            if cursor is None:
+                return {"claimed": 0, "processed": 0, "failed": 0}
+            self._release_stale_jobs()
+            parent_results = self._drain_parents(batch_limit)
+            now = self._clock()
+            self._digest_repository.prepare(cursor, now)
+            recipients = self._claim_jobs(JOB_FLYER_PUBLISHED_RECIPIENT, batch_limit)
+            for job in recipients:
+                job["delivery"] = self._digest_repository.reserve_delivery(cursor, job, now)
         recipient_results = self._run_recipients(recipients)
         results = parent_results + recipient_results
         return {
@@ -150,6 +159,14 @@ class NotificationJobWorker:
             "processed": sum(results),
             "failed": len(results) - sum(results),
         }
+
+    def _drain_parents(self, batch_limit: int) -> list[bool]:
+        results: list[bool] = []
+        while True:
+            jobs = self._claim_jobs(JOB_FLYER_PUBLISHED, batch_limit)
+            results.extend(self._run_job(job, self._supabase()) for job in jobs)
+            if len(jobs) < batch_limit:
+                return results
 
     def _run_recipients(self, jobs: list[dict[str, Any]]) -> list[bool]:
         if not jobs:
@@ -173,6 +190,10 @@ class NotificationJobWorker:
 
     def _dispatch(self, job: dict[str, Any], sb: object) -> None:
         payload = job.get("payload") or {}
+        if "flyers" in payload:
+            if job.get("delivery"):
+                deliver_flyer_digest(sb, job["delivery"], self._fcm_token_provider)
+            return
         if not _flyer_is_notification_eligible(sb, str(payload.get("flyer_id", ""))):
             return
         if job.get("kind") == JOB_FLYER_PUBLISHED:
@@ -206,7 +227,7 @@ class NotificationJobWorker:
     def _claim_jobs(self, kind: str, limit: int) -> list[dict[str, Any]]:
         if has_direct_postgres():
             with get_postgres_cursor() as cursor:
-                cursor.execute(_CLAIM_SQL, {"kind": kind, "limit": max(1, limit)})
+                cursor.execute(_CLAIM_SQL, {"kind": kind, "limit": max(1, limit), "now": self._clock()})
                 return [dict(row) for row in cursor.fetchall()]
         return self._claim_jobs_via_supabase(kind, limit)
 
@@ -302,7 +323,8 @@ WITH next_jobs AS (
   FROM public.notification_jobs
   WHERE kind = %(kind)s
     AND status IN ('pending', 'failed')
-    AND available_at <= NOW()
+    AND (kind <> 'flyer_published_recipient' OR payload ? 'flyers')
+    AND available_at <= %(now)s
     AND attempts < max_attempts
   ORDER BY created_at ASC
   FOR UPDATE SKIP LOCKED

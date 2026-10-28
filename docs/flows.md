@@ -82,8 +82,11 @@ Frontend
                          │
                          ▼
   Worker notifiche trova tutti gli admin, manager della sede e customer nel raggio del supermercato
-    Per ogni destinatario, in job figlio parallelo:
-      → insert app_notifications.flyer_published
+    Dalle 10 Europe/Rome, raggruppa tutti gli eventi pronti per destinatario
+    Un solo riepilogo giornaliero persistente; eventi successivi al giorno seguente
+    Per ogni riepilogo, in job figlio parallelo:
+      → insert app_notifications.flyer_published + riserva atomica invio
+      → tap apre /volantini con tutte le sedi
       → se notifications_enabled=true, fetch push_subscriptions
       → per ogni subscription registrata:
             send_push_notification (VAPID, pywebpush)
