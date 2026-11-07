@@ -9,7 +9,7 @@
 
 ## Testing Guardrails
 
-- Startup: mantenere le letture con I/O sincrono fuori dall’event loop ASGI; usare handler `def` o offload esplicito nelle dipendenze async. Non convertire SSE in handler sincrono. Coprire richieste indipendenti mentre una query è sospesa in `tests/test_startup_read_concurrency.py`, senza dipendere da soglie di latenza.
+- Startup: mantenere le letture con I/O sincrono fuori dall’event loop ASGI; usare handler `def` o offload esplicito nelle dipendenze async. Non convertire SSE in handler sincrono. Coprire richieste indipendenti mentre una query è sospesa in `tests/test_startup_read_concurrency.py`, senza dipendere da soglie di latenza. PostgREST deve usare il pool HTTP/1.1 di `WorkerPostgrestClient`, con TLS e timeout originali: coprire entrambe le forme di chiave Supabase, letture concorrenti e recupero dopo connessione interrotta in `tests/test_postgrest_transport.py`.
 - Checkout Postgres: conservare `ThreadedConnectionPool` dietro il limite di capacità; testare saturazione, inizializzazione concorrente e rilascio dopo errore in `tests/test_postgres_pool.py`. Non ripristinare `SimpleConnectionPool` o aumentare il limite per nascondere checkout non limitati.
 - Membri lista: autorizzare prima della query batch di profili/email; nessuna chiamata Auth per singolo membro nel percorso `DB_DSN`. Preservare payload e fallback Supabase.
 

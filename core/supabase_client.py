@@ -5,6 +5,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from httpx import Timeout
+from postgrest.constants import DEFAULT_POSTGREST_CLIENT_TIMEOUT
+from core.postgrest_client import WorkerPostgrestClient
+
 try:
     from supabase import Client
     from supabase._sync.client import SyncClient
@@ -23,6 +27,20 @@ def is_opaque_supabase_key(value: str) -> bool:
 
 class CompatibleSyncClient(SyncClient):
     """Sync client that accepts both legacy JWT and modern opaque API keys."""
+
+    @staticmethod
+    def _init_postgrest_client(
+        rest_url: str,
+        headers: dict[str, str],
+        schema: str,
+        timeout: int | float | Timeout = DEFAULT_POSTGREST_CLIENT_TIMEOUT,
+        verify: bool = True,
+        proxy: str | None = None,
+    ) -> WorkerPostgrestClient:
+        return WorkerPostgrestClient(
+            rest_url, headers=headers, schema=schema, timeout=timeout,
+            verify=verify, proxy=proxy,
+        )
 
     def __init__(
         self,
