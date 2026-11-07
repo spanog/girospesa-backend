@@ -405,6 +405,7 @@ async def test_list_members_flattens_profile_and_email_fields():
     with (
         patch.object(_lists_module, "get_supabase", return_value=sb_mock),
         patch.object(_lists_module, "_verify_member", return_value=None),
+        patch.object(_lists_module, "has_direct_postgres", return_value=False),
     ):
         resp = await _get_req(f"/lists/{_LIST_ID}/members", dep_overrides=_deps())
 
@@ -876,3 +877,32 @@ async def test_owner_cannot_leave_own_list_endpoint():
         )
 
     assert resp.status_code == 400
+
+
+async def test_list_members_uses_batch_details_after_authorization():
+    rows = [{"id": "member-row-1", "list_id": _LIST_ID, "email": "mario@example.com"}]
+    with (
+        patch.object(_lists_module, "get_supabase", return_value=MagicMock()) as supabase,
+        patch.object(_lists_module, "_verify_member") as authorize,
+        patch.object(_lists_module, "has_direct_postgres", return_value=True),
+        patch.object(_lists_module.repo, "list_member_details", return_value=rows) as details,
+    ):
+        response = await _get_req(f"/lists/{_LIST_ID}/members", dep_overrides=_deps())
+    assert response.status_code == 200
+    assert response.json() == rows
+    authorize.assert_called_once_with(supabase.return_value, _LIST_ID, _USER_ID)
+    details.assert_called_once_with(_LIST_ID)
+    supabase.return_value.auth.admin.get_user_by_id.assert_not_called()
+
+
+async def test_list_members_denial_never_reads_batch_details():
+    from fastapi import HTTPException
+    with (
+        patch.object(_lists_module, "get_supabase", return_value=MagicMock()),
+        patch.object(_lists_module, "_verify_member", side_effect=HTTPException(403, "Not a member")),
+        patch.object(_lists_module, "has_direct_postgres", return_value=True),
+        patch.object(_lists_module.repo, "list_member_details") as details,
+    ):
+        response = await _get_req(f"/lists/{_LIST_ID}/members", dep_overrides=_deps())
+    assert response.status_code == 403
+    details.assert_not_called()

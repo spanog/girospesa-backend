@@ -137,3 +137,23 @@ def test_resolved_list_id_falls_back_to_owner_when_active_selection_invalid(monk
     resolved = lists_repository.resolved_list_id_for_user(object(), "user-1")
 
     assert resolved == "list-owner"
+
+
+def test_member_details_uses_one_list_scoped_join(monkeypatch):
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock
+    from uuid import UUID
+    member_id = UUID("11111111-1111-1111-1111-111111111111")
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [{"id": member_id, "display_name": "Mario", "email": "mario@example.com", "avatar_url": None}]
+    @contextmanager
+    def connection():
+        yield cursor
+    monkeypatch.setattr(lists_repository, "get_postgres_cursor", connection)
+    result = lists_repository.list_member_details("list-1")
+    assert result == [{"id": str(member_id), "display_name": "Mario", "email": "mario@example.com", "avatar_url": None}]
+    cursor.execute.assert_called_once()
+    sql, parameters = cursor.execute.call_args.args
+    assert "WHERE lm.list_id = %s" in sql
+    assert "LEFT JOIN auth.users" in sql
+    assert parameters == ("list-1",)

@@ -179,7 +179,7 @@ async def test_with_active_offers_uses_authenticated_profile_radius():
                 ],
             ),
     ):
-        result = await _sm_module.list_supermarkets(
+        result = _sm_module.list_supermarkets(
             with_active_offers=True,
             user_id="user-1",
         )
@@ -195,7 +195,7 @@ async def test_authenticated_supermarkets_without_location_are_not_global():
         patch("api.routers.supermarkets.get_supabase", return_value=sb),
         patch("api.routers.supermarkets.request_location", return_value=None),
     ):
-        result = await _sm_module.list_supermarkets(user_id="manager-1")
+        result = _sm_module.list_supermarkets(user_id="manager-1")
 
     assert result == []
     sb.table.assert_not_called()
@@ -251,7 +251,7 @@ async def test_admin_supermarkets_use_authenticated_profile_distance():
             return_value={"sm-near": 1.1},
         ),
     ):
-        result = await _sm_module.list_supermarkets(
+        result = _sm_module.list_supermarkets(
             with_active_offers=False,
             user_id="admin-1",
             request=MagicMock(),

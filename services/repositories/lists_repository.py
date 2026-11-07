@@ -911,3 +911,20 @@ def impacted_member_user_ids_for_list(list_id: str) -> list[str]:
         )
         rows = cursor.fetchall()
     return [str(row["user_id"]) for row in rows]
+
+
+def list_member_details(list_id: str) -> list[dict]:
+    """Fetch authorized-list members, profiles and emails in one round trip."""
+    with get_postgres_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT lm.*, up.display_name, up.avatar_url, au.email
+            FROM public.list_members lm
+            LEFT JOIN public.user_profiles up ON up.id = lm.user_id
+            LEFT JOIN auth.users au ON au.id = lm.user_id
+            WHERE lm.list_id = %s
+            """,
+            (list_id,),
+        )
+        rows = cursor.fetchall()
+    return [_normalize_db_row(dict(row)) for row in rows]

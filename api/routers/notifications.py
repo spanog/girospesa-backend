@@ -22,7 +22,7 @@ class DeleteManyNotificationsBody(BaseModel):
 
 
 @router.get("")
-async def list_notifications(
+def list_notifications(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> list[dict]:
     return repo.list_notifications(user_id)

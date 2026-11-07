@@ -131,3 +131,7 @@ Discovery benchmarks cover browsing, literal name matches, and linguistic matche
 ## Inferenza sul Mac con dati in produzione
 
 Il worker locale può estrarre tramite Ollama e inviare bozze, ritagli e avanzamento alle API autenticate di produzione. Gli script della macchina risiedono in `local_extraction/`, esclusa da Git; il backend conserva controllo accessi, checkpoint atomici e conferma editoriale. Configurazione, attivazione della skill e ripresa sono descritte in [docs/local-production-extraction.md](docs/local-production-extraction.md).
+
+## Caricamento delle schermate
+
+Le letture iniziali di profilo, offerte, volantini, lista, membri e notifiche eseguono l’I/O sincrono nei worker del server, così una query lenta non blocca le altre richieste. Il pool PostgreSQL conserva il limite di cinque connessioni e attende uno slot libero quando è occupato. Con `DB_DSN`, i dati dei partecipanti vengono recuperati con una singola query, senza chiamate Auth separate per ogni email. Dettagli: [architettura](docs/architecture.md#concorrenza-delle-richieste).

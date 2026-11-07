@@ -312,7 +312,7 @@ async def test_offer_discovery_reuses_one_nearby_lookup_for_page_and_stores():
             return_value=[{"id": "sup-1", "distance_km": 1.2}],
         ) as active_stores,
     ):
-        result = await _offers_module.discover_public_offers(
+        result = _offers_module.discover_public_offers(
             request=request,
             user_id="user-1",
         )
