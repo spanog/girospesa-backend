@@ -200,7 +200,7 @@ def _request_distances(
 
 
 @router.get("")
-async def list_public_offers(
+def list_public_offers(
     q: str | None = Query(None),
     category: str | None = Query(None),
     subcategory: str | None = Query(None),
@@ -224,7 +224,7 @@ async def list_public_offers(
 
 
 @router.get("/discovery")
-async def discover_public_offers(
+def discover_public_offers(
     q: str | None = Query(None),
     category: str | None = Query(None),
     subcategory: str | None = Query(None),

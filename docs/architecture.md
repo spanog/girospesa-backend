@@ -90,3 +90,11 @@ girospesa-backend/
 ## Coordinate immagini
 
 `BoundingBox` è un value object privo di dipendenze infrastrutturali: valida coordinate normalizzate e rende espliciti assi X/Y. La normalizzazione produce array X/Y versione 2. Il confine di persistenza interpreta anche le righe versione 1 senza modificarle. Ritaglio e lettore condividono la convenzione X/Y; il lettore riceve sempre coordinate canoniche dall’API.
+
+## Concorrenza delle richieste
+
+Le route iniziali che usano client Supabase e PostgreSQL sincroni sono handler `def`: FastAPI li esegue nel proprio thread pool. Le dipendenze auth asincrone spostano verifica JWT/JWKS e caricamento del profilo nel thread pool, preservando gli stessi controlli. Streaming SSE rimane asincrono.
+
+`PostgresConnectionPool` riceve una factory e una capacità esplicite. Inizializza un solo `ThreadedConnectionPool` sotto lock e limita i checkout con un semaforo: un worker attende capacità anziché ricevere un errore di esaurimento del pool. Connessioni e slot vengono restituiti anche quando una query fallisce. Il limite rimane cinque connessioni per processo.
+
+L’endpoint membri verifica prima l’appartenenza alla lista. Con accesso PostgreSQL diretto, il repository unisce `list_members`, `user_profiles` e `auth.users` in un’unica query limitata alla lista autorizzata. Il fallback Supabase resta disponibile per ambienti senza `DB_DSN`; nessun dato auth viene esposto a utenti esterni alla lista.

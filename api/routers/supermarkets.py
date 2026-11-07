@@ -74,7 +74,7 @@ def _public_supermarket(supermarket: dict) -> dict:
 
 
 @router.get("")
-async def list_supermarkets(
+def list_supermarkets(
     with_active_offers: bool = Query(False),
     request: Request = None,
     user_id: str | None = Depends(get_optional_user_id),

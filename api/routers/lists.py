@@ -882,7 +882,7 @@ def _raise_invalid_invite_status(invite: dict) -> None:
 
 
 @router.get("")
-async def list_lists(user_id: Annotated[str, Depends(get_current_user_id)]) -> list[dict]:
+def list_lists(user_id: Annotated[str, Depends(get_current_user_id)]) -> list[dict]:
     sb = get_supabase()
     resolved_list_id = _resolve_list_id_for_user(sb, user_id)
     if resolved_list_id is None:
@@ -939,7 +939,7 @@ async def select_active_list(
 
 
 @router.get("/active")
-async def get_active_list(user_id: Annotated[str, Depends(get_current_user_id)]) -> dict:
+def get_active_list(user_id: Annotated[str, Depends(get_current_user_id)]) -> dict:
     """Return the single visible shopping list. Creates owner list if missing."""
     sb = get_supabase()
     resolved_list_id = _resolve_list_id_for_user(sb, user_id)
@@ -959,7 +959,7 @@ async def get_active_list(user_id: Annotated[str, Depends(get_current_user_id)])
 
 
 @router.get("/invites/pending")
-async def list_pending_invites(
+def list_pending_invites(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> list[dict]:
     sb = get_supabase()
@@ -1512,12 +1512,14 @@ async def revoke_invite(
 
 
 @router.get("/{list_id}/members")
-async def list_members(
+def list_members(
     list_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> list[dict]:
     sb = get_supabase()
     _verify_member(sb, list_id, user_id)
+    if has_direct_postgres():
+        return repo.list_member_details(list_id)
     members = (
         sb.table("list_members")
         .select("*")
@@ -1549,7 +1551,7 @@ async def list_members(
 
 
 @router.get("/{list_id}/deal-freshness")
-async def get_deal_freshness(
+def get_deal_freshness(
     list_id: str,
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> list[dict]:

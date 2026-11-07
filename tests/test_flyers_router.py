@@ -410,7 +410,7 @@ async def test_flyer_discovery_reuses_public_location_context_once():
         patch("api.routers.flyers._visible_public_flyers", return_value=[{"id": "flyer-1"}]),
         patch("api.routers.flyers._nearby_supermarket_rows", return_value=[{"id": "sup-1"}]),
     ):
-        result = await _flyers_module.discover_public_flyers(
+        result = _flyers_module.discover_public_flyers(
             request=request,
             user_id="user-1",
         )

@@ -61,7 +61,7 @@ def test_get_postgres_cursor_reuses_pool(monkeypatch):
     pool = MagicMock()
     pool.getconn.return_value = connection
     pool_factory = MagicMock(return_value=pool)
-    monkeypatch.setattr(database.psycopg2.pool, "SimpleConnectionPool", pool_factory)
+    monkeypatch.setattr(database.psycopg2.pool, "ThreadedConnectionPool", pool_factory)
 
     with database.get_postgres_cursor() as first_cursor:
         assert first_cursor is cursor

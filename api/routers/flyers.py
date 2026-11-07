@@ -1099,7 +1099,7 @@ async def list_flyer_targets(
 
 
 @router.get("")
-async def list_flyers(
+def list_flyers(
     profile: dict = Depends(require_admin_or_manager),
 ) -> list[dict]:
     """Return flyers for admin/manager. Managers see only their supermarket's flyers."""
@@ -1135,7 +1135,7 @@ async def list_flyers(
 
 
 @router.get("/public")
-async def list_public_flyers(
+def list_public_flyers(
     user_id: str | None = Depends(get_optional_user_id),
     request: Request = None,
 ) -> list[dict]:
@@ -1146,7 +1146,7 @@ async def list_public_flyers(
 
 
 @router.get("/discovery")
-async def discover_public_flyers(
+def discover_public_flyers(
     user_id: str | None = Depends(get_optional_user_id),
     request: Request = None,
 ) -> dict:

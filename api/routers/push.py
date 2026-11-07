@@ -68,7 +68,7 @@ async def subscribe(
 
 
 @router.post("/native/subscribe", status_code=201)
-async def subscribe_native(
+def subscribe_native(
     body: NativeSubscribeBody,
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict:

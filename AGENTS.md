@@ -9,6 +9,10 @@
 
 ## Testing Guardrails
 
+- Startup: mantenere le letture con I/O sincrono fuori dall’event loop ASGI; usare handler `def` o offload esplicito nelle dipendenze async. Non convertire SSE in handler sincrono. Coprire richieste indipendenti mentre una query è sospesa in `tests/test_startup_read_concurrency.py`, senza dipendere da soglie di latenza.
+- Checkout Postgres: conservare `ThreadedConnectionPool` dietro il limite di capacità; testare saturazione, inizializzazione concorrente e rilascio dopo errore in `tests/test_postgres_pool.py`. Non ripristinare `SimpleConnectionPool` o aumentare il limite per nascondere checkout non limitati.
+- Membri lista: autorizzare prima della query batch di profili/email; nessuna chiamata Auth per singolo membro nel percorso `DB_DSN`. Preservare payload e fallback Supabase.
+
 - Every backend change must update the closest test layer first: unit/service for pure logic, integration for real DB/API contracts.
 - Stable JSON responses touched by the change should gain or update contract snapshots under `tests/__snapshots__/` or `tests/integration/__snapshots__/`.
 - Normalize unstable values before snapshot comparison: UUID, token, timestamp, variable URL host/query.

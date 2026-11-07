@@ -50,7 +50,7 @@ def _load_profile(sb, user_id: str) -> dict | None:
 
 
 @router.get("/me")
-async def get_profile(user_id: Annotated[str, Depends(get_current_user_id)]) -> dict:
+def get_profile(user_id: Annotated[str, Depends(get_current_user_id)]) -> dict:
     profile = _load_profile(get_supabase(), user_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")

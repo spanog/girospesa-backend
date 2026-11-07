@@ -8,6 +8,7 @@ from urllib.request import urlopen
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
+from starlette.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
@@ -86,7 +87,7 @@ async def get_current_user(
     """Dependency: resolves to the decoded Supabase bearer JWT payload."""
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    return _decode_token(credentials.credentials)
+    return await run_in_threadpool(_decode_token, credentials.credentials)
 
 
 async def get_current_access_token(
@@ -114,7 +115,7 @@ async def get_optional_user_id(
     if credentials is None:
         return None
     try:
-        payload = _decode_token(credentials.credentials)
+        payload = await run_in_threadpool(_decode_token, credentials.credentials)
         return payload.get("sub")
     except HTTPException:
         return None
@@ -127,7 +128,7 @@ async def get_optional_user(
     if credentials is None:
         return None
     try:
-        return _decode_token(credentials.credentials)
+        return await run_in_threadpool(_decode_token, credentials.credentials)
     except HTTPException:
         return None
 
@@ -144,7 +145,11 @@ async def require_admin(
 async def get_current_user_profile(
     user_id: Annotated[str, Depends(get_current_user_id)],
 ) -> dict:
-    """Fetch user profile plus managed supermarket assignments."""
+    """Fetch profile without blocking other clients while database I/O waits."""
+    return await run_in_threadpool(_load_current_user_profile, user_id)
+
+
+def _load_current_user_profile(user_id: str) -> dict:
     from core.database import get_supabase
 
     sb = get_supabase()
@@ -161,21 +166,16 @@ async def get_current_user_profile(
             detail="User profile not found",
         )
     profile = result.data
-    manager_ids_result = (
-        sb.table("manager_supermarkets")
-        .select("supermarket_id")
-        .eq("user_id", user_id)
-        .execute()
+    profile["managed_supermarket_ids"] = _load_profile_manager_ids(
+        sb, user_id, profile.get("managed_supermarket_id"),
     )
-    manager_ids = [
-        row["supermarket_id"]
-        for row in (manager_ids_result.data or [])
-        if row.get("supermarket_id")
-    ]
-    if not manager_ids and profile.get("managed_supermarket_id"):
-        manager_ids = [profile["managed_supermarket_id"]]
-    profile["managed_supermarket_ids"] = manager_ids
     return profile
+
+
+def _load_profile_manager_ids(sb, user_id: str, legacy_id: str | None) -> list[str]:
+    response = sb.table("manager_supermarkets").select("supermarket_id").eq("user_id", user_id).execute()
+    ids = [row["supermarket_id"] for row in (response.data or []) if row.get("supermarket_id")]
+    return ids or ([legacy_id] if legacy_id else [])
 
 
 _PRIVILEGED_ROLES = frozenset({"admin", "supermarket_manager"})

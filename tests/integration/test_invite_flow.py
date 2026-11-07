@@ -173,3 +173,28 @@ class TestInviteFlowIntegration:
                 "url": "/lista",
             },
         }
+
+
+async def test_concurrent_member_reads_preserve_profile_email_and_access(
+    supabase_client, users, owner_list, current_user,
+):
+    import asyncio
+    from unittest.mock import patch
+    from api.routers import lists
+    supabase_client.table("user_profiles").update({"display_name": "Owner", "avatar_url": "https://example.com/avatar.webp"}).eq("id", users["owner"]["id"]).execute()
+    current_user["id"] = users["owner"]["id"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        with patch.object(lists, "has_direct_postgres", return_value=True):
+            responses = await asyncio.gather(*[
+                client.get(f"/lists/{owner_list['id']}/members") for _ in range(8)
+            ])
+        for response in responses:
+            assert response.status_code == 200
+            member = response.json()[0]
+            assert member["user_id"] == users["owner"]["id"]
+            assert member["email"] == users["owner"]["email"]
+            assert member["display_name"] == "Owner"
+            assert member["avatar_url"] == "https://example.com/avatar.webp"
+        current_user["id"] = users["member"]["id"]
+        denied = await client.get(f"/lists/{owner_list['id']}/members")
+        assert denied.status_code == 403
