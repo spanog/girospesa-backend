@@ -135,3 +135,5 @@ Il worker locale può estrarre tramite Ollama e inviare bozze, ritagli e avanzam
 ## Caricamento delle schermate
 
 Le letture iniziali di profilo, offerte, volantini, lista, membri e notifiche eseguono l’I/O sincrono nei worker del server, così una query lenta non blocca le altre richieste. Il pool PostgreSQL conserva il limite di cinque connessioni e attende uno slot libero quando è occupato. Con `DB_DSN`, i dati dei partecipanti vengono recuperati con una singola query, senza chiamate Auth separate per ogni email. Dettagli: [architettura](docs/architecture.md#concorrenza-delle-richieste).
+
+Il client PostgREST usa connessioni HTTP/1.1 riutilizzabili per le letture concorrenti nei worker. Una connessione interrotta viene scartata dal pool senza propagare lo stato di errore degli stream HTTP/2 alle altre richieste. Autenticazione, TLS e timeout restano invariati.
