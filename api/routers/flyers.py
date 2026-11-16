@@ -238,20 +238,27 @@ def _nearby_supermarket_rows(sb, distances: dict[str, float | None]) -> list[dic
     return sorted(visible, key=lambda row: positions[row["id"]])
 
 
+def _flyer_validity_start_sort_key(flyer: dict) -> tuple[int, float]:
+    valid_from = flyer.get("valid_from")
+    # Undated flyers follow dated flyers and use publication to break ties.
+    start = -date.fromisoformat(str(valid_from)).toordinal() if valid_from else 0
+    return start, _public_flyer_publication_sort_key(flyer)
+
+
 def _order_flyer_supermarkets(supermarkets: list[dict], flyers: list[dict]) -> list[dict]:
-    latest_by_supermarket: dict[str, float] = {}
+    latest_by_supermarket: dict[str, tuple[int, float]] = {}
     for flyer in flyers:
         supermarket_id = flyer["supermarket_id"]
-        publication = _public_flyer_publication_sort_key(flyer)
+        validity = _flyer_validity_start_sort_key(flyer)
         latest_by_supermarket[supermarket_id] = min(
-            latest_by_supermarket.get(supermarket_id, float("inf")), publication
+            latest_by_supermarket.get(supermarket_id, validity), validity
         )
-    # Stable sort keeps the area's geographic order for equal publication dates.
+    # Stable sort keeps the area's geographic order when both dates match.
     return sorted(
         supermarkets,
         key=lambda row: (
             row["id"] not in latest_by_supermarket,
-            latest_by_supermarket.get(row["id"], float("inf")),
+            latest_by_supermarket.get(row["id"], (0, float("inf"))),
         ),
     )
 

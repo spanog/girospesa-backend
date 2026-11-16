@@ -412,17 +412,19 @@ def _discovery_publications():
         flyer("future", "empty", 30, "9999-01-01"),
         flyer("latest", "far", 28, "2026-10-20"),
         flyer("nearby", "near", 27, "2026-10-26"),
-        flyer("same-time", "tied", 27),
-        flyer("older", "far", 25),
+        flyer("same-time", "tied", 27, "2026-10-26"),
+        flyer("older", "far", 25, "2026-10-26"),
+        flyer("middle-date", "middle", 30, "2026-10-25"),
+        flyer("undated", "undated", 29),
     ]
 
 
 @pytest.mark.asyncio
-async def test_flyer_discovery_orders_visible_supermarkets_by_latest_publication(request):
-    distances = {"empty": 0, "near": 0, "tied": 2, "far": 5}
+async def test_flyer_discovery_orders_visible_supermarkets_by_latest_validity_start(request):
+    distances = {"empty": 0, "near": 0, "middle": 1, "far": 1.5, "tied": 2, "undated": 6}
     sb = MagicMock()
     sb.table.return_value.select.return_value.in_.return_value.execute.return_value.data = [
-        {"id": store} for store in ["far", "tied", "near", "empty", "outside"]
+        {"id": store} for store in ["far", "tied", "near", "empty", "outside", "undated", "middle"]
     ]
     flyers = _discovery_publications()
     confirmed = {flyer["id"]: 1 for flyer in flyers if flyer["id"] != "unconfirmed"}
@@ -435,8 +437,12 @@ async def test_flyer_discovery_orders_visible_supermarkets_by_latest_publication
     context.assert_called_once()
     assert response.status_code == 200
     payload = response.json()
-    assert [row["id"] for row in payload["supermarkets"]] == ["far", "near", "tied", "empty"]
-    assert [flyer["id"] for flyer in payload["flyers"]] == ["nearby", "same-time", "latest", "older"]
+    assert [row["id"] for row in payload["supermarkets"]] == [
+        "near", "tied", "far", "middle", "undated", "empty",
+    ]
+    assert [flyer["id"] for flyer in payload["flyers"]] == [
+        "nearby", "middle-date", "latest", "older", "same-time", "undated",
+    ]
     assert_matches_json_snapshot(request, "flyer_discovery", payload)
 
 

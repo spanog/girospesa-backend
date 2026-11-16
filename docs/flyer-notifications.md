@@ -40,7 +40,7 @@ open the full flyer page. Ship the compatible frontend before enabling this back
 
 `GET /flyers/public` and `/flyers/discovery` retain their response shape. Within each
 supermarket, `created_at` descending represents publication order; ID breaks ties.
-In `/flyers/discovery`, the `supermarkets` array is sorted by each branch’s newest current public flyer. Geographic order breaks ties, and branches without current public flyers follow. Published target rows are created at publication time;
+In `/flyers/discovery`, the `supermarkets` array ranks branches by the latest validity start date among their current public flyers. Publication time and geographic order break ties. Branches with only undated flyers follow branches with dates and precede branches without flyers. Published target rows are created at publication time;
 editing offers or validity does not reset that timestamp.
 
 ## The “Nuovo” badge
