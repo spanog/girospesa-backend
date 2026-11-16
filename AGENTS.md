@@ -122,4 +122,4 @@
 - `DB_DSN` required: planner uses session advisory lock and explicit transactions in `FlyerDigestRepository`; never restore individual recipient pushes as a fallback.
 - Reuse existing job kinds and JSON payloads; daily idempotency key survives inbox deletion. Do not delete current-day delivery jobs.
 - Reserve inbox + push attempt atomically; ambiguous delivery retries must not resend. Cover rollover of unattempted digests and batch sizes smaller than publication count.
-- Public target `created_at` is publication time: never replace it with source upload time or `updated_at` for sorting/badges.
+- Public target `created_at` is publication time: never replace it with source upload time or `updated_at` for sorting/badges. In `GET /flyers/discovery`, order eligible stores by their latest returned public flyer, apply the area order for ties, and put stores without flyers last. Cover the store order and out-of-area exclusions in the discovery API contract test.

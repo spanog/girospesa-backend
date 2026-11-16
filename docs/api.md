@@ -55,7 +55,7 @@ Profili, cookie guest e filiali accettano solo il codice ISTAT del Comune. Il ba
 | Metodo | Path | Accesso | Descrizione |
 | --- | --- | --- | --- |
 | `GET` | `/flyers/public` | Pubblico | Volantini pubblici correnti nell'area Comune+raggio. Per i guest richiede il cookie di località firmato; senza Comune restituisce `428 guest_location_required`. |
-| `GET` | `/flyers/discovery` | Pubblico | Volantini pubblici correnti e sedi nell'area Comune+raggio in una risposta. Per i guest richiede il cookie di località firmato. |
+| `GET` | `/flyers/discovery` | Pubblico | Volantini pubblici correnti e sedi nell'area Comune+raggio in una risposta. `supermarkets` è ordinato per la pubblicazione più recente per sede (`created_at`), con ordine geografico a parità e sedi senza volantini in fondo. Per i guest richiede il cookie di località firmato. |
 | `GET` | `/supermarkets?with_active_offers=true` | Pubblico | Sedi nell'area Comune+raggio, anche per admin e gestori. Ogni sede espone solo il proprio Comune. |
 | `GET` | `/flyers/targets` | Admin/manager | Sedi selezionabili nella gestione volantini: tutte le sedi attive per admin, solo sedi assegnate per gestore. |
 | `GET` | `/flyers` | Admin/manager | Elenco volantini in gestione. |

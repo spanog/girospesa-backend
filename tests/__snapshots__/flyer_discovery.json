@@ -1,0 +1,58 @@
+{
+  "flyers": [
+    {
+      "confirmed_count": 1,
+      "created_at": "<datetime>",
+      "id": "nearby",
+      "supermarket_id": "near",
+      "valid_from": "2026-10-26"
+    },
+    {
+      "confirmed_count": 1,
+      "created_at": "<datetime>",
+      "id": "same-time",
+      "supermarket_id": "tied",
+      "valid_from": null
+    },
+    {
+      "confirmed_count": 1,
+      "created_at": "<datetime>",
+      "id": "latest",
+      "supermarket_id": "far",
+      "valid_from": "2026-10-20"
+    },
+    {
+      "confirmed_count": 1,
+      "created_at": "<datetime>",
+      "id": "older",
+      "supermarket_id": "far",
+      "valid_from": null
+    }
+  ],
+  "supermarkets": [
+    {
+      "distance_km": 5,
+      "id": "far",
+      "municipality_name": null,
+      "municipality_province_code": null
+    },
+    {
+      "distance_km": 0,
+      "id": "near",
+      "municipality_name": null,
+      "municipality_province_code": null
+    },
+    {
+      "distance_km": 2,
+      "id": "tied",
+      "municipality_name": null,
+      "municipality_province_code": null
+    },
+    {
+      "distance_km": 0,
+      "id": "empty",
+      "municipality_name": null,
+      "municipality_province_code": null
+    }
+  ]
+}

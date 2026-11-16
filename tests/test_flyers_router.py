@@ -398,25 +398,46 @@ def test_public_flyers_filters_nearby_branches_without_exact_count():
     query.in_.assert_called_once_with("supermarket_id", ["sup-1"])
 
 
-@pytest.mark.asyncio
-async def test_flyer_discovery_reuses_public_location_context_once():
-    sb = MagicMock()
-    request = MagicMock(cookies={})
-    context = ([{"id": "flyer-1"}], {"sup-1": 1.2})
+def _discovery_publications():
+    def flyer(id, supermarket_id, day, valid_from=None):
+        return {
+            "id": id,
+            "supermarket_id": supermarket_id,
+            "created_at": f"2026-10-{day:02d}T09:00:00Z",
+            "valid_from": valid_from,
+        }
 
+    return [
+        flyer("unconfirmed", "empty", 31),
+        flyer("future", "empty", 30, "9999-01-01"),
+        flyer("latest", "far", 28, "2026-10-20"),
+        flyer("nearby", "near", 27, "2026-10-26"),
+        flyer("same-time", "tied", 27),
+        flyer("older", "far", 25),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_flyer_discovery_orders_visible_supermarkets_by_latest_publication(request):
+    distances = {"empty": 0, "near": 0, "tied": 2, "far": 5}
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.in_.return_value.execute.return_value.data = [
+        {"id": store} for store in ["far", "tied", "near", "empty", "outside"]
+    ]
+    flyers = _discovery_publications()
+    confirmed = {flyer["id"]: 1 for flyer in flyers if flyer["id"] != "unconfirmed"}
     with (
         patch("api.routers.flyers.get_supabase", return_value=sb),
-        patch("api.routers.flyers._public_flyer_context", return_value=context) as public_context,
-        patch("api.routers.flyers._visible_public_flyers", return_value=[{"id": "flyer-1"}]),
-        patch("api.routers.flyers._nearby_supermarket_rows", return_value=[{"id": "sup-1"}]),
+        patch("api.routers.flyers._public_flyer_context", return_value=(flyers, distances)) as context,
+        patch("api.routers.flyers._confirmed_count_by_flyer", return_value=confirmed),
     ):
-        result = _flyers_module.discover_public_flyers(
-            request=request,
-            user_id="user-1",
-        )
-
-    assert result == {"flyers": [{"id": "flyer-1"}], "supermarkets": [{"id": "sup-1"}]}
-    public_context.assert_called_once_with(sb, request, "user-1")
+        response = await _get("/flyers/discovery")
+    context.assert_called_once()
+    assert response.status_code == 200
+    payload = response.json()
+    assert [row["id"] for row in payload["supermarkets"]] == ["far", "near", "tied", "empty"]
+    assert [flyer["id"] for flyer in payload["flyers"]] == ["nearby", "same-time", "latest", "older"]
+    assert_matches_json_snapshot(request, "flyer_discovery", payload)
 
 
 def test_flyer_discovery_flattens_supermarket_municipality_for_cards():

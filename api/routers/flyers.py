@@ -238,6 +238,24 @@ def _nearby_supermarket_rows(sb, distances: dict[str, float | None]) -> list[dic
     return sorted(visible, key=lambda row: positions[row["id"]])
 
 
+def _order_flyer_supermarkets(supermarkets: list[dict], flyers: list[dict]) -> list[dict]:
+    latest_by_supermarket: dict[str, float] = {}
+    for flyer in flyers:
+        supermarket_id = flyer["supermarket_id"]
+        publication = _public_flyer_publication_sort_key(flyer)
+        latest_by_supermarket[supermarket_id] = min(
+            latest_by_supermarket.get(supermarket_id, float("inf")), publication
+        )
+    # Stable sort keeps the area's geographic order for equal publication dates.
+    return sorted(
+        supermarkets,
+        key=lambda row: (
+            row["id"] not in latest_by_supermarket,
+            latest_by_supermarket.get(row["id"], float("inf")),
+        ),
+    )
+
+
 def _visible_public_flyers(
     sb, flyers: list[dict], distances: dict[str, float | None]
 ) -> list[dict]:
@@ -1153,9 +1171,11 @@ def discover_public_flyers(
     """Return current public flyers and nearby supermarkets from one radius lookup."""
     sb = get_supabase()
     flyers, distances = _public_flyer_context(sb, request, user_id)
+    visible_flyers = _visible_public_flyers(sb, flyers, distances)
+    supermarkets = _nearby_supermarket_rows(sb, distances)
     return {
-        "flyers": _visible_public_flyers(sb, flyers, distances),
-        "supermarkets": _nearby_supermarket_rows(sb, distances),
+        "flyers": visible_flyers,
+        "supermarkets": _order_flyer_supermarkets(supermarkets, visible_flyers),
     }
 
 
