@@ -1,13 +1,12 @@
 """Admin-only transport for inference performed outside the web service."""
-from functools import partial
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 import json
-import psycopg2
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from core.auth import require_admin
-from core.database import get_database_dsn
+from core.database import get_database_dsn, get_postgres_transaction, get_supabase
+from services.repositories.local_packshots import LocalPackshotWriter
 from services.extraction.bounding_box import BoundingBox
 from services.extraction.local.application import LocalExtractionApplication
 from services.extraction.local.repository import LocalExtractionRepository, LocalFlyerNotFound
@@ -23,6 +22,7 @@ class WorkerRequest(BaseModel):
 
 
 class ClaimRequest(WorkerRequest):
+    packshot_mode: Literal['server', 'client'] = 'server'
     model: str = Field(min_length=1, max_length=150)
     pages_total: int = Field(ge=1, le=500)
     chunk_size_pages: int = Field(ge=1, le=2)
@@ -35,6 +35,14 @@ class ClaimRequest(WorkerRequest):
 
 class ChunkRequest(WorkerRequest):
     products: list[dict] = Field(max_length=500)
+    packshots: list[dict] | None = Field(default=None, max_length=500)
+
+    @field_validator('packshots')
+    @classmethod
+    def bounded_packshots(cls, images):
+        if images is not None and len(json.dumps(images).encode()) > 8_000_000:
+            raise ValueError('Packshots exceed 8 MB')
+        return images
 
     @field_validator('products')
     @classmethod
@@ -58,9 +66,10 @@ def application():
     if not dsn:
         raise HTTPException(503, 'Local extraction requires server-side DB_DSN or DATABASE_URL')
     service = ExtractionService(provider=object())
-    repository = LocalExtractionRepository(partial(psycopg2.connect, dsn))
+    repository = LocalExtractionRepository(connection_scope=get_postgres_transaction)
     return LocalExtractionApplication(repository, service.prepare_local_offer_rows,
-                                      service.save_local_packshots, service.local_pdf_page_count)
+                                      service.save_local_packshots, service.local_pdf_page_count,
+                                      attach_packshots=LocalPackshotWriter(get_supabase).attach)
 
 
 def invoke(operation, *args):
@@ -79,6 +88,8 @@ Application = Annotated[LocalExtractionApplication, Depends(application)]
 @router.post('/{flyer_id}/local-extraction/claim')
 def claim(flyer_id: UUID, body: ClaimRequest, profile: Admin, service: Application):
     config = body.model_dump(exclude={'worker_id'})
+    if config['packshot_mode'] == 'server':
+        del config['packshot_mode']
     return invoke(service.claim, str(flyer_id), profile['id'], str(body.worker_id), config)
 
 
@@ -91,7 +102,8 @@ def heartbeat(flyer_id: UUID, body: WorkerRequest, profile: Admin, service: Appl
 def chunk(flyer_id: UUID, index: int, body: ChunkRequest, profile: Admin, service: Application):
     if index < 1:
         raise HTTPException(422, 'Chunk index must be positive')
-    return invoke(service.chunk, str(flyer_id), profile['id'], str(body.worker_id), index, body.products)
+    return invoke(service.chunk, str(flyer_id), profile['id'], str(body.worker_id), index,
+                  body.products, body.packshots)
 
 
 @router.post('/{flyer_id}/local-extraction/finish')
@@ -106,4 +118,5 @@ def fail(flyer_id: UUID, body: FailureRequest, profile: Admin, service: Applicat
 
 @router.get('/local-extraction/capabilities')
 def capabilities(profile: Admin, service: Application):
-    return {"protocol_version": 1, "lease_seconds": 600, "chunk_size_pages": [1, 2]}
+    return {"protocol_version": 1, "lease_seconds": 600, "chunk_size_pages": [1, 2],
+            "client_packshots": True}

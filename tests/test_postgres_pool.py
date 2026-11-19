@@ -59,3 +59,24 @@ def test_concurrent_first_use_initializes_pool_once():
         for future in futures: future.result(timeout=2)
     factory.assert_called_once()
     assert pool.getconn.call_count == pool.putconn.call_count == 3
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_transaction_restores_pooled_connection_mode(monkeypatch, fails):
+    from contextlib import nullcontext
+    import core.database as database
+    connection = MagicMock()
+    connection.autocommit = True
+    pool = MagicMock()
+    pool.connection.side_effect = lambda: nullcontext(connection)
+    monkeypatch.setattr(database, '_get_postgres_pool', lambda: pool)
+    try:
+        with database.get_postgres_transaction() as acquired:
+            assert acquired is connection and connection.autocommit is False
+            if fails:
+                raise ValueError('rollback')
+    except ValueError:
+        assert fails
+    assert connection.autocommit is True
+    connection.close.assert_not_called()
+    assert connection.__exit__.call_args.args[0] is (ValueError if fails else None)

@@ -45,6 +45,19 @@ def _get_postgres_pool() -> PostgresConnectionPool:
 
 
 @contextmanager
+def get_postgres_transaction():
+    """Return a pooled connection with an explicit commit/rollback boundary."""
+    with _get_postgres_pool().connection() as connection:
+        previous = connection.autocommit
+        connection.autocommit = False
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.autocommit = previous
+
+
+@contextmanager
 def get_postgres_cursor():
     with _get_postgres_pool().connection() as connection:
         connection.autocommit = True

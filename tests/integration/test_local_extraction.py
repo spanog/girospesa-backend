@@ -246,3 +246,52 @@ async def test_cloud_start_still_works_and_does_not_start_twice(fixture):
     assert first.status_code == 202
     assert second.status_code == 409
     cloud.return_value.run.assert_called_once_with(flyer['id'])
+
+
+@pytest.mark.asyncio
+async def test_client_crops_commit_replay_and_complete_without_server_render(fixture):
+    from services.repositories.local_packshots import LocalPackshotWriter
+    from tests.test_local_packshots import image_payload, BOX
+    app, service, flyer, sb = fixture
+    storage = Mock()
+    storage.storage.from_.return_value.get_public_url.return_value = 'https://images.test/crop.webp'
+    writer = LocalPackshotWriter(lambda: storage)
+    service._attach_packshots = writer.attach
+    service._crops = Mock(side_effect=AssertionError('Server PDF rendering must be skipped'))
+    config = dict(CONFIG, pages_total=1, packshot_mode='client')
+    service._inspect_pdf = Mock(return_value=1)
+    images = [dict(page=1, bbox=BOX, image=image_payload())]
+    without_crop = dict(name='Pane', price_current=2, source_page=1)
+    body = dict(worker_id=WORKER, products=[without_crop, PRODUCT], packshots=images)
+    prefix = f"/flyers/{flyer['id']}/local-extraction"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        assert (await client.post(prefix+'/claim', json=dict(worker_id=WORKER, **config))).status_code == 200
+        assert (await client.put(prefix+'/chunks/1', json=body)).status_code == 200
+        assert (await client.put(prefix+'/chunks/1', json=body)).status_code == 200
+        changed = dict(body, packshots=[dict(images[0], image=image_payload('blue'))])
+        assert (await client.put(prefix+'/chunks/1', json=changed)).status_code == 409
+        assert (await client.post(prefix+'/finish', json=dict(worker_id=WORKER))).status_code == 200
+    rows = sb.table('offers').select('name,image_url').eq('flyer_id', flyer['id']).execute().data
+    assert len(rows) == 2
+    assert next(row for row in rows if row['name'] == 'Latte')['image_url'] == 'https://images.test/crop.webp'
+    storage.storage.from_.return_value.upload.assert_called_once()
+    service._inspect_pdf.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('images', [None, [], [dict(page=1, bbox=PRODUCT['packshot_bbox'], image='invalid')]])
+async def test_client_crop_failure_rolls_back_receipt_and_offers(fixture, images):
+    from services.repositories.local_packshots import LocalPackshotWriter
+    app, service, flyer, sb = fixture
+    storage = Mock()
+    service._attach_packshots = LocalPackshotWriter(lambda: storage).attach
+    config = dict(CONFIG, packshot_mode='client')
+    prefix = f"/flyers/{flyer['id']}/local-extraction"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        assert (await client.post(prefix+'/claim', json=dict(worker_id=WORKER, **config))).status_code == 200
+        body = dict(worker_id=WORKER, products=[PRODUCT], packshots=images)
+        assert (await client.put(prefix+'/chunks/1', json=body)).status_code == 409
+    saved = sb.table('flyers').select('extraction_metadata').eq('id', flyer['id']).single().execute().data
+    assert saved['extraction_metadata']['chunks_completed'] == 0
+    assert not sb.table('offers').select('id').eq('flyer_id', flyer['id']).execute().data
+    storage.storage.from_.assert_not_called()

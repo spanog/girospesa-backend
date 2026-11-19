@@ -14,9 +14,11 @@ def utc_now() -> datetime:
 class LocalExtractionApplication:
     def __init__(self, repository: LocalFlyerRepository, drafts: Callable[[list[dict], dict], list[dict]],
                  crops: Callable[[dict], None], inspect_pdf: Callable[[dict], int],
-                 clock: Callable[[], datetime] = utc_now) -> None:
+                 clock: Callable[[], datetime] = utc_now,
+                 attach_packshots: Callable | None = None) -> None:
         self._repository, self._drafts, self._crops, self._clock = repository, drafts, crops, clock
         self._inspect_pdf = inspect_pdf
+        self._attach_packshots = attach_packshots
 
     def claim(self, flyer_id: str, owner: str, worker: str, config: dict) -> dict:
         with self._repository.locked(flyer_id) as (cursor, flyer):
@@ -39,27 +41,41 @@ class LocalExtractionApplication:
             self._repository.save(cursor, flyer, session)
             return session.metadata
 
-    def chunk(self, flyer_id: str, owner: str, worker: str, index: int, products: list[dict]) -> dict:
-        digest = sha256(json.dumps(products, sort_keys=True, allow_nan=False).encode()).hexdigest()
+    def chunk(self, flyer_id: str, owner: str, worker: str, index: int, products: list[dict],
+              packshots: list[dict] | None = None) -> dict:
+        payload = products if packshots is None else dict(products=products, packshots=packshots)
+        digest = sha256(json.dumps(payload, sort_keys=True, allow_nan=False).encode()).hexdigest()
         with self._repository.locked(flyer_id) as (cursor, flyer):
             session = self._authorized(flyer, owner, worker)
             if session.accept(index, digest):
-                self._validate_pages(session, index, products)
-                self._repository.insert_offers(cursor, self._drafts(products, flyer))
-                session.commit(index, digest, len(products))
+                self._persist_chunk(cursor, flyer, session, index, digest, products, packshots)
             session.metadata['partial_products_count'] = self._repository.draft_count(cursor, flyer_id)
             session.metadata['products_found'] = session.metadata['partial_products_count']
             session.renew(self._clock())
             self._repository.save(cursor, flyer, session)
-        self._crops(flyer)
+        if not self._client_crops(session):
+            self._crops(flyer)
         return session.metadata
+
+    def _persist_chunk(self, cursor, flyer, session, index, digest, products, packshots):
+        self._validate_pages(session, index, products)
+        rows = self._drafts(products, flyer)
+        if self._client_crops(session):
+            if packshots is None or self._attach_packshots is None:
+                raise LocalExtractionConflict('Client-rendered packshots are required')
+            rows = self._attach_packshots(rows, flyer, packshots)
+        elif packshots is not None:
+            raise LocalExtractionConflict('Session does not accept client packshots')
+        self._repository.insert_offers(cursor, rows)
+        session.commit(index, digest, len(products))
 
     def finish(self, flyer_id: str, owner: str, worker: str) -> dict:
         with self._repository.locked(flyer_id) as (_, flyer):
             if flyer['status'] == 'done' and flyer.get('extraction_metadata', {}).get('execution_mode') == 'local':
                 return flyer['extraction_metadata']
-            self._authorized(flyer, owner, worker)
-        self._crops(flyer)
+            session = self._authorized(flyer, owner, worker)
+        if not self._client_crops(session):
+            self._crops(flyer)
         with self._repository.locked(flyer_id) as (cursor, flyer):
             session = self._authorized(flyer, owner, worker)
             session.finish(self._clock())
@@ -79,6 +95,9 @@ class LocalExtractionApplication:
         session = LocalSession(flyer.get('extraction_metadata') or {})
         session.authorize(owner, worker, self._clock())
         return session
+
+    def _client_crops(self, session: LocalSession) -> bool:
+        return session.metadata['local_extraction']['config'].get('packshot_mode') == 'client'
 
     def _validate_pages(self, session: LocalSession, index: int, products: list[dict]) -> None:
         m = session.metadata

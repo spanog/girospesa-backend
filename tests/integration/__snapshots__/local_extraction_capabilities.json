@@ -3,6 +3,7 @@
     1,
     2
   ],
+  "client_packshots": true,
   "lease_seconds": 600,
   "protocol_version": 1
 }
